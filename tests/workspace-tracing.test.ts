@@ -107,6 +107,23 @@ describe("workspace indexing and network tracing", () => {
     expect(payloadText).toContain("[REDACTED]");
     expect(payloadText).not.toContain("hunter2");
 
+    await collector.ingest({
+      sessionId: "s-trace",
+      method: "POST",
+      url: "http://localhost:3000/api/upload",
+      status: 202,
+      latencyMs: 90,
+      requestBody: {
+        payload: `token=${"x".repeat(30_000)}`
+      }
+    });
+    const capped = await store.listRecent({
+      sessionId: "s-trace",
+      limit: 1
+    });
+    const cappedPayloadText = JSON.stringify(capped[0]?.payload ?? {});
+    expect(cappedPayloadText.length).toBeLessThan(25_000);
+
     const denied = await collector.ingest({
       method: "GET",
       url: "https://example.com/api/data",

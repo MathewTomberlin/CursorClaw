@@ -127,14 +127,14 @@ Add a multi-layer context model:
 4. Add cache invalidation on file hash changes.
 
 ### Success criteria
-- [ ] Updated modules always have fresh summaries after change events.
-- [ ] Summary cache retrieval by module path is O(1)-ish and deterministic.
-- [ ] Summary versions are migration-safe.
+- [x] Updated modules always have fresh summaries after change events.
+- [x] Summary cache retrieval by module path is O(1)-ish and deterministic.
+- [x] Summary versions are migration-safe.
 
 ### Guardrails
-- [ ] Summary generation failures never block normal runtime turns.
-- [ ] Cache corruption recovery test (fallback to source chunks).
-- [ ] No secret-bearing raw strings are written to summary cache.
+- [x] Summary generation failures never block normal runtime turns.
+- [x] Cache corruption recovery test (fallback to source chunks).
+- [x] No secret-bearing raw strings are written to summary cache.
 
 ---
 
@@ -152,14 +152,14 @@ Add a multi-layer context model:
 4. Integrate with plugin pipeline before prompt synthesis.
 
 ### Success criteria
-- [ ] Prompt context uses Top-K semantic chunks instead of full module dumps.
-- [ ] Retrieval includes score and provenance metadata.
+- [x] Prompt context uses Top-K semantic chunks instead of full module dumps.
+- [x] Retrieval includes score and provenance metadata.
 - [ ] End-to-end prompt token usage decreases for large repos.
 
 ### Guardrails
-- [ ] Retrieval failures fallback to existing context path safely.
-- [ ] Sensitivity filtering is enforced in retrieval path.
-- [ ] Prompt-injection wrappers persist around untrusted retrieved text.
+- [x] Retrieval failures fallback to existing context path safely.
+- [x] Sensitivity filtering is enforced in retrieval path.
+- [x] Prompt-injection wrappers persist around untrusted retrieved text.
 
 ---
 
@@ -174,12 +174,12 @@ Add a multi-layer context model:
    - semantic redundancy and staleness decay.
 
 ### Success criteria
-- [ ] Old irrelevant instructions are deprioritized automatically.
-- [ ] Context freshness score available in runtime diagnostics.
+- [x] Old irrelevant instructions are deprioritized automatically.
+- [x] Context freshness score available in runtime diagnostics.
 
 ### Guardrails
-- [ ] Regression tests for long-running conversation drift scenarios.
-- [ ] No hard prompt overrun after adding weighting metadata.
+- [x] Regression tests for long-running conversation drift scenarios.
+- [x] No hard prompt overrun after adding weighting metadata.
 
 ---
 
@@ -212,12 +212,12 @@ Add multi-workspace indexing and distributed trace observability:
 4. Add workspace tags to all context artifacts.
 
 ### Success criteria
-- [ ] Agent can index/search across multiple configured roots.
-- [ ] Context artifacts include workspace and repo provenance.
+- [x] Agent can index/search across multiple configured roots.
+- [x] Context artifacts include workspace and repo provenance.
 
 ### Guardrails
-- [ ] Root traversal obeys ignore/security policies.
-- [ ] Large multi-root indexing remains bounded by CPU/memory budget.
+- [x] Root traversal obeys ignore/security policies.
+- [x] Large multi-root indexing remains bounded by CPU/memory budget.
 
 ---
 
@@ -231,12 +231,12 @@ Add multi-workspace indexing and distributed trace observability:
 4. Integrate resolver into analyzer plugin stage.
 
 ### Success criteria
-- [ ] Cross-repo suspects are surfaced in debugging plans.
-- [ ] Runtime plan includes referenced repo/module links when relevant.
+- [x] Cross-repo suspects are surfaced in debugging plans.
+- [x] Runtime plan includes referenced repo/module links when relevant.
 
 ### Guardrails
-- [ ] False-link suppression threshold with confidence scoring.
-- [ ] Graph build failures do not block normal single-repo behavior.
+- [x] False-link suppression threshold with confidence scoring.
+- [x] Graph build failures do not block normal single-repo behavior.
 
 ---
 
@@ -252,13 +252,13 @@ Add multi-workspace indexing and distributed trace observability:
 4. Ingest into `RuntimeObservationStore` with source=`net-trace`.
 
 ### Success criteria
-- [ ] Agent can retrieve real JSON payload evidence during web debugging.
-- [ ] Trace events can be correlated to source modules/routes.
+- [x] Agent can retrieve real JSON payload evidence during web debugging.
+- [x] Trace events can be correlated to source modules/routes.
 
 ### Guardrails
-- [ ] Explicit opt-in required for traffic capture.
-- [ ] Body-size caps and PII scrubbing are mandatory.
-- [ ] No private external network interception beyond configured localhost targets.
+- [x] Explicit opt-in required for traffic capture.
+- [x] Body-size caps and PII scrubbing are mandatory.
+- [x] No private external network interception beyond configured localhost targets.
 
 ---
 
@@ -289,12 +289,12 @@ Add low-noise autonomy jobs:
 4. Queue actionable suggestions via orchestrator with budgets.
 
 ### Success criteria
-- [ ] Reflection runs only during idle windows and within CPU budget.
-- [ ] Findings are persisted and surfaced on user return.
+- [x] Reflection runs only during idle windows and within CPU budget.
+- [x] Findings are persisted and surfaced on user return.
 
 ### Guardrails
-- [ ] Reflection tasks auto-cancel on user activity spike.
-- [ ] Strict max-runtime per reflection job.
+- [x] Reflection tasks auto-cancel on user activity spike.
+- [x] Strict max-runtime per reflection job.
 
 ---
 
@@ -307,12 +307,12 @@ Add low-noise autonomy jobs:
 4. Present concise queued recommendation (not noisy stream).
 
 ### Success criteria
-- [ ] Flaky tests are detected and ranked with evidence.
-- [ ] Suggestions are actionable and linked to changed modules.
+- [x] Flaky tests are detected and ranked with evidence.
+- [x] Suggestions are actionable and linked to changed modules.
 
 ### Guardrails
-- [ ] Reflection test runs never block primary user turns.
-- [ ] Resource throttling prevents background starvation.
+- [x] Reflection test runs never block primary user turns.
+- [x] Resource throttling prevents background starvation.
 
 ---
 
@@ -328,11 +328,11 @@ Add low-noise autonomy jobs:
 
 ### Success criteria
 - [ ] Complex function explanations can be surfaced autonomously.
-- [ ] Explanations include side effects + historical context.
+- [x] Explanations include side effects + historical context.
 
 ### Guardrails
-- [ ] Cooldown enforcement to prevent spam.
-- [ ] Explanations must include provenance links and confidence labels.
+- [x] Cooldown enforcement to prevent spam.
+- [x] Explanations must include provenance links and confidence labels.
 
 ---
 
@@ -366,12 +366,12 @@ Extend current failure-loop logic into assumption-reset pipeline:
 4. Log reset events to decision journal.
 
 ### Success criteria
-- [ ] After 3 failed iterations, stale assumptions are invalidated automatically.
-- [ ] Reset events are visible in runtime diagnostics and journal.
+- [x] After 3 failed iterations, stale assumptions are invalidated automatically.
+- [x] Reset events are visible in runtime diagnostics and journal.
 
 ### Guardrails
-- [ ] Reset logic cannot trigger recursively in tight loop.
-- [ ] Existing successful fast-path fixes remain unaffected.
+- [x] Reset logic cannot trigger recursively in tight loop.
+- [x] Existing successful fast-path fixes remain unaffected.
 
 ---
 
@@ -385,12 +385,12 @@ Extend current failure-loop logic into assumption-reset pipeline:
 3. Inject scan findings as high-priority context for next iteration.
 
 ### Success criteria
-- [ ] Reset includes files previously considered irrelevant.
-- [ ] Config/environment root causes are surfaced in candidate set.
+- [x] Reset includes files previously considered irrelevant.
+- [x] Config/environment root causes are surfaced in candidate set.
 
 ### Guardrails
-- [ ] Deep scan bounded by file-count and time budget.
-- [ ] Ignore lists and secret-file protections still enforced.
+- [x] Deep scan bounded by file-count and time budget.
+- [x] Ignore lists and secret-file protections still enforced.
 
 ---
 
@@ -408,35 +408,35 @@ Extend current failure-loop logic into assumption-reset pipeline:
    - issue structured hint request to human
 
 ### Success criteria
-- [ ] Every major action emits a confidence score.
-- [ ] Low-confidence actions trigger human-hint pause instead of token burn loops.
+- [x] Every major action emits a confidence score.
+- [x] Low-confidence actions trigger human-hint pause instead of token burn loops.
 
 ### Guardrails
-- [ ] Confidence score must include rationale payload (not opaque number).
-- [ ] Low-confidence bypass attempts are denied by policy.
+- [x] Confidence score must include rationale payload (not opaque number).
+- [x] Low-confidence bypass attempts are denied by policy.
 
 ---
 
 ## 8) Quality, Security, and Reliability Guardrail Matrix
 
 ### 8.1 Required test suites (new/expanded)
-- [ ] Context drift long-session regression tests
+- [x] Context drift long-session regression tests
 - [ ] Semantic retrieval precision/recall golden tests
-- [ ] Multi-workspace indexing integration tests
-- [ ] Network trace scrubbing and payload cap tests
-- [ ] Idle reflection resource-throttling tests
-- [ ] Confidence-gate / hint-request workflow tests
+- [x] Multi-workspace indexing integration tests
+- [x] Network trace scrubbing and payload cap tests
+- [x] Idle reflection resource-throttling tests
+- [x] Confidence-gate / hint-request workflow tests
 
 ### 8.2 Security guardrails
-- [ ] Secret scrubbing applies to embeddings, summaries, and trace payloads.
-- [ ] Workspace traversal obeys deny lists and permission boundaries.
-- [ ] Trace capture is explicit opt-in and localhost-limited by policy.
-- [ ] MCP/workspace tools retain capability approval enforcement.
+- [x] Secret scrubbing applies to embeddings, summaries, and trace payloads.
+- [x] Workspace traversal obeys deny lists and permission boundaries.
+- [x] Trace capture is explicit opt-in and localhost-limited by policy.
+- [x] MCP/workspace tools retain capability approval enforcement.
 
 ### 8.3 Reliability guardrails
-- [ ] Deep scan and reset flows are bounded and idempotent.
-- [ ] Background reflection cannot starve foreground turns.
-- [ ] Checkpoint rollback remains available for risky multi-file operations.
+- [x] Deep scan and reset flows are bounded and idempotent.
+- [x] Background reflection cannot starve foreground turns.
+- [x] Checkpoint rollback remains available for risky multi-file operations.
 
 ---
 
@@ -458,9 +458,9 @@ The initiative is complete when all are true:
 
 - [ ] Prompt context is semantic Top-K driven with measurable token drift reduction.
 - [ ] Cross-repo root-cause hypotheses are generated and validated in multi-root workspaces.
-- [ ] Localhost trace evidence is available for debugging with strict privacy controls.
-- [ ] Idle-time reflection produces useful low-noise suggestions and flaky-test detections.
-- [ ] After 3 failed iterations, assumption reset + deep scan reliably broadens diagnosis.
-- [ ] All major actions include confidence score and low-confidence hint handoff behavior.
-- [ ] Full build/test/security gates remain green with no critical regressions.
+- [x] Localhost trace evidence is available for debugging with strict privacy controls.
+- [x] Idle-time reflection produces useful low-noise suggestions and flaky-test detections.
+- [x] After 3 failed iterations, assumption reset + deep scan reliably broadens diagnosis.
+- [x] All major actions include confidence score and low-confidence hint handoff behavior.
+- [x] Full build/test/security gates remain green with no critical regressions.
 

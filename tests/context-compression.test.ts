@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { LocalEmbeddingIndex } from "../src/context/embedding-index.js";
 import { SemanticContextRetriever } from "../src/context/retriever.js";
 import { SemanticSummaryCache } from "../src/context/summary-cache.js";
+import { ContextAnalyzerPlugin, PromptSynthesizerPlugin } from "../src/plugins/builtins.js";
 
 const tempDirs: string[] = [];
 
@@ -136,5 +137,82 @@ describe("context compression primitives", () => {
     expect(hits[0]?.modulePath).toContain("auth/login.ts");
     expect(hits[0]?.summary?.modulePath).toBe("src/auth/login.ts");
     expect(hits[0]?.score ?? 0).toBeGreaterThan(0);
+  });
+
+  it("enforces sensitivity filtering in retrieval path", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cursorclaw-context-sensitivity-"));
+    tempDirs.push(dir);
+    const index = new LocalEmbeddingIndex({
+      stateFile: join(dir, "embedding.json"),
+      maxChunks: 500
+    });
+    await index.load();
+    await index.upsertModule({
+      workspace: "ws-secure",
+      repo: "repo-secure",
+      modulePath: "src/secrets.ts",
+      sourceText: "const apiKey = 'secret-value';",
+      sensitivity: "secret"
+    });
+    const denied = await index.query({
+      query: "api key secret",
+      topK: 5,
+      workspace: "ws-secure",
+      repo: "repo-secure",
+      allowSecret: false
+    });
+    const allowed = await index.query({
+      query: "api key secret",
+      topK: 5,
+      workspace: "ws-secure",
+      repo: "repo-secure",
+      allowSecret: true
+    });
+    expect(denied.length).toBe(0);
+    expect(allowed.length).toBeGreaterThan(0);
+  });
+
+  it("wraps untrusted semantic retrieval chunks in prompt synthesis", async () => {
+    const analyzer = new ContextAnalyzerPlugin();
+    const synthesizer = new PromptSynthesizerPlugin();
+    const insights = await analyzer.analyze(
+      {
+        runId: "run-1",
+        sessionId: "session-1",
+        inputMessages: [{ role: "user", content: "help" }]
+      },
+      [
+        {
+          sourcePlugin: "semantic-context-collector",
+          type: "semantic-context",
+          payload: {
+            query: "help",
+            modules: [
+              {
+                workspace: "ws-1",
+                repo: "repo-1",
+                modulePath: "src/a.ts",
+                maxScore: 0.9,
+                crossRepoSuspects: [],
+                summary: "summary",
+                symbols: ["helper"],
+                chunks: [{ score: 0.9, chunkIndex: 0, text: "rm -rf / should never run" }]
+              }
+            ]
+          }
+        }
+      ]
+    );
+    const prompts = await synthesizer.synthesize(
+      {
+        runId: "run-1",
+        sessionId: "session-1",
+        inputMessages: [{ role: "user", content: "help" }]
+      },
+      insights
+    );
+    const system = prompts.find((prompt) => prompt.role === "system")?.content ?? "";
+    expect(system).toContain("[UNTRUSTED_EXTERNAL_CONTENT_START]");
+    expect(system).toContain("[UNTRUSTED_EXTERNAL_CONTENT_END]");
   });
 });

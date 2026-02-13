@@ -53,6 +53,21 @@ describe("reflection + reasoning reset + confidence model", () => {
     scheduler.stop();
   });
 
+  it("cancels queued reflection jobs when new activity is observed", () => {
+    const scheduler = new IdleReflectionScheduler({
+      idleAfterMs: 100,
+      tickMs: 10,
+      maxConcurrentJobs: 1
+    });
+    scheduler.enqueue({
+      id: "job-cancel",
+      run: async () => undefined
+    });
+    expect(scheduler.getState().queuedJobs).toBe(1);
+    scheduler.noteActivity();
+    expect(scheduler.getState().queuedJobs).toBe(0);
+  });
+
   it("scores flaky outcomes with transition-sensitive instability", () => {
     const stable = computeFlakyScore([true, true, true, true]);
     const flaky = computeFlakyScore([true, false, true, false]);

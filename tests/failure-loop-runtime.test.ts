@@ -7,7 +7,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { DecisionJournal } from "../src/decision-journal.js";
 import { MemoryStore } from "../src/memory.js";
+import { DeepScanService } from "../src/reliability/deep-scan.js";
 import { FailureLoopGuard } from "../src/reliability/failure-loop.js";
+import { ReasoningResetController } from "../src/reliability/reasoning-reset.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { AlwaysAllowApprovalGate, ToolRouter } from "../src/tools.js";
 import type { AdapterEvent } from "../src/types.js";
@@ -191,5 +193,100 @@ describe("runtime failure loop guard integration", () => {
     expect(journalMessage).toContain("decision-7");
     expect(journalMessage).not.toContain("decision-0");
     expect(journalMessage).toContain("Maintain rationale continuity");
+  });
+
+  it("triggers reasoning reset with deep scan context after repeated failed iterations", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cursorclaw-reasoning-reset-"));
+    tempDirs.push(dir);
+    let callCount = 0;
+    const observedMessages: Array<Array<{ role: string; content: string }>> = [];
+    const fakeAdapter = {
+      createSession: async () => ({
+        id: "session",
+        model: "fallback"
+      }),
+      sendTurn: async function* (
+        _session: { id: string; model: string },
+        messages: Array<{ role: string; content: string }>
+      ): AsyncIterable<AdapterEvent> {
+        callCount += 1;
+        if (callCount < 3) {
+          throw new Error("forced failure");
+        }
+        observedMessages.push(messages);
+        yield { type: "assistant_delta", data: { content: "resolved" } };
+        yield { type: "done", data: {} };
+      },
+      cancel: async () => undefined,
+      close: async () => undefined
+    } as const;
+    const config = loadConfig({
+      defaultModel: "fallback",
+      models: {
+        fallback: {
+          provider: "fallback-model",
+          timeoutMs: 5_000,
+          authProfiles: ["default"],
+          fallbackModels: [],
+          enabled: true
+        }
+      }
+    });
+    const runtime = new AgentRuntime({
+      config,
+      adapter: fakeAdapter as unknown as import("../src/model-adapter.js").CursorAgentModelAdapter,
+      toolRouter: new ToolRouter({
+        approvalGate: new AlwaysAllowApprovalGate(),
+        allowedExecBins: ["echo"]
+      }),
+      memory: new MemoryStore({ workspaceDir: dir }),
+      reasoningResetController: new ReasoningResetController({
+        iterationThreshold: 3
+      }),
+      deepScanService: {
+        scanRecentlyTouched: async () => ({
+          touchedFiles: ["src/app.ts", "openclaw.json"],
+          configCandidates: ["openclaw.json"],
+          durationMs: 10
+        })
+      } as unknown as DeepScanService,
+      snapshotDir: join(dir, "snapshots")
+    });
+
+    await expect(
+      runtime.runTurn({
+        session: {
+          sessionId: "s-reset",
+          channelId: "dm:s-reset",
+          channelKind: "dm"
+        },
+        messages: [{ role: "user", content: "attempt 1" }]
+      })
+    ).rejects.toThrow(/forced failure/);
+    await expect(
+      runtime.runTurn({
+        session: {
+          sessionId: "s-reset",
+          channelId: "dm:s-reset",
+          channelKind: "dm"
+        },
+        messages: [{ role: "user", content: "attempt 2" }]
+      })
+    ).rejects.toThrow(/forced failure/);
+    await runtime.runTurn({
+      session: {
+        sessionId: "s-reset",
+        channelId: "dm:s-reset",
+        channelKind: "dm"
+      },
+      messages: [{ role: "user", content: "attempt 3" }]
+    });
+
+    const joinedSystem = observedMessages[0]
+      ?.filter((entry) => entry.role === "system")
+      .map((entry) => entry.content)
+      .join("\n") ?? "";
+    expect(joinedSystem).toContain("Assumption invalidation deep scan");
+    expect(joinedSystem).toContain("openclaw.json");
   });
 });
