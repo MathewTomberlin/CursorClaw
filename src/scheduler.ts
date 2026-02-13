@@ -142,7 +142,11 @@ export class CronService {
 
   addJob(def: Omit<CronJobDefinition, "id">): CronJobDefinition {
     const id = randomUUID();
-    const full: CronJobDefinition = { ...def, id };
+    const full: CronJobDefinition = {
+      ...def,
+      id,
+      nextRunAt: this.computeNextRun({ ...def, id }, Date.now())
+    };
     this.jobs.set(id, { def: full, retries: 0, running: false });
     return full;
   }
