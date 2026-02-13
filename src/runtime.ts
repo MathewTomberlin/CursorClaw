@@ -6,7 +6,13 @@ import type { CursorClawConfig } from "./config.js";
 import type { DecisionJournal } from "./decision-journal.js";
 import type { MemoryStore } from "./memory.js";
 import type { CursorAgentModelAdapter } from "./model-adapter.js";
-import type { PluginHost } from "./plugins/host.js";
+import {
+  ContextAnalyzerPlugin,
+  MemoryCollectorPlugin,
+  ObservationCollectorPlugin,
+  PromptSynthesizerPlugin
+} from "./plugins/builtins.js";
+import { PluginHost } from "./plugins/host.js";
 import type { PrivacyScrubber } from "./privacy/privacy-scrubber.js";
 import type { FailureLoopGuard } from "./reliability/failure-loop.js";
 import type { GitCheckpointHandle, GitCheckpointManager } from "./reliability/git-checkpoint.js";
@@ -146,6 +152,7 @@ export interface AgentRuntimeOptions {
 
 export class AgentRuntime {
   private readonly queue: SessionQueue;
+  private readonly promptPluginHost: PluginHost;
   private readonly decisionLogs: PolicyDecisionLog[] = [];
   private readonly sessionHandles = new Map<string, string>();
   private readonly metrics = {
@@ -162,6 +169,13 @@ export class AgentRuntime {
       hardLimit: options.config.session.queueHardLimit,
       dropStrategy: options.config.session.queueDropStrategy
     });
+    this.promptPluginHost =
+      options.pluginHost ??
+      createDefaultPromptPluginHost({
+        memory: options.memory,
+        allowSecretMemory: options.config.memory.includeSecretsInPrompt,
+        ...(options.observationStore ? { observationStore: options.observationStore } : {})
+      });
   }
 
   getDecisionLogs(): PolicyDecisionLog[] {
@@ -443,70 +457,43 @@ export class AgentRuntime {
         systemMessages.push({
           role: "system",
           content: this.scrubText(
-            `Recent decision journal context:\n${recentDecisions.join("\n")}`,
+            [
+              "Recent decision journal context:",
+              ...recentDecisions,
+              "Maintain rationale continuity unless new runtime evidence contradicts prior decisions."
+            ].join("\n"),
             scopeId
           )
         });
       }
     }
 
-    if (this.options.pluginHost) {
-      const pluginResult = await this.options.pluginHost.run({
-        runId,
-        sessionId: request.session.sessionId,
-        inputMessages: userMessages
+    const pluginResult = await this.promptPluginHost.run({
+      runId,
+      sessionId: request.session.sessionId,
+      inputMessages: userMessages
+    });
+    for (const message of pluginResult.messages) {
+      systemMessages.push({
+        role: message.role,
+        content: this.scrubText(message.content, scopeId)
       });
-      for (const message of pluginResult.messages) {
-        systemMessages.push({
-          role: message.role,
-          content: this.scrubText(message.content, scopeId)
-        });
-      }
-      if (pluginResult.diagnostics.length > 0) {
-        await this.options.observationStore?.append({
-          sessionId: request.session.sessionId,
-          source: "plugin-host",
-          kind: "plugin-diagnostics",
-          sensitivity: "operational",
-          payload: {
-            runId,
-            diagnostics: pluginResult.diagnostics
-          }
-        });
-      }
-    } else {
-      const memories = await this.options.memory.retrieveForSession({
+    }
+    if (pluginResult.diagnostics.length > 0) {
+      await this.options.observationStore?.append({
         sessionId: request.session.sessionId,
-        allowSecret: this.options.config.memory.includeSecretsInPrompt
-      });
-      const memoryContext = memories
-        .slice(-10)
-        .map((record) => `[${record.category}] ${record.text}`)
-        .join("\n");
-      if (memoryContext) {
-        systemMessages.push({
-          role: "system",
-          content: this.scrubText(`Relevant session memory:\n${memoryContext}`, scopeId)
-        });
-      }
-      if (this.options.observationStore) {
-        const observations = await this.options.observationStore.listRecent({
-          sessionId: request.session.sessionId,
-          limit: 8
-        });
-        if (observations.length > 0) {
-          const observationContext = observations
-            .map((event) => `[${event.kind}] ${JSON.stringify(event.payload)}`)
-            .join("\n");
-          systemMessages.push({
-            role: "system",
-            content: this.scrubText(`Recent runtime observations:\n${observationContext}`, scopeId)
-          });
+        source: "plugin-host",
+        kind: "plugin-diagnostics",
+        sensitivity: "operational",
+        payload: {
+          runId,
+          diagnostics: pluginResult.diagnostics
         }
-      }
+      });
     }
 
-    return [...systemMessages, ...userMessages];
+    const boundedSystemMessages = this.applySystemPromptBudget(systemMessages);
+    return [...boundedSystemMessages, ...userMessages];
   }
 
   private scrubText(text: string, scopeId: string): string {
@@ -539,4 +526,43 @@ export class AgentRuntime {
     const intent = classifyCommandIntent(parsed.command);
     return intent !== "read-only";
   }
+
+  private applySystemPromptBudget(messages: Array<{ role: string; content: string }>): Array<{ role: string; content: string }> {
+    const perMessageMax = this.options.config.session.maxMessageChars;
+    const totalSystemBudget = Math.max(perMessageMax, Math.floor(perMessageMax * 1.5));
+    let remaining = totalSystemBudget;
+    const out: Array<{ role: string; content: string }> = [];
+    for (const message of messages) {
+      if (remaining <= 0) {
+        break;
+      }
+      const bounded = message.content.slice(0, Math.min(perMessageMax, remaining));
+      if (bounded.length === 0) {
+        continue;
+      }
+      out.push({
+        role: message.role,
+        content: bounded
+      });
+      remaining -= bounded.length;
+    }
+    return out;
+  }
+}
+
+function createDefaultPromptPluginHost(args: {
+  memory: MemoryStore;
+  allowSecretMemory: boolean;
+  observationStore?: RuntimeObservationStore;
+}): PluginHost {
+  const host = new PluginHost({
+    defaultTimeoutMs: 2_000
+  });
+  host.registerCollector(new MemoryCollectorPlugin(args.memory, args.allowSecretMemory));
+  if (args.observationStore) {
+    host.registerCollector(new ObservationCollectorPlugin(args.observationStore));
+  }
+  host.registerAnalyzer(new ContextAnalyzerPlugin());
+  host.registerSynthesizer(new PromptSynthesizerPlugin());
+  return host;
 }

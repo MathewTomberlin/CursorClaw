@@ -66,6 +66,23 @@ describe("reliability and continuity components", () => {
     expect(lines[1]).toContain("selected strategy B");
   });
 
+  it("recovers from pre-existing corrupted journal content and appends new entries", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cursorclaw-journal-corrupt-"));
+    tempDirs.push(dir);
+    const journalPath = join(dir, "CLAW_HISTORY.log");
+    await writeFile(journalPath, "\u0000\u0001corrupted-prefix\n", "utf8");
+    const journal = new DecisionJournal({
+      path: journalPath,
+      maxBytes: 1024 * 1024
+    });
+    await journal.append({
+      type: "decision",
+      summary: "post-corruption-entry"
+    });
+    const lines = await journal.readRecent(5);
+    expect(lines.some((line) => line.includes("post-corruption-entry"))).toBe(true);
+  });
+
   it("generates proactive suggestions from changed file paths", () => {
     const engine = new ProactiveSuggestionEngine();
     const suggestions = engine.suggest({

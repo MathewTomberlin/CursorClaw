@@ -207,4 +207,155 @@ describe("runtime privacy integration", () => {
     expect(system).not.toContain("observation-secret-987654");
     expect(system).toContain("SECRET_ASSIGNMENT");
   });
+
+  it("enforces bounded system prompt budget for observation-heavy contexts", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cursorclaw-runtime-budget-"));
+    tempDirs.push(dir);
+
+    const capturedMessages: Array<Array<{ role: string; content: string }>> = [];
+    const fakeAdapter = {
+      createSession: async () => ({
+        id: "fake-session",
+        model: "fallback"
+      }),
+      sendTurn: async function* (
+        _session: { id: string; model: string },
+        messages: Array<{ role: string; content: string }>
+      ): AsyncIterable<AdapterEvent> {
+        capturedMessages.push(messages);
+        yield { type: "assistant_delta", data: { content: "ok" } };
+        yield { type: "done", data: {} };
+      },
+      cancel: async () => undefined,
+      close: async () => undefined
+    } as const;
+
+    const config = loadConfig({
+      session: {
+        maxMessageChars: 200
+      },
+      defaultModel: "fallback",
+      models: {
+        fallback: {
+          provider: "fallback-model",
+          timeoutMs: 5_000,
+          authProfiles: ["default"],
+          fallbackModels: [],
+          enabled: true
+        }
+      }
+    });
+    const observations = new RuntimeObservationStore({
+      maxEvents: 20
+    });
+    for (let idx = 0; idx < 20; idx += 1) {
+      await observations.append({
+        sessionId: "s-budget",
+        source: "logs",
+        kind: "noise",
+        sensitivity: "operational",
+        payload: {
+          detail: "x".repeat(500)
+        }
+      });
+    }
+
+    const runtime = new AgentRuntime({
+      config,
+      adapter: fakeAdapter as unknown as import("../src/model-adapter.js").CursorAgentModelAdapter,
+      toolRouter: new ToolRouter({
+        approvalGate: new AlwaysAllowApprovalGate(),
+        allowedExecBins: ["echo"]
+      }),
+      memory: new MemoryStore({ workspaceDir: dir }),
+      observationStore: observations,
+      snapshotDir: join(dir, "snapshots")
+    });
+
+    await runtime.runTurn({
+      session: {
+        sessionId: "s-budget",
+        channelId: "dm:s-budget",
+        channelKind: "dm"
+      },
+      messages: [{ role: "user", content: "summarize context" }]
+    });
+
+    const systemMessages = capturedMessages[0]?.filter((message) => message.role === "system") ?? [];
+    const totalSystemChars = systemMessages.reduce((acc, item) => acc + item.content.length, 0);
+    expect(totalSystemChars).toBeLessThanOrEqual(300);
+  });
+
+  it("propagates runtime crash observations into prompt context for runtime-only debugging", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cursorclaw-runtime-observation-debug-"));
+    tempDirs.push(dir);
+    const observations = new RuntimeObservationStore({
+      maxEvents: 10
+    });
+    await observations.append({
+      sessionId: "s-runtime-bug",
+      source: "logs",
+      kind: "crash-report",
+      sensitivity: "operational",
+      payload: {
+        stack: "TypeError: cannot read properties of undefined"
+      }
+    });
+
+    const fakeAdapter = {
+      createSession: async () => ({
+        id: "fake-session",
+        model: "fallback"
+      }),
+      sendTurn: async function* (
+        _session: { id: string; model: string },
+        messages: Array<{ role: string; content: string }>
+      ): AsyncIterable<AdapterEvent> {
+        const observationPrompt = messages.find((message) =>
+          message.content.includes("TypeError: cannot read properties of undefined")
+        );
+        const content = observationPrompt
+          ? "Runtime observation ingested: propose null-guard fix path."
+          : "No runtime observation available.";
+        yield { type: "assistant_delta", data: { content } };
+        yield { type: "done", data: {} };
+      },
+      cancel: async () => undefined,
+      close: async () => undefined
+    } as const;
+
+    const config = loadConfig({
+      defaultModel: "fallback",
+      models: {
+        fallback: {
+          provider: "fallback-model",
+          timeoutMs: 5_000,
+          authProfiles: ["default"],
+          fallbackModels: [],
+          enabled: true
+        }
+      }
+    });
+    const runtime = new AgentRuntime({
+      config,
+      adapter: fakeAdapter as unknown as import("../src/model-adapter.js").CursorAgentModelAdapter,
+      toolRouter: new ToolRouter({
+        approvalGate: new AlwaysAllowApprovalGate(),
+        allowedExecBins: ["echo"]
+      }),
+      memory: new MemoryStore({ workspaceDir: dir }),
+      observationStore: observations,
+      snapshotDir: join(dir, "snapshots")
+    });
+
+    const result = await runtime.runTurn({
+      session: {
+        sessionId: "s-runtime-bug",
+        channelId: "dm:s-runtime-bug",
+        channelKind: "dm"
+      },
+      messages: [{ role: "user", content: "help fix runtime crash" }]
+    });
+    expect(result.assistantText).toContain("Runtime observation ingested");
+  });
 });

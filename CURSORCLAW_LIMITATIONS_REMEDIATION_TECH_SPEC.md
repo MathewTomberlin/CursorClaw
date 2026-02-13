@@ -135,7 +135,7 @@ Add a new **Pre-Egress Privacy Pipeline** and **Capability-Based Action Gate**:
 
 ### Guardrails
 - [x] Existing `tests/security-tools.test.ts` remains green.
-- [ ] Add unit tests for at least 20 secret formats and false-positive control cases.
+- [x] Add unit tests for at least 20 secret formats and false-positive control cases.
 - [ ] Add performance benchmark: scanner adds <= 15% median turn overhead on baseline fixtures.
 
 ---
@@ -219,11 +219,11 @@ This reduces growth pressure on runtime/gateway orchestration and enables indepe
 
 ### Success criteria
 - [x] Plugin contracts compile cleanly and are covered by API tests.
-- [ ] Core runtime no longer directly depends on feature-specific collector/analyzer logic.
+- [x] Core runtime no longer directly depends on feature-specific collector/analyzer logic.
 
 ### Guardrails
 - [x] No behavior change in existing runtime/gateway integration tests.
-- [ ] Type-only contract tests prevent backward-incompatible interface drift.
+- [x] Type-only contract tests prevent backward-incompatible interface drift.
 
 ---
 
@@ -242,7 +242,7 @@ This reduces growth pressure on runtime/gateway orchestration and enables indepe
 
 ### Guardrails
 - [x] Add soak test with failing plugin to verify runtime remains available.
-- [ ] Add throughput guardrail to ensure registry overhead stays within baseline limits.
+- [x] Add throughput guardrail to ensure registry overhead stays within baseline limits.
 
 ---
 
@@ -307,11 +307,11 @@ Add a **Runtime Observation Bus** and **MCP Gateway Integration**:
 3. Add confidence scoring for observation-to-hypothesis linkage.
 
 ### Success criteria
-- [ ] Runtime-only bugs become reproducible/fixable from observed context.
+- [x] Runtime-only bugs become reproducible/fixable from observed context.
 - [x] Observation summaries remain under strict token/size budget.
 
 ### Guardrails
-- [ ] Add regression tests for prompt budget overflow prevention.
+- [x] Add regression tests for prompt budget overflow prevention.
 - [x] Add tests to ensure secret-bearing runtime logs are scrubbed before prompt inclusion.
 
 ---
@@ -336,7 +336,7 @@ Add a **Runtime Observation Bus** and **MCP Gateway Integration**:
 
 ### Guardrails
 - [x] Add contract tests against mock MCP servers.
-- [ ] Block release on any MCP policy bypass finding.
+- [x] Block release on any MCP policy bypass finding.
 
 ---
 
@@ -367,7 +367,7 @@ Add:
 
 ### Guardrails
 - [x] Journal must never contain raw secrets (scrubber required).
-- [ ] Add integrity test for append-only semantics and corruption recovery.
+- [x] Add integrity test for append-only semantics and corruption recovery.
 
 ---
 
@@ -380,10 +380,10 @@ Add:
 
 ### Success criteria
 - [x] Sessions preserve architectural context after context window resets.
-- [ ] Decision rationales stay consistent unless contradicted by new evidence.
+- [x] Decision rationales stay consistent unless contradicted by new evidence.
 
 ### Guardrails
-- [ ] Add tests for decision drift and stale-decision override behavior.
+- [x] Add tests for decision drift and stale-decision override behavior.
 - [x] Add bounded context-size checks for journal injection.
 
 ---
@@ -452,7 +452,7 @@ Add:
 
 ### Guardrails
 - [x] Add tests to verify hypothesis diversity gate is mandatory.
-- [ ] Add regression checks to prevent infinite hypothesis loops.
+- [x] Add regression checks to prevent infinite hypothesis loops.
 
 ---
 

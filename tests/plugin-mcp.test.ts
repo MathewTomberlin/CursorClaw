@@ -1,3 +1,5 @@
+import { performance } from "node:perf_hooks";
+
 import { describe, expect, it } from "vitest";
 
 import { InMemoryMcpServerAdapter, McpRegistry } from "../src/mcp.js";
@@ -92,5 +94,72 @@ describe("plugin host and MCP integration", () => {
       input: { a: 2, b: 5 }
     })) as { value: number };
     expect(called.value).toBe(7);
+  });
+
+  it("enforces MCP server allowlist policy", async () => {
+    const registry = new McpRegistry({
+      allowedServers: ["local"]
+    });
+    const local = new InMemoryMcpServerAdapter("local");
+    local.defineResource("mcp://ok", "ok");
+    registry.register(local);
+    const blocked = new InMemoryMcpServerAdapter("blocked");
+    blocked.defineResource("mcp://blocked", "blocked");
+    registry.register(blocked);
+
+    const listed = await registry.listResources();
+    expect(listed.some((resource) => resource.server === "blocked")).toBe(false);
+    await expect(
+      registry.readResource({
+        server: "blocked",
+        uri: "mcp://blocked"
+      })
+    ).rejects.toThrow(/not allowed by policy/i);
+  });
+
+  it("keeps plugin host execution throughput within baseline", async () => {
+    const host = new PluginHost({
+      defaultTimeoutMs: 100
+    });
+    host.registerCollector({
+      id: "collector",
+      collect: async () => [
+        {
+          sourcePlugin: "collector",
+          type: "fact",
+          payload: "a"
+        }
+      ]
+    });
+    host.registerAnalyzer({
+      id: "analyzer",
+      analyze: async () => [
+        {
+          sourcePlugin: "analyzer",
+          type: "summary",
+          payload: "a"
+        }
+      ]
+    });
+    host.registerSynthesizer({
+      id: "synth",
+      synthesize: async () => [
+        {
+          role: "system",
+          content: "a"
+        }
+      ]
+    });
+
+    const start = performance.now();
+    for (let idx = 0; idx < 500; idx += 1) {
+      await host.run({
+        runId: `run-${idx}`,
+        sessionId: "s1",
+        inputMessages: [{ role: "user", content: "hi" }]
+      });
+    }
+    const elapsedMs = performance.now() - start;
+    expect(elapsedMs).toBeLessThan(2_000);
   });
 });

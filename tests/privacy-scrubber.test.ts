@@ -98,4 +98,54 @@ describe("privacy scrubber", () => {
     const elapsedMs = performance.now() - start;
     expect(elapsedMs).toBeLessThan(1_500);
   });
+
+  it("covers at least twenty secret-like formats and avoids simple false positives", () => {
+    const scrubber = new PrivacyScrubber({
+      enabled: true,
+      failClosedOnError: true
+    });
+    const cases = [
+      "token=abc1234567890secret",
+      "password=abc1234567890secret",
+      "secret=abc1234567890secret",
+      "api_key=abc1234567890secret",
+      "api-key=abc1234567890secret",
+      "token:abc1234567890secret",
+      "token = abc1234567890secret",
+      "password:\"abc1234567890secret\"",
+      "secret='abc1234567890secret'",
+      "ghp_abcdefghijklmnopqrstuvwxyz123456",
+      "gho_abcdefghijklmnopqrstuvwxyz123456",
+      "ghu_abcdefghijklmnopqrstuvwxyz123456",
+      "ghs_abcdefghijklmnopqrstuvwxyz123456",
+      "ghr_abcdefghijklmnopqrstuvwxyz123456",
+      "AKIAABCDEFGHIJKLMNOP",
+      "ASIAABCDEFGHIJKLMNOP",
+      "A3TABCDEFGHIJKLMNOPQ",
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturepayload",
+      "-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----",
+      "QmFzZTY0VG9rZW5TdHJpbmdXaXRoSGlnaEVudHJvcHlBbmRMZW5ndGg9"
+    ];
+    for (const sample of cases) {
+      const result = scrubber.scrubText({
+        text: sample,
+        scopeId: "coverage-20"
+      });
+      expect(result.text, `expected sample to be scrubbed: ${sample}`).not.toBe(sample);
+    }
+
+    const falsePositives = [
+      "token=short",
+      "password=small",
+      "this sentence has no secret material",
+      "hello world"
+    ];
+    for (const sample of falsePositives) {
+      const result = scrubber.scrubText({
+        text: sample,
+        scopeId: "false-positive"
+      });
+      expect(result.text).toBe(sample);
+    }
+  });
 });

@@ -100,6 +100,17 @@ describe("runtime failure loop guard integration", () => {
     expect(second.assistantText).toContain("ok");
     const firstSystemMessage = observedMessages[0]?.find((entry) => entry.role === "system")?.content ?? "";
     expect(firstSystemMessage).toContain("three distinct architectural hypotheses");
+
+    await runtime.runTurn({
+      session: {
+        sessionId: "s1",
+        channelId: "dm:s1",
+        channelKind: "dm"
+      },
+      messages: [{ role: "user", content: "third run" }]
+    });
+    const thirdRunSystemMessage = observedMessages[1]?.find((entry) => entry.role === "system")?.content ?? "";
+    expect(thirdRunSystemMessage).not.toContain("three distinct architectural hypotheses");
   });
 
   it("injects recent decision journal context with bounded history", async () => {
@@ -173,5 +184,6 @@ describe("runtime failure loop guard integration", () => {
     expect(journalMessage).toContain("Recent decision journal context");
     expect(journalMessage).toContain("decision-7");
     expect(journalMessage).not.toContain("decision-0");
+    expect(journalMessage).toContain("Maintain rationale continuity");
   });
 });
