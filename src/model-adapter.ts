@@ -106,7 +106,7 @@ export class CursorAgentModelAdapter implements ModelAdapter {
     }
     child.kill("SIGTERM");
     setTimeout(() => {
-      if (!child.killed) {
+      if (this.isProcessRunning(child)) {
         child.kill("SIGKILL");
       }
     }, 300);
@@ -284,9 +284,13 @@ export class CursorAgentModelAdapter implements ModelAdapter {
     }
     child.kill("SIGTERM");
     setTimeout(() => {
-      if (!child.killed) {
+      if (this.isProcessRunning(child)) {
         child.kill("SIGKILL");
       }
     }, 500);
+  }
+
+  private isProcessRunning(child: ChildProcessWithoutNullStreams): boolean {
+    return child.exitCode === null && child.signalCode === null;
   }
 }

@@ -2,7 +2,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 
-import { describe, expect, it, afterEach } from "vitest";
+import { describe, expect, it, afterEach, vi } from "vitest";
 
 import { CursorAgentModelAdapter } from "../src/model-adapter.js";
 import type { ToolDefinition } from "../src/types.js";
@@ -188,5 +188,101 @@ describe("CursorAgentModelAdapter", () => {
       }
     };
     await expect(collect()).rejects.toThrow(/unknown tool call/i);
+  });
+
+  it("forces SIGKILL in cancel when process is still running after SIGTERM", async () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = new CursorAgentModelAdapter({
+        defaultModel: "fallback-model-a",
+        models: {
+          "fallback-model-a": {
+            provider: "fallback-model",
+            timeoutMs: 5_000,
+            authProfiles: ["default"],
+            fallbackModels: [],
+            enabled: true
+          }
+        }
+      });
+
+      const killCalls: Array<number | NodeJS.Signals> = [];
+      const fakeChild = {
+        killed: false,
+        exitCode: null as number | null,
+        signalCode: null as NodeJS.Signals | null,
+        stdin: {
+          write: (_chunk: string): boolean => true
+        },
+        kill(signal?: number | NodeJS.Signals): boolean {
+          const resolvedSignal = signal ?? "SIGTERM";
+          killCalls.push(resolvedSignal);
+          if (resolvedSignal === "SIGTERM") {
+            this.killed = true;
+          }
+          return true;
+        }
+      } as unknown as import("node:child_process").ChildProcessWithoutNullStreams;
+
+      const processMap = (adapter as unknown as {
+        processes: Map<string, import("node:child_process").ChildProcessWithoutNullStreams>;
+      }).processes;
+      processMap.set("cancel-turn", fakeChild);
+
+      await adapter.cancel("cancel-turn");
+      await vi.advanceTimersByTimeAsync(300);
+
+      expect(killCalls).toEqual(["SIGTERM", "SIGKILL"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("forces SIGKILL in stageTerminate when process has not exited", async () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = new CursorAgentModelAdapter({
+        defaultModel: "fallback-model-a",
+        models: {
+          "fallback-model-a": {
+            provider: "fallback-model",
+            timeoutMs: 5_000,
+            authProfiles: ["default"],
+            fallbackModels: [],
+            enabled: true
+          }
+        }
+      });
+
+      const killCalls: Array<number | NodeJS.Signals> = [];
+      const fakeChild = {
+        killed: false,
+        exitCode: null as number | null,
+        signalCode: null as NodeJS.Signals | null,
+        stdin: {
+          write: (_chunk: string): boolean => true
+        },
+        kill(signal?: number | NodeJS.Signals): boolean {
+          const resolvedSignal = signal ?? "SIGTERM";
+          killCalls.push(resolvedSignal);
+          if (resolvedSignal === "SIGTERM") {
+            this.killed = true;
+          }
+          return true;
+        }
+      } as unknown as import("node:child_process").ChildProcessWithoutNullStreams;
+
+      (adapter as unknown as {
+        stageTerminate: (
+          child: import("node:child_process").ChildProcessWithoutNullStreams,
+          turnId: string
+        ) => void;
+      }).stageTerminate(fakeChild, "timeout-turn");
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(killCalls).toEqual(["SIGTERM", "SIGKILL"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
