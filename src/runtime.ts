@@ -277,7 +277,7 @@ export class AgentRuntime {
               await this.options.decisionJournal?.append({
                 type: "checkpoint-rollback",
                 summary: "Reliability checks failed after checkpointed turn",
-                detail: check.failedCommand,
+                ...(check.failedCommand !== undefined ? { detail: check.failedCommand } : {}),
                 metadata: {
                   runId,
                   sessionId: request.session.sessionId,
@@ -435,6 +435,19 @@ export class AgentRuntime {
           scopeId
         )
       });
+    }
+
+    if (this.options.decisionJournal) {
+      const recentDecisions = await this.options.decisionJournal.readRecent(5);
+      if (recentDecisions.length > 0) {
+        systemMessages.push({
+          role: "system",
+          content: this.scrubText(
+            `Recent decision journal context:\n${recentDecisions.join("\n")}`,
+            scopeId
+          )
+        });
+      }
     }
 
     if (this.options.pluginHost) {

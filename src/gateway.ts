@@ -342,11 +342,12 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         }
         const grantTtlMs = parseOptionalPositiveInteger(body.params?.grantTtlMs, "grantTtlMs");
         const grantUses = parseOptionalPositiveInteger(body.params?.grantUses, "grantUses");
+        const reason = body.params?.reason !== undefined ? String(body.params.reason) : undefined;
         result = {
           request: deps.approvalWorkflow.resolve({
             requestId,
             decision: decision as "approve" | "deny",
-            reason: body.params?.reason !== undefined ? String(body.params.reason) : undefined,
+            ...(reason !== undefined ? { reason } : {}),
             ...(grantTtlMs !== undefined ? { grantTtlMs } : {}),
             ...(grantUses !== undefined ? { grantUses } : {})
           })

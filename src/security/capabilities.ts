@@ -13,6 +13,7 @@ export type Capability =
 export interface CapabilityGrant {
   id: string;
   capability: Capability;
+  scope: string;
   issuedAt: string;
   expiresAt: string;
   usesRemaining: number;
@@ -30,6 +31,7 @@ export class CapabilityStore {
 
   grant(args: {
     capability: Capability;
+    scope: string;
     ttlMs: number;
     uses?: number;
   }): CapabilityGrant {
@@ -37,6 +39,7 @@ export class CapabilityStore {
     const grant: CapabilityGrant = {
       id: randomUUID(),
       capability: args.capability,
+      scope: args.scope,
       issuedAt: new Date(now).toISOString(),
       expiresAt: new Date(now + args.ttlMs).toISOString(),
       usesRemaining: Math.max(1, args.uses ?? 1)
@@ -52,7 +55,7 @@ export class CapabilityStore {
     return [...this.grants.values()].flatMap((entries) => entries.map((entry) => ({ ...entry })));
   }
 
-  consumeRequired(capabilities: Capability[], now = Date.now()): boolean {
+  consumeRequired(capabilities: Capability[], scope: string, now = Date.now()): boolean {
     this.pruneExpired(now);
     const required = [...new Set(capabilities)];
     if (required.length === 0) {
@@ -60,21 +63,21 @@ export class CapabilityStore {
     }
     for (const capability of required) {
       const entries = this.grants.get(capability) ?? [];
-      const hasConsumable = entries.some((entry) => entry.usesRemaining > 0);
+      const hasConsumable = entries.some((entry) => entry.scope === scope && entry.usesRemaining > 0);
       if (!hasConsumable) {
         return false;
       }
     }
     for (const capability of required) {
-      this.consumeOne(capability);
+      this.consumeOne(capability, scope);
     }
     return true;
   }
 
-  private consumeOne(capability: Capability): void {
+  private consumeOne(capability: Capability, scope: string): void {
     const entries = this.grants.get(capability) ?? [];
     for (const entry of entries) {
-      if (entry.usesRemaining <= 0) {
+      if (entry.scope !== scope || entry.usesRemaining <= 0) {
         continue;
       }
       entry.usesRemaining -= 1;

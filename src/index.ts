@@ -97,7 +97,7 @@ async function main(): Promise<void> {
   );
   const privacyScrubber = new PrivacyScrubber({
     enabled: config.privacy.scanBeforeEgress,
-    failClosedOnError: config.privacy.failClosedOnScannerError,
+    failClosedOnError: devMode ? config.privacy.failClosedOnScannerError : true,
     detectors: configuredDetectors.length > 0 ? configuredDetectors : DEFAULT_SECRET_SCANNER_DETECTORS
   });
   const adapter = new CursorAgentModelAdapter({
@@ -166,14 +166,16 @@ async function main(): Promise<void> {
     failureLoopGuard: new FailureLoopGuard({
       escalationThreshold: config.reliability.failureEscalationThreshold
     }),
-    gitCheckpointManager: config.reliability.checkpoint.enabled
-      ? new GitCheckpointManager({
-          workspaceDir,
-          reliabilityCheckCommands: config.reliability.checkpoint.reliabilityCommands,
-          commandTimeoutMs: config.reliability.checkpoint.commandTimeoutMs,
-          decisionJournal
-        })
-      : undefined,
+    ...(config.reliability.checkpoint.enabled
+      ? {
+          gitCheckpointManager: new GitCheckpointManager({
+            workspaceDir,
+            reliabilityCheckCommands: config.reliability.checkpoint.reliabilityCommands,
+            commandTimeoutMs: config.reliability.checkpoint.commandTimeoutMs,
+            decisionJournal
+          })
+        }
+      : {}),
     privacyScrubber,
     snapshotDir: join(workspaceDir, "tmp", "snapshots")
   });
@@ -241,6 +243,8 @@ async function main(): Promise<void> {
   channelHub.register(new SlackChannelAdapter(slackConfig));
   channelHub.register(new LocalEchoChannelAdapter());
   const suggestionEngine = new ProactiveSuggestionEngine();
+  const lastSuggestionByChannel = new Map<string, number>();
+  const suggestionCooldownMs = 60_000;
   let orchestratorRef: AutonomyOrchestrator | null = null;
   const gateway = buildGateway({
     config,
@@ -256,9 +260,12 @@ async function main(): Promise<void> {
     approvalWorkflow,
     capabilityStore,
     onFileChangeSuggestions: async ({ channelId, files, enqueue }) => {
-      const suggestions = suggestionEngine.suggest({ files });
+      const now = Date.now();
+      const lastSentAt = lastSuggestionByChannel.get(channelId) ?? 0;
+      const canSuggest = now - lastSentAt >= suggestionCooldownMs;
+      const suggestions = canSuggest ? suggestionEngine.suggest({ files }) : [];
       let queued = 0;
-      if (enqueue && orchestratorRef && suggestions.length > 0) {
+      if (enqueue && orchestratorRef && suggestions.length > 0 && !incidentCommander.isProactiveSendsDisabled()) {
         for (const suggestion of suggestions) {
           await orchestratorRef.queueProactiveIntent({
             channelId,
@@ -266,6 +273,7 @@ async function main(): Promise<void> {
           });
           queued += 1;
         }
+        lastSuggestionByChannel.set(channelId, now);
       }
       await decisionJournal.append({
         type: "file-change-suggestions",

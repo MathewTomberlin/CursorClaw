@@ -63,7 +63,7 @@ export class McpRegistry {
     return {
       server: args.server,
       uri: value.uri,
-      mimeType: value.mimeType,
+      ...(value.mimeType !== undefined ? { mimeType: value.mimeType } : {}),
       text: value.text
     };
   }

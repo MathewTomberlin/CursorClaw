@@ -25,9 +25,13 @@ export class PrivacyScrubber {
   private readonly scopeCounters = new Map<string, number>();
 
   constructor(private readonly options: PrivacyScrubberOptions) {
-    this.scanner = new SecretScanner({
-      detectors: options.detectors
-    });
+    this.scanner = new SecretScanner(
+      options.detectors !== undefined
+        ? {
+            detectors: options.detectors
+          }
+        : {}
+    );
   }
 
   scrubText(args: { text: string; scopeId: string }): PrivacyScrubResult {

@@ -100,10 +100,12 @@ export class ApprovalWorkflow {
     const ttlMs = args.grantTtlMs ?? this.options.defaultGrantTtlMs;
     const uses = args.grantUses ?? this.options.defaultGrantUses;
     const grants: CapabilityGrant[] = [];
+    const scope = requestScopeKey(request);
     for (const capability of request.requiredCapabilities) {
       grants.push(
         this.options.capabilityStore.grant({
           capability,
+          scope,
           ttlMs,
           uses
         })
@@ -161,10 +163,18 @@ function stableFingerprint(
   return `${tool}|${intent}|${plan}|${requiredCapabilities.sort().join(",")}`;
 }
 
+function requestScopeKey(request: ApprovalRequest): string {
+  return `${request.tool}:${request.intent}`;
+}
+
 function cloneRequest(request: ApprovalRequest): ApprovalRequest {
   return {
     ...request,
     requiredCapabilities: [...request.requiredCapabilities],
-    grants: request.grants?.map((grant) => ({ ...grant }))
+    ...(request.grants !== undefined
+      ? {
+          grants: request.grants.map((grant) => ({ ...grant }))
+        }
+      : {})
   };
 }

@@ -11,7 +11,7 @@ import {
   type Capability,
   requiredCapabilitiesForApproval
 } from "./security/capabilities.js";
-import { resolveSafeFetchTarget, wrapUntrustedContent } from "./security.js";
+import { redactSecrets, resolveSafeFetchTarget, wrapUntrustedContent } from "./security.js";
 import type {
   DecisionReasonCode,
   PolicyDecisionLog,
@@ -176,7 +176,10 @@ export class CapabilityApprovalGate implements ApprovalGate {
       this.lastDenial = null;
       return true;
     }
-    const allowed = this.options.capabilityStore.consumeRequired(requiredCapabilities);
+    const allowed = this.options.capabilityStore.consumeRequired(
+      requiredCapabilities,
+      `${args.tool}:${args.intent}`
+    );
     if (allowed) {
       this.lastDenial = null;
       return true;
@@ -308,7 +311,7 @@ export class ToolRouter {
     void this.options.decisionJournal?.append({
       type: "tool-policy-decision",
       summary: `${decision.toUpperCase()} ${reasonCode}`,
-      detail,
+      detail: redactSecrets(detail),
       metadata: {
         auditId: context.auditId
       }
