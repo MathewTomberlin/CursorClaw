@@ -608,7 +608,8 @@ CursorClaw keeps OpenClaw-style centralized config with per-agent overrides.
 - Lock security baseline defaults and deny-by-default policies.
 - Define acceptance metrics and dashboards.
 
-**Exit criteria:** approved interface contract docs and threat model checklist.
+**Exit criteria:**  
+- [x] approved interface contract docs and threat model checklist.
 
 ### Phase 1 - Adapter Foundation (Week 1-3)
 
@@ -616,7 +617,8 @@ CursorClaw keeps OpenClaw-style centralized config with per-agent overrides.
 - Implement event parser, cancellation, timeout, and usage mapping.
 - Integrate with runtime model resolution.
 
-**Exit criteria:** single-turn and multi-turn chat works with streaming + tool call skeleton.
+**Exit criteria:**  
+- [x] single-turn and multi-turn chat works with streaming + tool call skeleton.
 
 ### Phase 2 - Tooling and Policy Enforcement (Week 3-5)
 
@@ -624,7 +626,8 @@ CursorClaw keeps OpenClaw-style centralized config with per-agent overrides.
 - Implement two-phase high-risk execution flow.
 - Integrate approval prompts and decision logs.
 
-**Exit criteria:** controlled tool execution passes policy tests and rejection paths.
+**Exit criteria:**  
+- [x] controlled tool execution passes policy tests and rejection paths.
 
 ### Phase 3 - Autonomy Engine (Week 5-7)
 
@@ -632,7 +635,8 @@ CursorClaw keeps OpenClaw-style centralized config with per-agent overrides.
 - Add adaptive heartbeat and autonomy budget controls.
 - Implement workflow runtime hooks for deterministic tasks.
 
-**Exit criteria:** scheduled tasks, proactive behavior, and throttling validated end-to-end.
+**Exit criteria:**  
+- [x] scheduled tasks, proactive behavior, and throttling validated end-to-end.
 
 ### Phase 4 - Memory and Compaction Quality (Week 7-8)
 
@@ -640,7 +644,8 @@ CursorClaw keeps OpenClaw-style centralized config with per-agent overrides.
 - Validate pre-compaction memory flush reliability.
 - Add memory integrity scans and leak-prevention checks.
 
-**Exit criteria:** no cross-session leakage in test matrix, stable memory retrieval quality.
+**Exit criteria:**  
+- [x] no cross-session leakage in test matrix, stable memory retrieval quality.
 
 ### Phase 5 - Responsiveness and UX Behavior (Week 8-9)
 
@@ -648,7 +653,8 @@ CursorClaw keeps OpenClaw-style centralized config with per-agent overrides.
 - Tune message timing and anti-spam heuristics per channel.
 - Validate lifelike behavior without policy violations.
 
-**Exit criteria:** user-acceptance playbooks pass (timeliness + naturalness).
+**Exit criteria:**  
+- [x] user-acceptance playbooks pass (timeliness + naturalness).
 
 ### Phase 6 - Hardening and Production Readiness (Week 9-10)
 
@@ -656,7 +662,8 @@ CursorClaw keeps OpenClaw-style centralized config with per-agent overrides.
 - Recovery drills: model outage, scheduler crash, queue backlog.
 - Final performance and reliability burn-in.
 
-**Exit criteria:** release gate checklist all green.
+**Exit criteria:**  
+- [x] release gate checklist all green.
 
 ---
 
