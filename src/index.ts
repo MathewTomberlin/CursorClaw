@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { readFile } from "node:fs/promises";
 
 import {
   ChannelHub,
@@ -9,6 +10,10 @@ import {
 import { AutonomyStateStore } from "./autonomy-state.js";
 import { buildGateway } from "./gateway.js";
 import { DecisionJournal } from "./decision-journal.js";
+import { ContextIndexService } from "./context/context-index-service.js";
+import { LocalEmbeddingIndex } from "./context/embedding-index.js";
+import { SemanticContextRetriever } from "./context/retriever.js";
+import { SemanticSummaryCache } from "./context/summary-cache.js";
 import { MemoryStore } from "./memory.js";
 import { InMemoryMcpServerAdapter, McpRegistry } from "./mcp.js";
 import { CursorAgentModelAdapter } from "./model-adapter.js";
@@ -19,6 +24,7 @@ import {
   PromptSynthesizerPlugin
 } from "./plugins/builtins.js";
 import { PluginHost } from "./plugins/host.js";
+import { SemanticContextCollectorPlugin } from "./plugins/semantic-context.collector.js";
 import { ProactiveSuggestionEngine } from "./proactive-suggestions.js";
 import {
   PrivacyScrubber
@@ -29,8 +35,15 @@ import {
 } from "./privacy/secret-scanner.js";
 import { RunStore } from "./run-store.js";
 import { AgentRuntime } from "./runtime.js";
+import { NetworkTraceCollector } from "./network/trace-collector.js";
+import { FunctionExplainer } from "./reflection/function-explainer.js";
+import { IdleReflectionScheduler } from "./reflection/idle-scheduler.js";
+import { SpeculativeTestRunner } from "./reflection/speculative-test-runner.js";
+import { ConfidenceModel } from "./reliability/confidence-model.js";
+import { DeepScanService } from "./reliability/deep-scan.js";
 import { FailureLoopGuard } from "./reliability/failure-loop.js";
 import { GitCheckpointManager } from "./reliability/git-checkpoint.js";
+import { ReasoningResetController } from "./reliability/reasoning-reset.js";
 import { RuntimeObservationStore } from "./runtime-observation.js";
 import { AutonomyBudget, CronService, HeartbeatRunner, WorkflowRuntime } from "./scheduler.js";
 import {
@@ -54,6 +67,8 @@ import {
 } from "./tools.js";
 import { isDevMode, loadConfigFromDisk, validateStartupConfig } from "./config.js";
 import { AutonomyOrchestrator } from "./orchestrator.js";
+import { WorkspaceCatalog } from "./workspaces/catalog.js";
+import { MultiRootIndexer } from "./workspaces/multi-root-indexer.js";
 
 const STRICT_EXEC_BINS = new Set(["echo", "pwd", "ls", "cat", "node"]);
 const VALID_SECRET_DETECTORS = new Set(DEFAULT_SECRET_SCANNER_DETECTORS);
@@ -90,6 +105,48 @@ async function main(): Promise<void> {
     stateFile: join(workspaceDir, "tmp", "observations.json")
   });
   await observationStore.load();
+  const workspaceCatalog = new WorkspaceCatalog({
+    roots:
+      config.workspaces.roots.length > 0
+        ? config.workspaces.roots
+        : [
+            {
+              id: "primary",
+              path: workspaceDir,
+              priority: 0,
+              enabled: true
+            }
+          ]
+  });
+  const summaryCache = new SemanticSummaryCache({
+    stateFile: join(workspaceDir, "tmp", "context-summary.json"),
+    maxEntries: config.contextCompression.summaryCacheMaxEntries
+  });
+  await summaryCache.load();
+  const embeddingIndex = new LocalEmbeddingIndex({
+    stateFile: join(workspaceDir, "tmp", "context-embeddings.json"),
+    maxChunks: config.contextCompression.embeddingMaxChunks
+  });
+  await embeddingIndex.load();
+  const retriever = new SemanticContextRetriever({
+    summaryCache,
+    embeddingIndex
+  });
+  const multiRootIndexer = new MultiRootIndexer({
+    maxFilesPerRoot: config.contextCompression.maxFilesPerRoot,
+    maxFileBytes: config.contextCompression.maxFileBytes,
+    includeExtensions: config.contextCompression.includeExtensions
+  });
+  const contextIndexService = new ContextIndexService({
+    workspaceCatalog,
+    retriever,
+    indexer: multiRootIndexer,
+    stateFile: join(workspaceDir, "tmp", "context-index-state.json"),
+    refreshEveryMs: config.contextCompression.refreshEveryMs
+  });
+  if (config.contextCompression.semanticRetrievalEnabled) {
+    await contextIndexService.ensureFreshIndex();
+  }
 
   const memory = new MemoryStore({ workspaceDir });
   const configuredDetectors = config.privacy.detectors.filter(
@@ -109,6 +166,23 @@ async function main(): Promise<void> {
   });
   pluginHost.registerCollector(new MemoryCollectorPlugin(memory, config.memory.includeSecretsInPrompt));
   pluginHost.registerCollector(new ObservationCollectorPlugin(observationStore));
+  if (config.contextCompression.semanticRetrievalEnabled) {
+    pluginHost.registerCollector(
+      new SemanticContextCollectorPlugin({
+        retriever,
+        topK: config.contextCompression.topK,
+        allowSecret: config.memory.includeSecretsInPrompt,
+        ensureFreshIndex: async () => contextIndexService.ensureFreshIndex(),
+        resolveCrossRepoSuspects: (repo) => {
+          const graph = contextIndexService.getCrossRepoGraph();
+          return graph.edges
+            .filter((edge) => edge.fromRepo === repo && edge.confidence >= 0.6)
+            .map((edge) => edge.toRepo)
+            .slice(0, 6);
+        }
+      })
+    );
+  }
   pluginHost.registerAnalyzer(new ContextAnalyzerPlugin());
   pluginHost.registerSynthesizer(new PromptSynthesizerPlugin());
   const mcpRegistry = new McpRegistry({
@@ -155,6 +229,17 @@ async function main(): Promise<void> {
     toolRouter.register(createMcpCallTool({ registry: mcpRegistry, approvalGate }));
   }
 
+  const confidenceModel = new ConfidenceModel();
+  const deepScanService = new DeepScanService({
+    workspaceDir,
+    maxFiles: 600,
+    maxDurationMs: 7_000
+  });
+  const reasoningResetController = new ReasoningResetController({
+    iterationThreshold: config.reliability.reasoningResetIterations
+  });
+  let recentBackgroundTestsPassing = false;
+
   const runtime = new AgentRuntime({
     config,
     adapter,
@@ -166,6 +251,11 @@ async function main(): Promise<void> {
     failureLoopGuard: new FailureLoopGuard({
       escalationThreshold: config.reliability.failureEscalationThreshold
     }),
+    reasoningResetController,
+    deepScanService,
+    confidenceModel,
+    lowConfidenceThreshold: config.reliability.lowConfidenceThreshold,
+    hasRecentTestsPassing: async () => recentBackgroundTestsPassing,
     ...(config.reliability.checkpoint.enabled
       ? {
           gitCheckpointManager: new GitCheckpointManager({
@@ -243,7 +333,86 @@ async function main(): Promise<void> {
   channelHub.register(new SlackChannelAdapter(slackConfig));
   channelHub.register(new LocalEchoChannelAdapter());
   const suggestionEngine = new ProactiveSuggestionEngine();
+  const functionExplainer = new FunctionExplainer({
+    workspaceDir
+  });
+  const networkTraceCollector = new NetworkTraceCollector({
+    enabled: config.networkTrace.enabled,
+    allowHosts: config.networkTrace.allowHosts.map((host) => host.toLowerCase()),
+    observationStore,
+    getIndexedModulePaths: async () => {
+      const indexed = await contextIndexService.listIndexedFiles(4_000);
+      return indexed.map((entry) => entry.modulePath);
+    }
+  });
+  const idleScheduler = new IdleReflectionScheduler({
+    idleAfterMs: config.reflection.idleAfterMs,
+    tickMs: config.reflection.tickMs,
+    maxConcurrentJobs: 1
+  });
   let orchestratorRef: AutonomyOrchestrator | null = null;
+  let ensureReflectionJobQueued: (() => void) | null = null;
+  if (config.reflection.enabled) {
+    const speculativeTestRunner = new SpeculativeTestRunner({
+      workspaceDir,
+      command: config.reflection.flakyTestCommand,
+      runs: config.reflection.flakyRuns,
+      timeoutMs: config.reflection.maxJobMs
+    });
+    const scheduleFlakyScan = (): void => {
+      if (idleScheduler.hasJob("reflection:flaky-scan")) {
+        return;
+      }
+      idleScheduler.enqueue({
+        id: "reflection:flaky-scan",
+        run: async () => {
+          const result = await speculativeTestRunner.run();
+          const changedModules = (await contextIndexService.listIndexedFiles(12)).map((entry) => entry.modulePath);
+          recentBackgroundTestsPassing = result.failCount === 0;
+          await observationStore.append({
+            source: "reflection",
+            kind: "flaky-scan",
+            sensitivity: "operational",
+            payload: {
+              command: result.command,
+              outcomes: result.outcomes,
+              flakyScore: result.flakyScore,
+              confidence: result.confidence,
+              durationMs: result.durationMs,
+              changedModules: changedModules.slice(0, 8)
+            }
+          });
+          await decisionJournal.append({
+            type: "idle-reflection",
+            summary: "Background flaky scan completed",
+            metadata: {
+              flakyScore: result.flakyScore,
+              confidence: result.confidence,
+              passCount: result.passCount,
+              failCount: result.failCount,
+              changedModules: changedModules.slice(0, 8)
+            }
+          });
+          if (
+            result.flakyScore >= 35 &&
+            orchestratorRef &&
+            !incidentCommander.isProactiveSendsDisabled()
+          ) {
+            await orchestratorRef.queueProactiveIntent({
+              channelId: "system",
+              text: `Background reflection detected flaky behavior (score ${result.flakyScore}) around: ${changedModules
+                .slice(0, 4)
+                .join(", ")}. Consider rerunning targeted tests and isolating nondeterministic dependencies.`
+            });
+          }
+          scheduleFlakyScan();
+        }
+      });
+    };
+    ensureReflectionJobQueued = scheduleFlakyScan;
+    scheduleFlakyScan();
+    idleScheduler.start();
+  }
   const gateway = buildGateway({
     config,
     runtime,
@@ -257,6 +426,10 @@ async function main(): Promise<void> {
     behavior,
     approvalWorkflow,
     capabilityStore,
+    onActivity: () => {
+      idleScheduler.noteActivity();
+      ensureReflectionJobQueued?.();
+    },
     onFileChangeSuggestions: async ({ channelId, files, enqueue }) => {
       const suggestionResult = suggestionEngine.suggestForChannel(channelId, { files });
       const suggestions = suggestionResult.suggestions;
@@ -283,6 +456,91 @@ async function main(): Promise<void> {
       return {
         suggestions,
         queued
+      };
+    },
+    onWorkspaceStatus: async () => {
+      await contextIndexService.ensureFreshIndex();
+      const health = await workspaceCatalog.healthCheck();
+      const indexed = await contextIndexService.listIndexedFiles(6_000);
+      const graph = contextIndexService.getCrossRepoGraph();
+      return {
+        roots: health,
+        indexedFiles: indexed.length,
+        crossRepoEdges: graph.edges.length,
+        graphBuiltAt: graph.builtAt
+      };
+    },
+    onWorkspaceSemanticSearch: async ({ query, topK, workspace, repo }) => {
+      await contextIndexService.ensureFreshIndex();
+      const hits = await retriever.retrieve({
+        query,
+        topK,
+        ...(workspace ? { workspace } : {}),
+        ...(repo ? { repo } : {}),
+        allowSecret: config.memory.includeSecretsInPrompt
+      });
+      const grouped = retriever.rankByModule(hits).slice(0, topK);
+      const graph = contextIndexService.getCrossRepoGraph();
+      const suspectRepos = new Set<string>();
+      for (const entry of grouped) {
+        for (const edge of graph.edges) {
+          if (edge.fromRepo === entry.repo && edge.confidence >= 0.6) {
+            suspectRepos.add(edge.toRepo);
+          }
+        }
+      }
+      return {
+        query,
+        results: grouped.map((entry) => ({
+          workspace: entry.workspace,
+          repo: entry.repo,
+          modulePath: entry.modulePath,
+          maxScore: entry.maxScore,
+          averageScore: entry.averageScore,
+          summary: entry.summary?.summary ?? "",
+          symbols: entry.summary?.symbols ?? [],
+          chunks: entry.chunks.slice(0, 2).map((chunk) => ({
+            score: chunk.score,
+            chunkIndex: chunk.chunkIndex,
+            text: chunk.chunkText
+          }))
+        })),
+        crossRepoSuspects: [...suspectRepos]
+      };
+    },
+    onTraceIngest: async (trace) => {
+      await contextIndexService.ensureFreshIndex();
+      return networkTraceCollector.ingest(trace);
+    },
+    onExplainFunction: async ({ modulePath, symbol }) => {
+      await contextIndexService.ensureFreshIndex();
+      const indexed = await contextIndexService.listIndexedFiles(8_000);
+      const match = indexed.find((entry) => entry.modulePath === modulePath || entry.path.endsWith(modulePath));
+      if (!match) {
+        return {
+          error: `module not indexed: ${modulePath}`,
+          confidence: 0
+        };
+      }
+      const sourceText = await readFile(match.path, "utf8");
+      const graph = contextIndexService.getCrossRepoGraph();
+      const callerHints = graph.edges
+        .filter((edge) => edge.signal.includes(symbol) || edge.fromModule.endsWith(modulePath))
+        .map((edge) => `${edge.fromRepo}:${edge.fromModule}`)
+        .slice(0, 10);
+      const explanation = await functionExplainer.explain({
+        modulePath: match.modulePath,
+        symbol,
+        sourceText,
+        callerHints
+      });
+      return {
+        ...explanation,
+        provenance: {
+          workspace: match.workspaceId,
+          repo: match.repo,
+          modulePath: match.modulePath
+        }
       };
     }
   });
@@ -357,6 +615,7 @@ async function main(): Promise<void> {
     }
     shuttingDown = true;
     await orchestrator.stop();
+    idleScheduler.stop();
     await gateway.close();
     process.exit(0);
   };

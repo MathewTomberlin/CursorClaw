@@ -55,6 +55,28 @@ export interface GatewayDependencies {
     suggestions: string[];
     queued: number;
   }>;
+  onWorkspaceStatus?: () => Promise<unknown>;
+  onWorkspaceSemanticSearch?: (args: {
+    query: string;
+    topK: number;
+    workspace?: string;
+    repo?: string;
+  }) => Promise<unknown>;
+  onTraceIngest?: (args: {
+    sessionId?: string;
+    method: string;
+    url: string;
+    status: number;
+    latencyMs: number;
+    requestBody?: unknown;
+    responseBody?: unknown;
+    headers?: Record<string, string>;
+  }) => Promise<unknown>;
+  onExplainFunction?: (args: {
+    modulePath: string;
+    symbol: string;
+  }) => Promise<unknown>;
+  onActivity?: () => void;
 }
 
 const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
@@ -66,7 +88,11 @@ const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
   "approval.list": ["admin", "local"],
   "approval.resolve": ["admin", "local"],
   "approval.capabilities": ["admin", "local"],
-  "advisor.file_change": ["local", "remote", "admin"]
+  "advisor.file_change": ["local", "remote", "admin"],
+  "workspace.status": ["local", "remote", "admin"],
+  "workspace.semantic_search": ["local", "remote", "admin"],
+  "trace.ingest": ["local", "remote", "admin"],
+  "advisor.explain_function": ["local", "remote", "admin"]
 };
 
 export function buildGateway(deps: GatewayDependencies): FastifyInstance {
@@ -103,6 +129,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
   });
 
   app.post("/rpc", async (request, reply) => {
+    deps.onActivity?.();
     const body = (request.body ?? {}) as RpcRequest;
     const auditId = createAuditId("req");
     if (!body.method || !body.version) {
@@ -371,6 +398,63 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           files,
           enqueue
         });
+      } else if (body.method === "workspace.status") {
+        if (!deps.onWorkspaceStatus) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "workspace status service not configured");
+        }
+        result = await deps.onWorkspaceStatus();
+      } else if (body.method === "workspace.semantic_search") {
+        if (!deps.onWorkspaceSemanticSearch) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "workspace semantic search not configured");
+        }
+        const query = String(body.params?.query ?? "").trim();
+        if (!query) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "query is required");
+        }
+        const topK = parseOptionalPositiveInteger(body.params?.topK, "topK") ?? 8;
+        const workspace = body.params?.workspace !== undefined ? String(body.params.workspace) : undefined;
+        const repo = body.params?.repo !== undefined ? String(body.params.repo) : undefined;
+        result = await deps.onWorkspaceSemanticSearch({
+          query,
+          topK,
+          ...(workspace ? { workspace } : {}),
+          ...(repo ? { repo } : {})
+        });
+      } else if (body.method === "trace.ingest") {
+        if (!deps.onTraceIngest) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "trace ingestion service not configured");
+        }
+        const method = String(body.params?.method ?? "GET");
+        const url = String(body.params?.url ?? "");
+        if (!url) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "trace url is required");
+        }
+        const status = parseOptionalPositiveInteger(body.params?.status, "status") ?? 200;
+        const latencyMs = parseOptionalPositiveInteger(body.params?.latencyMs, "latencyMs") ?? 0;
+        const headers = parseOptionalStringRecord(body.params?.headers, "headers");
+        result = await deps.onTraceIngest({
+          ...(body.params?.sessionId !== undefined ? { sessionId: String(body.params.sessionId) } : {}),
+          method,
+          url,
+          status,
+          latencyMs,
+          ...(body.params?.requestBody !== undefined ? { requestBody: body.params.requestBody } : {}),
+          ...(body.params?.responseBody !== undefined ? { responseBody: body.params.responseBody } : {}),
+          ...(headers ? { headers } : {})
+        });
+      } else if (body.method === "advisor.explain_function") {
+        if (!deps.onExplainFunction) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "function explainer not configured");
+        }
+        const modulePath = String(body.params?.modulePath ?? "").trim();
+        const symbol = String(body.params?.symbol ?? "").trim();
+        if (!modulePath || !symbol) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "modulePath and symbol are required");
+        }
+        result = await deps.onExplainFunction({
+          modulePath,
+          symbol
+        });
       } else {
         throw new RpcGatewayError(400, "BAD_REQUEST", `unknown method: ${body.method}`);
       }
@@ -466,6 +550,23 @@ function parseStringArray(value: unknown, fieldName: string): string[] {
     throw new RpcGatewayError(400, "BAD_REQUEST", `${fieldName} must be array`);
   }
   return value.map((entry) => String(entry));
+}
+
+function parseOptionalStringRecord(
+  value: unknown,
+  fieldName: string
+): Record<string, string> | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new RpcGatewayError(400, "BAD_REQUEST", `${fieldName} must be object`);
+  }
+  const out: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    out[key] = String(entry);
+  }
+  return out;
 }
 
 function errorResponse(id: string | undefined, auditId: string, code: string, message: string): RpcResponse {
