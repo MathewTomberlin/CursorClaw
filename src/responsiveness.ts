@@ -117,7 +117,10 @@ export class BehaviorPolicyEngine {
       isComplex: input.isComplex,
       hasToolCalls: input.hasToolCalls
     });
-    const shouldGreet = this.options.greetingPolicy.shouldGreet(input.threadId, input.isNewThread, now);
+    // Only consume greeting cooldown when a send is actually allowed.
+    const shouldGreet = allowSend
+      ? this.options.greetingPolicy.shouldGreet(input.threadId, input.isNewThread, now)
+      : false;
     return {
       allowSend,
       typingEvents,

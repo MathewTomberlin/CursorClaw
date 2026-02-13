@@ -68,4 +68,42 @@ describe("responsiveness behavior policies", () => {
     }, 1_500);
     expect(second.allowSend).toBe(false);
   });
+
+  it("does not consume greeting cooldown when a send is paced", () => {
+    const engine = new BehaviorPolicyEngine({
+      typingPolicy: new TypingPolicy("message"),
+      presenceManager: new PresenceManager(),
+      deliveryPacer: new DeliveryPacer(1_000),
+      greetingPolicy: new GreetingPolicy(10_000)
+    });
+
+    const warmup = engine.planSend({
+      channelId: "c1",
+      threadId: "existing-thread",
+      isNewThread: false,
+      isComplex: false,
+      hasToolCalls: false
+    }, 1_000);
+    expect(warmup.allowSend).toBe(true);
+
+    const paced = engine.planSend({
+      channelId: "c1",
+      threadId: "new-thread",
+      isNewThread: true,
+      isComplex: false,
+      hasToolCalls: false
+    }, 1_500);
+    expect(paced.allowSend).toBe(false);
+    expect(paced.shouldGreet).toBe(false);
+
+    const nextAllowed = engine.planSend({
+      channelId: "c1",
+      threadId: "new-thread",
+      isNewThread: true,
+      isComplex: false,
+      hasToolCalls: false
+    }, 2_100);
+    expect(nextAllowed.allowSend).toBe(true);
+    expect(nextAllowed.shouldGreet).toBe(true);
+  });
 });
