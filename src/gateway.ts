@@ -1,7 +1,9 @@
 import Fastify, { type FastifyInstance } from "fastify";
 
+import type { ChannelHub } from "./channels.js";
 import type { CursorClawConfig } from "./config.js";
 import type { BehaviorPolicyEngine } from "./responsiveness.js";
+import type { RunStore } from "./run-store.js";
 import type { AgentRuntime, TurnResult } from "./runtime.js";
 import type { CronService } from "./scheduler.js";
 import {
@@ -34,6 +36,8 @@ export interface GatewayDependencies {
   config: CursorClawConfig;
   runtime: AgentRuntime;
   cronService: CronService;
+  runStore?: RunStore;
+  channelHub?: ChannelHub;
   auth: AuthService;
   rateLimiter: MethodRateLimiter;
   policyLogs: PolicyDecisionLogger;
@@ -159,16 +163,25 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           deps.config.session.maxMessageChars
         );
         const started = deps.runtime.startTurn({ session, messages });
+        if (deps.runStore) {
+          await deps.runStore.createPending(started.runId, session.sessionId);
+        }
         pendingRuns.set(started.runId, {
           promise: started.promise
-            .then((resolved) => {
+            .then(async (resolved) => {
+              if (deps.runStore) {
+                await deps.runStore.markCompleted(started.runId, resolved);
+              }
               pendingRuns.set(started.runId, {
                 promise: started.promise,
                 result: resolved
               });
               return resolved;
             })
-            .catch((error: unknown) => {
+            .catch(async (error: unknown) => {
+              if (deps.runStore) {
+                await deps.runStore.markFailed(started.runId, String(error));
+              }
               pendingRuns.set(started.runId, {
                 promise: started.promise,
                 error: String(error)
@@ -182,18 +195,33 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         const runId = String(body.params?.runId ?? "");
         const pending = pendingRuns.get(runId);
         if (!pending) {
-          throw new RpcGatewayError(404, "NOT_FOUND", `runId not found: ${runId}`);
-        }
-        if (pending.result !== undefined) {
+          const persisted = deps.runStore ? await deps.runStore.get(runId) : undefined;
+          if (!persisted) {
+            throw new RpcGatewayError(404, "NOT_FOUND", `runId not found: ${runId}`);
+          }
+          if (persisted.status === "completed" && persisted.result !== undefined) {
+            await deps.runStore?.consume(runId);
+            result = persisted.result;
+          } else if (persisted.status === "pending") {
+            throw new RpcGatewayError(409, "RUN_UNAVAILABLE", `runId is no longer active: ${runId}`);
+          } else {
+            await deps.runStore?.consume(runId);
+            throw new Error(persisted.error ?? `run failed: ${runId}`);
+          }
+        } else if (pending.result !== undefined) {
           pendingRuns.delete(runId);
+          await deps.runStore?.consume(runId);
           result = pending.result;
         } else if (pending.error !== undefined) {
           pendingRuns.delete(runId);
+          await deps.runStore?.consume(runId);
           throw new Error(pending.error);
-        } else {
+        }
+        if (pending && pending.result === undefined && pending.error === undefined) {
           try {
             const resolved = await pending.promise;
             result = resolved;
+            await deps.runStore?.consume(runId);
           } finally {
             pendingRuns.delete(runId);
           }
@@ -237,12 +265,27 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
             behaviorPlan?.shouldGreet === true && !/^(hi|hello|hey)\b/i.test(text)
               ? `Hi! ${text}`
               : text;
-          result = {
-            delivered: true,
-            channelId,
-            text: finalText,
-            typingEvents: behaviorPlan?.typingEvents ?? []
-          };
+          if (deps.channelHub) {
+            const dispatch = await deps.channelHub.send({
+              channelId,
+              text: finalText,
+              threadId: String(body.params?.threadId ?? channelId),
+              proactive,
+              typingEvents: behaviorPlan?.typingEvents ?? [],
+              urgent: Boolean(body.params?.urgent ?? false)
+            });
+            result = {
+              ...dispatch,
+              typingEvents: behaviorPlan?.typingEvents ?? []
+            };
+          } else {
+            result = {
+              delivered: true,
+              channelId,
+              text: finalText,
+              typingEvents: behaviorPlan?.typingEvents ?? []
+            };
+          }
         }
       } else if (body.method === "incident.bundle") {
         const tokens = parseIncidentTokens(body.params?.tokens);

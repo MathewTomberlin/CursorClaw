@@ -16,6 +16,11 @@ export interface HeartbeatTickInput {
   now?: Date;
 }
 
+export interface AutonomyBudgetState {
+  hourly: Record<string, number[]>;
+  daily: Record<string, number[]>;
+}
+
 export class AutonomyBudget {
   private readonly hourly = new Map<string, number[]>();
   private readonly daily = new Map<string, number[]>();
@@ -51,6 +56,39 @@ export class AutonomyBudget {
     this.hourly.set(channelId, hourWindow);
     this.daily.set(channelId, dayWindow);
     return true;
+  }
+
+  exportState(): AutonomyBudgetState {
+    return {
+      hourly: Object.fromEntries(this.hourly.entries()),
+      daily: Object.fromEntries(this.daily.entries())
+    };
+  }
+
+  importState(state: Partial<AutonomyBudgetState> | undefined): void {
+    this.hourly.clear();
+    this.daily.clear();
+    if (!state) {
+      return;
+    }
+    for (const [channelId, timestamps] of Object.entries(state.hourly ?? {})) {
+      if (!Array.isArray(timestamps)) {
+        continue;
+      }
+      this.hourly.set(
+        channelId,
+        timestamps.filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+      );
+    }
+    for (const [channelId, timestamps] of Object.entries(state.daily ?? {})) {
+      if (!Array.isArray(timestamps)) {
+        continue;
+      }
+      this.daily.set(
+        channelId,
+        timestamps.filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+      );
+    }
   }
 }
 

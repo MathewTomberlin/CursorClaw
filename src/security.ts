@@ -295,6 +295,7 @@ export class AuthService {
       password?: string;
       trustedProxyIps: string[];
       trustedIdentityHeader?: string;
+      isTokenRevoked?: (token: string) => boolean;
     }
   ) {}
 
@@ -310,6 +311,13 @@ export class AuthService {
     }
 
     if (this.options.mode === "token" && !safeSecretCompare(headerToken, this.options.token)) {
+      return { ok: false, reason: "AUTH_INVALID", role: "remote" };
+    }
+    if (
+      this.options.mode === "token" &&
+      headerToken &&
+      this.options.isTokenRevoked?.(headerToken) === true
+    ) {
       return { ok: false, reason: "AUTH_INVALID", role: "remote" };
     }
     if (this.options.mode === "password" && !safeSecretCompare(headerPassword, this.options.password)) {
@@ -376,12 +384,17 @@ export class AnomalyDetector {
 export class IncidentCommander {
   private proactiveDisabled = false;
   private isolatedTools = false;
-  private revokedTokenHashes: string[] = [];
+  private readonly revokedTokenHashes = new Set<string>();
 
   revokeTokens(tokens: string[]): void {
     for (const token of tokens) {
-      this.revokedTokenHashes.push(createHash("sha256").update(token).digest("hex"));
+      this.revokedTokenHashes.add(createHash("sha256").update(token).digest("hex"));
     }
+  }
+
+  isTokenRevoked(token: string): boolean {
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    return this.revokedTokenHashes.has(tokenHash);
   }
 
   disableProactiveSends(): void {

@@ -1,3 +1,4 @@
+import type { AutonomyStateStore, ProactiveIntent } from "./autonomy-state.js";
 import type { IntegrityFinding, MemoryStore } from "./memory.js";
 import {
   AutonomyBudget,
@@ -14,11 +15,14 @@ export interface AutonomyOrchestratorOptions {
   budget: AutonomyBudget;
   workflow: WorkflowRuntime;
   memory: MemoryStore;
+  autonomyStateStore?: AutonomyStateStore;
   heartbeatChannelId: string;
   cronTickMs: number;
   integrityScanEveryMs: number;
+  intentTickMs?: number;
   onCronRun: (job: CronJobDefinition) => Promise<void>;
   onHeartbeatTurn: (channelId: string) => Promise<string>;
+  onProactiveIntent?: (intent: ProactiveIntent) => Promise<boolean>;
   onIntegrityScan?: (findings: IntegrityFinding[]) => void;
 }
 
@@ -26,9 +30,11 @@ export class AutonomyOrchestrator {
   private cronTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private integrityTimer: NodeJS.Timeout | null = null;
+  private intentTimer: NodeJS.Timeout | null = null;
   private running = false;
   private lastHeartbeatResult: "HEARTBEAT_OK" | "SENT" = "HEARTBEAT_OK";
   private latestIntegrityFindings: IntegrityFinding[] = [];
+  private pendingProactiveIntents = 0;
 
   constructor(private readonly options: AutonomyOrchestratorOptions) {}
 
@@ -37,6 +43,7 @@ export class AutonomyOrchestrator {
       return;
     }
     this.running = true;
+    void this.hydrateState().catch(() => undefined);
     if (this.options.cronTickMs > 0) {
       this.cronTimer = setInterval(() => {
         void this.options.cronService.tick(this.options.onCronRun).catch(() => undefined);
@@ -47,6 +54,12 @@ export class AutonomyOrchestrator {
       this.integrityTimer = setInterval(() => {
         void this.scanIntegrity().catch(() => undefined);
       }, this.options.integrityScanEveryMs);
+    }
+    if (this.options.autonomyStateStore && this.options.onProactiveIntent) {
+      const everyMs = this.options.intentTickMs ?? 1_000;
+      this.intentTimer = setInterval(() => {
+        void this.dispatchProactiveIntents().catch(() => undefined);
+      }, everyMs);
     }
   }
 
@@ -64,6 +77,11 @@ export class AutonomyOrchestrator {
       clearInterval(this.integrityTimer);
       this.integrityTimer = null;
     }
+    if (this.intentTimer) {
+      clearInterval(this.intentTimer);
+      this.intentTimer = null;
+    }
+    await this.persistBudgetState();
     await this.options.cronService.flushState();
   }
 
@@ -77,15 +95,30 @@ export class AutonomyOrchestrator {
     return this.options.workflow.run(definition, args);
   }
 
+  async queueProactiveIntent(args: {
+    channelId: string;
+    text: string;
+    notBeforeMs?: number;
+  }): Promise<ProactiveIntent> {
+    if (!this.options.autonomyStateStore) {
+      throw new Error("autonomy state store is not configured");
+    }
+    const queued = await this.options.autonomyStateStore.queueIntent(args);
+    this.pendingProactiveIntents += 1;
+    return queued;
+  }
+
   getState(): {
     running: boolean;
     lastHeartbeatResult: "HEARTBEAT_OK" | "SENT";
     latestIntegrityFindings: IntegrityFinding[];
+    pendingProactiveIntents: number;
   } {
     return {
       running: this.running,
       lastHeartbeatResult: this.lastHeartbeatResult,
-      latestIntegrityFindings: [...this.latestIntegrityFindings]
+      latestIntegrityFindings: [...this.latestIntegrityFindings],
+      pendingProactiveIntents: this.pendingProactiveIntents
     };
   }
 
@@ -111,11 +144,48 @@ export class AutonomyOrchestrator {
       turn: () => this.options.onHeartbeatTurn(this.options.heartbeatChannelId)
     });
     this.lastHeartbeatResult = result;
+    await this.persistBudgetState();
   }
 
   private async scanIntegrity(): Promise<void> {
     const findings = await this.options.memory.integrityScan();
     this.latestIntegrityFindings = findings;
     this.options.onIntegrityScan?.(findings);
+  }
+
+  private async dispatchProactiveIntents(): Promise<void> {
+    if (!this.running || !this.options.autonomyStateStore || !this.options.onProactiveIntent) {
+      return;
+    }
+    const pending = await this.options.autonomyStateStore.listPendingIntents();
+    this.pendingProactiveIntents = pending.length;
+    for (const intent of pending) {
+      if (!this.options.budget.allow(intent.channelId)) {
+        continue;
+      }
+      const delivered = await this.options.onProactiveIntent(intent);
+      if (delivered) {
+        await this.options.autonomyStateStore.markIntentSent(intent.id);
+      }
+    }
+    const remaining = await this.options.autonomyStateStore.listPendingIntents();
+    this.pendingProactiveIntents = remaining.length;
+    await this.persistBudgetState();
+  }
+
+  private async hydrateState(): Promise<void> {
+    if (!this.options.autonomyStateStore) {
+      return;
+    }
+    const state = await this.options.autonomyStateStore.load();
+    this.options.budget.importState(state.budget);
+    this.pendingProactiveIntents = state.intents.filter((intent) => intent.status === "pending").length;
+  }
+
+  private async persistBudgetState(): Promise<void> {
+    if (!this.options.autonomyStateStore) {
+      return;
+    }
+    await this.options.autonomyStateStore.upsertBudget(this.options.budget.exportState());
   }
 }

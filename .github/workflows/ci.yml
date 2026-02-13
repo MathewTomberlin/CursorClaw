@@ -46,5 +46,8 @@ jobs:
       - name: Security test suite
         run: npm run test:security
 
+      - name: Prompt injection red-team suite
+        run: npm run test:redteam
+
       - name: Dependency audit
         run: npm run security:audit
