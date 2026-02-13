@@ -16,6 +16,10 @@ import { PluginHost } from "./plugins/host.js";
 import type { PrivacyScrubber } from "./privacy/privacy-scrubber.js";
 import type { FailureLoopGuard } from "./reliability/failure-loop.js";
 import type { GitCheckpointHandle, GitCheckpointManager } from "./reliability/git-checkpoint.js";
+import type { ConfidenceModel } from "./reliability/confidence-model.js";
+import type { DeepScanService } from "./reliability/deep-scan.js";
+import { type ActionEnvelope, clampConfidence } from "./reliability/action-envelope.js";
+import type { ReasoningResetController } from "./reliability/reasoning-reset.js";
 import type { RuntimeObservationStore } from "./runtime-observation.js";
 import type { PolicyDecisionLog, SessionContext, ToolCall } from "./types.js";
 import { ToolRouter, classifyCommandIntent } from "./tools.js";
@@ -29,6 +33,9 @@ export interface TurnResult {
   runId: string;
   assistantText: string;
   events: RuntimeEvent[];
+  confidenceScore?: number;
+  confidenceRationale?: string[];
+  requiresHumanHint?: boolean;
 }
 
 export type RuntimeEventType =
@@ -144,6 +151,11 @@ export interface AgentRuntimeOptions {
   observationStore?: RuntimeObservationStore;
   decisionJournal?: DecisionJournal;
   failureLoopGuard?: FailureLoopGuard;
+  reasoningResetController?: ReasoningResetController;
+  deepScanService?: DeepScanService;
+  confidenceModel?: ConfidenceModel;
+  lowConfidenceThreshold?: number;
+  hasRecentTestsPassing?: () => Promise<boolean>;
   gitCheckpointManager?: GitCheckpointManager;
   privacyScrubber?: PrivacyScrubber;
   snapshotDir: string;
@@ -162,6 +174,7 @@ export class AgentRuntime {
     toolCalls: 0
   };
   private readonly maxDecisionLogs = 5_000;
+  private readonly touchedFileHintsBySession = new Map<string, Set<string>>();
 
   constructor(private readonly options: AgentRuntimeOptions) {
     this.queue = new SessionQueue({
@@ -211,32 +224,114 @@ export class AgentRuntime {
       runId,
       request,
       execute: async () => {
-        const scrubScopeId = `${request.session.sessionId}:${runId}`;
+        const sessionId = request.session.sessionId;
+        const scrubScopeId = `${sessionId}:${runId}`;
         const shouldForceMultiPath =
-          this.options.failureLoopGuard?.requiresStepBack(request.session.sessionId) ?? false;
+          this.options.failureLoopGuard?.requiresStepBack(sessionId) ?? false;
+        const resetState = this.options.reasoningResetController?.noteIteration(sessionId);
+        const shouldInvalidateAssumptions = resetState?.shouldReset ?? false;
+        let deepScanSummary: string | null = null;
+        let deepScanIncluded = false;
+        let preliminaryConfidenceScore: number | undefined;
+        let preliminaryConfidenceRationale: string[] | undefined;
         let checkpointHandle: GitCheckpointHandle | null = null;
         let assistantText = "";
+        let toolCallCountThisTurn = 0;
+        let pluginDiagnosticCount = 0;
         try {
           emit("started");
           this.metrics.turnsStarted += 1;
+          if (shouldInvalidateAssumptions && this.options.deepScanService) {
+            const deepScan = await this.options.deepScanService.scanRecentlyTouched({
+              hours: 24,
+              additionalFiles: [...(this.touchedFileHintsBySession.get(sessionId) ?? new Set<string>())]
+            });
+            deepScanSummary = [
+              `Reasoning reset triggered (reset count=${resetState?.resetCount ?? 0}).`,
+              `Deep scan touched files (${deepScan.touchedFiles.length}): ${deepScan.touchedFiles.slice(0, 12).join(", ")}`,
+              deepScan.configCandidates.length > 0
+                ? `Config/build/env candidates: ${deepScan.configCandidates.slice(0, 12).join(", ")}`
+                : "Config/build/env candidates: none detected"
+            ].join("\n");
+            deepScanIncluded = true;
+            await this.options.decisionJournal?.append({
+              type: "reasoning-reset",
+              summary: "Invalidated assumptions and executed 24h deep scan",
+              metadata: {
+                runId,
+                sessionId,
+                touchedFiles: deepScan.touchedFiles.slice(0, 30),
+                configCandidates: deepScan.configCandidates.slice(0, 30)
+              }
+            });
+          }
           if (shouldForceMultiPath) {
             await this.options.decisionJournal?.append({
               type: "multi-path-escalation",
               summary: "Forced multi-path reasoning after repeated failures",
               metadata: {
                 runId,
-                sessionId: request.session.sessionId,
-                failureCount: this.options.failureLoopGuard?.getFailureCount(request.session.sessionId) ?? 0
+                sessionId,
+                failureCount: this.options.failureLoopGuard?.getFailureCount(sessionId) ?? 0
               }
             });
           }
+          const hasRecentTestsPassing = await this.resolveRecentTestSignal();
+          if (this.options.confidenceModel) {
+            const preConfidence = this.options.confidenceModel.score({
+              failureCount: this.options.failureLoopGuard?.getFailureCount(sessionId) ?? 0,
+              hasDeepScan: deepScanIncluded,
+              pluginDiagnosticCount: 0,
+              toolCallCount: 0,
+              hasRecentTestsPassing
+            });
+            preliminaryConfidenceScore = preConfidence.score;
+            preliminaryConfidenceRationale = preConfidence.rationale;
+            if (preConfidence.score < (this.options.lowConfidenceThreshold ?? 60)) {
+              const hintText = this.createHintRequestMessage(preConfidence.score, preConfidence.rationale);
+              assistantText = hintText;
+              emit("assistant", { content: hintText });
+              const envelope = this.buildActionEnvelope({
+                runId,
+                sessionId,
+                actionType: "hint-request",
+                confidenceScore: preConfidence.score,
+                confidenceRationale: preConfidence.rationale,
+                requiresHumanHint: true
+              });
+              emit("completed", {
+                chars: assistantText.length,
+                actionEnvelope: envelope
+              });
+              await this.options.observationStore?.append({
+                sessionId,
+                source: "runtime",
+                kind: "action-envelope",
+                sensitivity: "operational",
+                payload: envelope
+              });
+              this.metrics.turnsCompleted += 1;
+              await this.snapshot(runId, sessionId, events);
+              return {
+                runId,
+                assistantText,
+                events,
+                confidenceScore: preConfidence.score,
+                confidenceRationale: preConfidence.rationale,
+                requiresHumanHint: true
+              };
+            }
+          }
           const modelSession = await this.ensureModelSession(request.session);
-          const promptMessages = await this.buildPromptMessages(
+          const promptBuild = await this.buildPromptMessages(
             request,
             runId,
             scrubScopeId,
-            shouldForceMultiPath
+            shouldForceMultiPath,
+            deepScanSummary
           );
+          pluginDiagnosticCount = promptBuild.pluginDiagnosticCount;
+          const promptMessages = promptBuild.messages;
           const adapterStream = this.options.adapter.sendTurn(
             modelSession,
             promptMessages,
@@ -256,6 +351,7 @@ export class AgentRuntime {
               emittedCount += 1;
             } else if (event.type === "tool_call") {
               const call = event.data as ToolCall;
+              this.recordTouchedFileHints(sessionId, this.extractTouchedFileHints(call));
               if (!checkpointHandle && this.shouldCreateCheckpoint(call)) {
                 checkpointHandle = await this.options.gitCheckpointManager?.createCheckpoint(runId) ?? null;
               }
@@ -266,6 +362,7 @@ export class AgentRuntime {
               const safeCall = this.scrubUnknown(call, scrubScopeId) as ToolCall;
               const safeOutput = this.scrubUnknown(output, scrubScopeId);
               this.metrics.toolCalls += 1;
+              toolCallCountThisTurn += 1;
               if (this.decisionLogs.length > this.maxDecisionLogs) {
                 this.decisionLogs.splice(0, this.decisionLogs.length - this.maxDecisionLogs);
               }
@@ -325,24 +422,82 @@ export class AgentRuntime {
             }
           });
 
-          emit("completed", { chars: assistantText.length });
           this.metrics.turnsCompleted += 1;
-          this.options.failureLoopGuard?.recordSuccess(request.session.sessionId);
-          await this.snapshot(runId, request.session.sessionId, events);
-          return { runId, assistantText, events };
+          this.options.failureLoopGuard?.recordSuccess(sessionId);
+          this.options.reasoningResetController?.noteTaskResolved(sessionId);
+          const hasRecentTestsPassing = await this.resolveRecentTestSignal();
+          const postConfidence = this.options.confidenceModel?.score({
+            failureCount: this.options.failureLoopGuard?.getFailureCount(sessionId) ?? 0,
+            hasDeepScan: deepScanIncluded,
+            pluginDiagnosticCount,
+            toolCallCount: toolCallCountThisTurn,
+            hasRecentTestsPassing
+          });
+          const confidenceScore = clampConfidence(
+            postConfidence?.score ?? preliminaryConfidenceScore ?? 80
+          );
+          const confidenceRationale = postConfidence?.rationale ?? preliminaryConfidenceRationale ?? [];
+          const actionEnvelope = this.buildActionEnvelope({
+            runId,
+            sessionId,
+            actionType: "turn-complete",
+            confidenceScore,
+            confidenceRationale,
+            requiresHumanHint: false
+          });
+          emit("completed", {
+            chars: assistantText.length,
+            actionEnvelope
+          });
+          await this.options.observationStore?.append({
+            sessionId,
+            source: "runtime",
+            kind: "action-envelope",
+            sensitivity: "operational",
+            payload: actionEnvelope
+          });
+          await this.snapshot(runId, sessionId, events);
+          return {
+            runId,
+            assistantText,
+            events,
+            confidenceScore,
+            confidenceRationale,
+            requiresHumanHint: false
+          };
         } catch (error) {
           const safeError = this.scrubText(String(error), scrubScopeId);
-          emit("failed", { error: safeError });
+          const hasRecentTestsPassing = await this.resolveRecentTestSignal();
+          const failureConfidence = this.options.confidenceModel?.score({
+            failureCount: (this.options.failureLoopGuard?.getFailureCount(sessionId) ?? 0) + 1,
+            hasDeepScan: deepScanIncluded,
+            pluginDiagnosticCount,
+            toolCallCount: toolCallCountThisTurn,
+            hasRecentTestsPassing
+          });
+          const failureEnvelope = this.buildActionEnvelope({
+            runId,
+            sessionId,
+            actionType: "turn-failed",
+            confidenceScore: failureConfidence?.score ?? 35,
+            confidenceRationale: failureConfidence?.rationale ?? ["runtime-error"],
+            requiresHumanHint: (failureConfidence?.score ?? 35) < (this.options.lowConfidenceThreshold ?? 60)
+          });
+          emit("failed", {
+            error: safeError,
+            actionEnvelope: failureEnvelope
+          });
           this.metrics.turnsFailed += 1;
-          this.options.failureLoopGuard?.recordFailure(request.session.sessionId, error);
+          this.options.failureLoopGuard?.recordFailure(sessionId, error);
           await this.options.observationStore?.append({
-            sessionId: request.session.sessionId,
+            sessionId,
             source: "runtime",
             kind: "turn-failure",
             sensitivity: "operational",
             payload: {
               runId,
-              error: safeError
+              error: safeError,
+              actionEnvelope: failureEnvelope
             }
           });
           await this.options.decisionJournal?.append({
@@ -351,7 +506,7 @@ export class AgentRuntime {
             detail: safeError,
             metadata: {
               runId,
-              sessionId: request.session.sessionId
+              sessionId
             }
           });
           if (checkpointHandle && this.options.gitCheckpointManager) {
@@ -359,7 +514,7 @@ export class AgentRuntime {
             await this.options.gitCheckpointManager.cleanup(checkpointHandle);
             checkpointHandle = null;
           }
-          await this.snapshot(runId, request.session.sessionId, events);
+          await this.snapshot(runId, sessionId, events);
           throw error;
         } finally {
           this.options.privacyScrubber?.clearScope(scrubScopeId);
@@ -429,13 +584,33 @@ export class AgentRuntime {
     request: TurnRequest,
     runId: string,
     scopeId: string,
-    forceMultiPathReasoning: boolean
-  ): Promise<Array<{ role: string; content: string }>> {
-    const userMessages = request.messages.map((message) => ({
+    forceMultiPathReasoning: boolean,
+    deepScanSummary?: string | null
+  ): Promise<{
+    messages: Array<{ role: string; content: string }>;
+    pluginDiagnosticCount: number;
+  }> {
+    const freshness = this.applyUserMessageFreshness(request.messages);
+    const userMessages = freshness.messages.map((message) => ({
       role: message.role,
       content: this.scrubText(message.content, scopeId)
     }));
     const systemMessages: Array<{ role: string; content: string }> = [];
+    if (freshness.summaryLine) {
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(freshness.summaryLine, scopeId)
+      });
+    }
+    if (freshness.contradictions.length > 0) {
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(
+          `Potential stale-instruction contradictions detected:\n${freshness.contradictions.join("\n")}`,
+          scopeId
+        )
+      });
+    }
 
     if (forceMultiPathReasoning) {
       systemMessages.push({
@@ -446,6 +621,18 @@ export class AgentRuntime {
             "Before proposing a fix, step back and provide three distinct architectural hypotheses.",
             "Then choose one with explicit verification signals and execute only that selected path."
           ].join(" "),
+          scopeId
+        )
+      });
+    }
+    if (deepScanSummary) {
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(
+          [
+            "Assumption invalidation deep scan (last 24h) results:",
+            deepScanSummary
+          ].join("\n"),
           scopeId
         )
       });
@@ -491,9 +678,25 @@ export class AgentRuntime {
         }
       });
     }
+    await this.options.observationStore?.append({
+      sessionId: request.session.sessionId,
+      source: "runtime",
+      kind: "context-freshness",
+      sensitivity: "operational",
+      payload: {
+        runId,
+        freshnessScore: freshness.score,
+        contradictionCount: freshness.contradictions.length,
+        originalMessageCount: request.messages.length,
+        retainedMessageCount: freshness.messages.length
+      }
+    });
 
     const boundedSystemMessages = this.applySystemPromptBudget(systemMessages);
-    return [...boundedSystemMessages, ...userMessages];
+    return {
+      messages: [...boundedSystemMessages, ...userMessages],
+      pluginDiagnosticCount: pluginResult.diagnostics.length
+    };
   }
 
   private scrubText(text: string, scopeId: string): string {
@@ -525,6 +728,97 @@ export class AgentRuntime {
     }
     const intent = classifyCommandIntent(parsed.command);
     return intent !== "read-only";
+  }
+
+  private async resolveRecentTestSignal(): Promise<boolean> {
+    if (!this.options.hasRecentTestsPassing) {
+      return false;
+    }
+    try {
+      return await this.options.hasRecentTestsPassing();
+    } catch {
+      return false;
+    }
+  }
+
+  private createHintRequestMessage(score: number, rationale: string[]): string {
+    const details = rationale.length > 0 ? ` (${rationale.join(", ")})` : "";
+    return `Confidence score ${score} is below threshold. I need a human hint before proceeding${details}.`;
+  }
+
+  private buildActionEnvelope(args: {
+    runId: string;
+    sessionId: string;
+    actionType: string;
+    confidenceScore: number;
+    confidenceRationale: string[];
+    requiresHumanHint: boolean;
+  }): ActionEnvelope {
+    return {
+      actionId: randomUUID(),
+      at: new Date().toISOString(),
+      runId: args.runId,
+      sessionId: args.sessionId,
+      actionType: args.actionType,
+      confidenceScore: clampConfidence(args.confidenceScore),
+      confidenceRationale: [...args.confidenceRationale],
+      requiresHumanHint: args.requiresHumanHint
+    };
+  }
+
+  private recordTouchedFileHints(sessionId: string, hints: string[]): void {
+    if (hints.length === 0) {
+      return;
+    }
+    const set = this.touchedFileHintsBySession.get(sessionId) ?? new Set<string>();
+    for (const hint of hints) {
+      set.add(hint);
+    }
+    if (set.size > 300) {
+      const trimmed = [...set].slice(set.size - 300);
+      this.touchedFileHintsBySession.set(sessionId, new Set(trimmed));
+      return;
+    }
+    this.touchedFileHintsBySession.set(sessionId, set);
+  }
+
+  private applyUserMessageFreshness(messages: RuntimeMessage[]): {
+    messages: RuntimeMessage[];
+    score: number;
+    summaryLine?: string;
+    contradictions: string[];
+  } {
+    const maxRetained = 8;
+    const retained = messages.slice(-maxRetained);
+    const droppedCount = Math.max(0, messages.length - retained.length);
+    const score = Math.round((retained.length / Math.max(1, messages.length)) * 100);
+    const contradictions = detectInstructionContradictions(retained);
+    const summaryLine =
+      droppedCount > 0
+        ? `Context freshness policy retained ${retained.length}/${messages.length} latest messages and deprioritized ${droppedCount} stale entries.`
+        : undefined;
+    return {
+      messages: retained,
+      score,
+      ...(summaryLine ? { summaryLine } : {}),
+      contradictions
+    };
+  }
+
+  private extractTouchedFileHints(call: ToolCall): string[] {
+    if (call.name !== "exec") {
+      return [];
+    }
+    const command = String((call.args as { command?: string })?.command ?? "");
+    if (!command) {
+      return [];
+    }
+    const tokens = command.split(/\s+/).filter((token) => token.length > 0);
+    return tokens
+      .filter((token) =>
+        /\.(ts|tsx|js|jsx|json|md|yaml|yml|toml|env|py|go|rs|java|conf|ini)$/.test(token)
+      )
+      .slice(0, 40);
   }
 
   private applySystemPromptBudget(messages: Array<{ role: string; content: string }>): Array<{ role: string; content: string }> {
@@ -565,4 +859,20 @@ function createDefaultPromptPluginHost(args: {
   host.registerAnalyzer(new ContextAnalyzerPlugin());
   host.registerSynthesizer(new PromptSynthesizerPlugin());
   return host;
+}
+
+function detectInstructionContradictions(messages: RuntimeMessage[]): string[] {
+  const contradictions: string[] = [];
+  const normalized = messages.map((message) => message.content.toLowerCase());
+  const hasRunTests = normalized.some((content) => /\brun\s+tests?\b/.test(content));
+  const hasSkipTests = normalized.some((content) => /\b(skip|avoid|do not run)\s+tests?\b/.test(content));
+  if (hasRunTests && hasSkipTests) {
+    contradictions.push("Conflicting directives found: both 'run tests' and 'skip tests'.");
+  }
+  const hasRefactor = normalized.some((content) => /\brefactor\b/.test(content));
+  const hasNoRefactor = normalized.some((content) => /\bdo not refactor\b/.test(content));
+  if (hasRefactor && hasNoRefactor) {
+    contradictions.push("Conflicting directives found: both 'refactor' and 'do not refactor'.");
+  }
+  return contradictions;
 }

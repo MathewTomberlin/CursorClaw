@@ -68,11 +68,49 @@ export interface McpConfig {
 
 export interface ReliabilityConfig {
   failureEscalationThreshold: number;
+  reasoningResetIterations: number;
+  lowConfidenceThreshold: number;
   checkpoint: {
     enabled: boolean;
     reliabilityCommands: string[];
     commandTimeoutMs: number;
   };
+}
+
+export interface WorkspaceRootConfig {
+  id?: string;
+  path: string;
+  priority?: number;
+  enabled?: boolean;
+}
+
+export interface WorkspacesConfig {
+  roots: WorkspaceRootConfig[];
+}
+
+export interface ContextCompressionConfig {
+  semanticRetrievalEnabled: boolean;
+  topK: number;
+  refreshEveryMs: number;
+  summaryCacheMaxEntries: number;
+  embeddingMaxChunks: number;
+  maxFilesPerRoot: number;
+  maxFileBytes: number;
+  includeExtensions: string[];
+}
+
+export interface NetworkTraceConfig {
+  enabled: boolean;
+  allowHosts: string[];
+}
+
+export interface ReflectionConfig {
+  enabled: boolean;
+  idleAfterMs: number;
+  tickMs: number;
+  maxJobMs: number;
+  flakyRuns: number;
+  flakyTestCommand: string;
 }
 
 export interface CursorClawConfig {
@@ -83,6 +121,10 @@ export interface CursorClawConfig {
   memory: MemoryConfig;
   privacy: PrivacyConfig;
   mcp: McpConfig;
+  workspaces: WorkspacesConfig;
+  contextCompression: ContextCompressionConfig;
+  networkTrace: NetworkTraceConfig;
+  reflection: ReflectionConfig;
   reliability: ReliabilityConfig;
   tools: ToolsConfig;
   models: Record<string, ModelProviderConfig>;
@@ -150,8 +192,48 @@ export const DEFAULT_CONFIG: CursorClawConfig = {
     enabled: true,
     allowServers: []
   },
+  workspaces: {
+    roots: []
+  },
+  contextCompression: {
+    semanticRetrievalEnabled: true,
+    topK: 8,
+    refreshEveryMs: 20_000,
+    summaryCacheMaxEntries: 15_000,
+    embeddingMaxChunks: 100_000,
+    maxFilesPerRoot: 4_000,
+    maxFileBytes: 128 * 1024,
+    includeExtensions: [
+      ".ts",
+      ".tsx",
+      ".js",
+      ".jsx",
+      ".mjs",
+      ".cjs",
+      ".py",
+      ".go",
+      ".rs",
+      ".java",
+      ".json",
+      ".md"
+    ]
+  },
+  networkTrace: {
+    enabled: false,
+    allowHosts: []
+  },
+  reflection: {
+    enabled: false,
+    idleAfterMs: 2 * 60_000,
+    tickMs: 30_000,
+    maxJobMs: 30_000,
+    flakyRuns: 3,
+    flakyTestCommand: "npm test"
+  },
   reliability: {
     failureEscalationThreshold: 2,
+    reasoningResetIterations: 3,
+    lowConfidenceThreshold: 60,
     checkpoint: {
       enabled: true,
       reliabilityCommands: [],

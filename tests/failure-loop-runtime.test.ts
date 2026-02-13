@@ -98,7 +98,10 @@ describe("runtime failure loop guard integration", () => {
     });
 
     expect(second.assistantText).toContain("ok");
-    const firstSystemMessage = observedMessages[0]?.find((entry) => entry.role === "system")?.content ?? "";
+    const firstSystemMessage = observedMessages[0]
+      ?.filter((entry) => entry.role === "system")
+      .map((entry) => entry.content)
+      .join("\n") ?? "";
     expect(firstSystemMessage).toContain("three distinct architectural hypotheses");
 
     await runtime.runTurn({
@@ -109,7 +112,10 @@ describe("runtime failure loop guard integration", () => {
       },
       messages: [{ role: "user", content: "third run" }]
     });
-    const thirdRunSystemMessage = observedMessages[1]?.find((entry) => entry.role === "system")?.content ?? "";
+    const thirdRunSystemMessage = observedMessages[1]
+      ?.filter((entry) => entry.role === "system")
+      .map((entry) => entry.content)
+      .join("\n") ?? "";
     expect(thirdRunSystemMessage).not.toContain("three distinct architectural hypotheses");
   });
 

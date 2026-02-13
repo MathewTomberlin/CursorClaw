@@ -37,6 +37,25 @@ async function createGateway(options: {
     files: string[];
     enqueue: boolean;
   }) => Promise<{ suggestions: string[]; queued: number }>;
+  onWorkspaceStatus?: () => Promise<unknown>;
+  onWorkspaceSemanticSearch?: (args: {
+    query: string;
+    topK: number;
+    workspace?: string;
+    repo?: string;
+  }) => Promise<unknown>;
+  onTraceIngest?: (args: {
+    sessionId?: string;
+    method: string;
+    url: string;
+    status: number;
+    latencyMs: number;
+    requestBody?: unknown;
+    responseBody?: unknown;
+    headers?: Record<string, string>;
+  }) => Promise<unknown>;
+  onExplainFunction?: (args: { modulePath: string; symbol: string }) => Promise<unknown>;
+  onActivity?: () => void;
 } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "cursorclaw-gw-"));
   cleanupPaths.push(dir);
@@ -102,6 +121,11 @@ async function createGateway(options: {
     ...(options.approvalWorkflow ? { approvalWorkflow: options.approvalWorkflow } : {}),
     ...(options.capabilityStore ? { capabilityStore: options.capabilityStore } : {}),
     ...(options.onFileChangeSuggestions ? { onFileChangeSuggestions: options.onFileChangeSuggestions } : {}),
+    ...(options.onWorkspaceStatus ? { onWorkspaceStatus: options.onWorkspaceStatus } : {}),
+    ...(options.onWorkspaceSemanticSearch ? { onWorkspaceSemanticSearch: options.onWorkspaceSemanticSearch } : {}),
+    ...(options.onTraceIngest ? { onTraceIngest: options.onTraceIngest } : {}),
+    ...(options.onExplainFunction ? { onExplainFunction: options.onExplainFunction } : {}),
+    ...(options.onActivity ? { onActivity: options.onActivity } : {}),
     auth,
     rateLimiter,
     policyLogs,
@@ -803,6 +827,106 @@ describe("gateway integration", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().result.suggestions.length).toBeGreaterThanOrEqual(2);
     expect(response.json().result.queued).toBe(2);
+    await app.close();
+  });
+
+  it("supports workspace, trace, and function-explainer RPC methods", async () => {
+    let activitySignals = 0;
+    const app = await createGateway({
+      onActivity: () => {
+        activitySignals += 1;
+      },
+      onWorkspaceStatus: async () => ({
+        roots: [{ id: "primary", healthy: true }],
+        indexedFiles: 12
+      }),
+      onWorkspaceSemanticSearch: async ({ query, topK }) => ({
+        query,
+        topK,
+        results: [{ modulePath: "src/app.ts", maxScore: 0.9 }]
+      }),
+      onTraceIngest: async ({ url }) => ({
+        accepted: true,
+        url
+      }),
+      onExplainFunction: async ({ modulePath, symbol }) => ({
+        modulePath,
+        symbol,
+        confidence: 80
+      })
+    });
+
+    const statusRes = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: {
+        authorization: "Bearer test-token"
+      },
+      payload: {
+        version: "2.0",
+        method: "workspace.status",
+        params: {}
+      }
+    });
+    expect(statusRes.statusCode).toBe(200);
+    expect(statusRes.json().result.indexedFiles).toBe(12);
+
+    const searchRes = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: {
+        authorization: "Bearer test-token"
+      },
+      payload: {
+        version: "2.0",
+        method: "workspace.semantic_search",
+        params: {
+          query: "auth flow",
+          topK: 3
+        }
+      }
+    });
+    expect(searchRes.statusCode).toBe(200);
+    expect(searchRes.json().result.results[0].modulePath).toBe("src/app.ts");
+
+    const traceRes = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: {
+        authorization: "Bearer test-token"
+      },
+      payload: {
+        version: "2.0",
+        method: "trace.ingest",
+        params: {
+          method: "GET",
+          url: "http://localhost:3000/health",
+          status: 200,
+          latencyMs: 10
+        }
+      }
+    });
+    expect(traceRes.statusCode).toBe(200);
+    expect(traceRes.json().result.accepted).toBe(true);
+
+    const explainRes = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: {
+        authorization: "Bearer test-token"
+      },
+      payload: {
+        version: "2.0",
+        method: "advisor.explain_function",
+        params: {
+          modulePath: "src/app.ts",
+          symbol: "runApp"
+        }
+      }
+    });
+    expect(explainRes.statusCode).toBe(200);
+    expect(explainRes.json().result.symbol).toBe("runApp");
+    expect(activitySignals).toBeGreaterThanOrEqual(4);
     await app.close();
   });
 });

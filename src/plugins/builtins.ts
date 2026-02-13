@@ -1,5 +1,6 @@
 import type { MemoryStore } from "../memory.js";
 import type { RuntimeObservationStore } from "../runtime-observation.js";
+import { wrapUntrustedContent } from "../security.js";
 import type {
   AnalyzerPlugin,
   CollectorPlugin,
@@ -85,6 +86,42 @@ export class ContextAnalyzerPlugin implements AnalyzerPlugin {
           });
         }
       }
+      if (artifact.type === "semantic-context") {
+        const payload = artifact.payload as {
+          query: string;
+          modules: Array<{
+            workspace: string;
+            repo: string;
+            modulePath: string;
+            maxScore: number;
+            crossRepoSuspects: string[];
+            summary: string;
+            symbols: string[];
+            chunks: Array<{ score: number; chunkIndex: number; text: string }>;
+          }>;
+        };
+        if (Array.isArray(payload.modules) && payload.modules.length > 0) {
+          insights.push({
+            sourcePlugin: this.id,
+            type: "semantic-summary",
+            payload: payload.modules.map((module) =>
+              [
+                `[${module.workspace}/${module.repo}] ${module.modulePath} score=${module.maxScore.toFixed(3)}`,
+                module.summary ? `summary: ${module.summary}` : "",
+                module.symbols.length > 0 ? `symbols: ${module.symbols.join(", ")}` : "",
+                module.crossRepoSuspects.length > 0
+                  ? `cross-repo suspects: ${module.crossRepoSuspects.join(", ")}`
+                  : "",
+                ...module.chunks.map((chunk) =>
+                  `chunk(${chunk.chunkIndex},${chunk.score.toFixed(3)}): ${wrapUntrustedContent(chunk.text)}`
+                )
+              ]
+                .filter(Boolean)
+                .join("\n")
+            )
+          });
+        }
+      }
     }
     return insights;
   }
@@ -100,12 +137,18 @@ export class PromptSynthesizerPlugin implements SynthesizerPlugin {
     const observationSummary = insights.find((insight) => insight.type === "observation-summary")?.payload as
       | string[]
       | undefined;
+    const semanticSummary = insights.find((insight) => insight.type === "semantic-summary")?.payload as
+      | string[]
+      | undefined;
     const sections: string[] = [];
     if (memorySummary && memorySummary.length > 0) {
       sections.push(`Relevant session memory:\n${memorySummary.join("\n")}`);
     }
     if (observationSummary && observationSummary.length > 0) {
       sections.push(`Recent runtime observations:\n${observationSummary.join("\n")}`);
+    }
+    if (semanticSummary && semanticSummary.length > 0) {
+      sections.push(`Relevant semantic code context:\n${semanticSummary.slice(0, 4).join("\n\n")}`);
     }
     if (sections.length === 0) {
       return [];
