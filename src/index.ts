@@ -1,8 +1,11 @@
 import { join } from "node:path";
 
+import { ChannelHub, LocalEchoChannelAdapter, SlackChannelAdapter } from "./channels.js";
+import { AutonomyStateStore } from "./autonomy-state.js";
 import { buildGateway } from "./gateway.js";
 import { MemoryStore } from "./memory.js";
 import { CursorAgentModelAdapter } from "./model-adapter.js";
+import { RunStore } from "./run-store.js";
 import { AgentRuntime } from "./runtime.js";
 import { AutonomyBudget, CronService, HeartbeatRunner, WorkflowRuntime } from "./scheduler.js";
 import {
@@ -82,6 +85,12 @@ async function main(): Promise<void> {
     stateFile: join(workspaceDir, "tmp", "cron-state.json")
   });
   await cronService.loadState();
+  const runStore = new RunStore({
+    stateFile: join(workspaceDir, "tmp", "run-store.json"),
+    maxCompletedRuns: 10_000
+  });
+  await runStore.load();
+  await runStore.markInFlightInterrupted();
 
   const heartbeat = new HeartbeatRunner(config.heartbeat);
   const budget = new AutonomyBudget(config.autonomyBudget);
@@ -94,9 +103,11 @@ async function main(): Promise<void> {
     password?: string;
     trustedProxyIps: string[];
     trustedIdentityHeader?: string;
+    isTokenRevoked?: (token: string) => boolean;
   } = {
     mode: config.gateway.auth.mode,
-    trustedProxyIps: config.gateway.trustedProxyIps
+    trustedProxyIps: config.gateway.trustedProxyIps,
+    isTokenRevoked: (token: string) => incidentCommander.isTokenRevoked(token)
   };
   if (config.gateway.auth.token !== undefined) {
     authOptions.token = config.gateway.auth.token;
@@ -119,10 +130,21 @@ async function main(): Promise<void> {
     deliveryPacer: new DeliveryPacer(1_500),
     greetingPolicy: new GreetingPolicy()
   });
+  const channelHub = new ChannelHub();
+  channelHub.register(
+    new SlackChannelAdapter({
+      enabled: /^(1|true|yes)$/i.test(process.env.CURSORCLAW_SLACK_ENABLED ?? ""),
+      botToken: process.env.SLACK_BOT_TOKEN,
+      defaultChannel: process.env.SLACK_DEFAULT_CHANNEL
+    })
+  );
+  channelHub.register(new LocalEchoChannelAdapter());
   const gateway = buildGateway({
     config,
     runtime,
     cronService,
+    runStore,
+    channelHub,
     auth,
     rateLimiter,
     policyLogs,
@@ -142,9 +164,13 @@ async function main(): Promise<void> {
     budget,
     workflow,
     memory,
+    autonomyStateStore: new AutonomyStateStore({
+      stateFile: join(workspaceDir, "tmp", "autonomy-state.json")
+    }),
     heartbeatChannelId: "heartbeat:main",
     cronTickMs: 1_000,
     integrityScanEveryMs: config.memory.integrityScanEveryMs,
+    intentTickMs: 1_000,
     onCronRun: async (job) => {
       const sessionId = job.isolated ? `cron:${job.id}` : "main";
       await runtime.runTurn({
@@ -176,6 +202,14 @@ async function main(): Promise<void> {
         ]
       });
       return result.assistantText.trim() === "" ? "HEARTBEAT_OK" : result.assistantText;
+    },
+    onProactiveIntent: async (intent) => {
+      const delivered = await channelHub.send({
+        channelId: intent.channelId,
+        text: intent.text,
+        proactive: true
+      });
+      return delivered.delivered;
     }
   });
   orchestrator.start();

@@ -100,6 +100,24 @@ describe("security and tool policy", () => {
     expect(trusted.ok).toBe(true);
   });
 
+  it("rejects revoked bearer tokens", () => {
+    const auth = new AuthService({
+      mode: "token",
+      token: "top-secret",
+      trustedProxyIps: [],
+      isTokenRevoked: (token) => token === "top-secret"
+    });
+    const revoked = auth.authorize({
+      isLocal: false,
+      remoteIp: "8.8.8.8",
+      headers: {
+        authorization: "Bearer top-secret"
+      }
+    });
+    expect(revoked.ok).toBe(false);
+    expect(revoked.reason).toBe("AUTH_INVALID");
+  });
+
   it("limits burst calls by method and subject", () => {
     const limiter = new MethodRateLimiter(2, 60_000, { "agent.run": 1 });
     const subject = "10.0.0.3";

@@ -570,12 +570,12 @@ This order minimizes the risk of building user-visible autonomy on top of insecu
 
 ## 10) Immediate Next Iteration Backlog (actionable first sprint)
 
-- [ ] Implement durable run store and `agent.wait` recovery after restart.
-- [ ] Enforce revoked-token checks in auth path.
-- [ ] Add `ChannelAdapter` interface and Slack connector skeleton.
-- [ ] Replace synthetic `chat.send` with adapter dispatch abstraction.
-- [ ] Add prompt-injection red-team fixture set and CI job.
-- [ ] Add persistent autonomy state table (budgets + pending proactive intents).
+- [x] Implement durable run store and `agent.wait` recovery after restart.
+- [x] Enforce revoked-token checks in auth path.
+- [x] Add `ChannelAdapter` interface and Slack connector skeleton.
+- [x] Replace synthetic `chat.send` with adapter dispatch abstraction.
+- [x] Add prompt-injection red-team fixture set and CI job.
+- [x] Add persistent autonomy state table (budgets + pending proactive intents).
 
 ---
 
