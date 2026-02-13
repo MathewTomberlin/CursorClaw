@@ -4,6 +4,10 @@ export interface ChangeSuggestionInput {
 }
 
 export class ProactiveSuggestionEngine {
+  private readonly lastSuggestedAtByChannel = new Map<string, number>();
+
+  constructor(private readonly cooldownMs = 60_000) {}
+
   suggest(input: ChangeSuggestionInput): string[] {
     const maxSuggestions = Math.max(1, Math.min(10, input.maxSuggestions ?? 3));
     const lower = input.files.map((file) => file.toLowerCase());
@@ -36,5 +40,27 @@ export class ProactiveSuggestionEngine {
     }
 
     return [...suggestions].slice(0, maxSuggestions);
+  }
+
+  suggestForChannel(
+    channelId: string,
+    input: ChangeSuggestionInput,
+    now = Date.now()
+  ): { suggestions: string[]; throttled: boolean } {
+    const lastSuggestedAt = this.lastSuggestedAtByChannel.get(channelId) ?? 0;
+    if (now - lastSuggestedAt < this.cooldownMs) {
+      return {
+        suggestions: [],
+        throttled: true
+      };
+    }
+    const suggestions = this.suggest(input);
+    if (suggestions.length > 0) {
+      this.lastSuggestedAtByChannel.set(channelId, now);
+    }
+    return {
+      suggestions,
+      throttled: false
+    };
   }
 }

@@ -128,13 +128,13 @@ Add a new **Pre-Egress Privacy Pipeline** and **Capability-Based Action Gate**:
    - `privacy.failClosedOnScannerError`
 
 ### Success criteria
-- [ ] Secrets/PII are replaced with placeholders before model/tool egress.
-- [ ] Placeholder map remains local and is not emitted to external providers.
-- [ ] Scanner supports deterministic re-tokenization within a single run.
-- [ ] Scanner failures are observable and policy-controlled (fail-open only in explicit dev mode).
+- [x] Secrets/PII are replaced with placeholders before model/tool egress.
+- [x] Placeholder map remains local and is not emitted to external providers.
+- [x] Scanner supports deterministic re-tokenization within a single run.
+- [x] Scanner failures are observable and policy-controlled (fail-open only in explicit dev mode).
 
 ### Guardrails
-- [ ] Existing `tests/security-tools.test.ts` remains green.
+- [x] Existing `tests/security-tools.test.ts` remains green.
 - [ ] Add unit tests for at least 20 secret formats and false-positive control cases.
 - [ ] Add performance benchmark: scanner adds <= 15% median turn overhead on baseline fixtures.
 
@@ -154,14 +154,14 @@ Add a new **Pre-Egress Privacy Pipeline** and **Capability-Based Action Gate**:
 4. Add redaction metadata to snapshots to support forensic review without leaking raw secrets.
 
 ### Success criteria
-- [ ] No unredacted secrets in adapter payloads, runtime snapshots, or decision logs.
-- [ ] Secret-bearing memory entries are never injected into prompt text without explicit allow policy.
-- [ ] Scrubber can process large tool output safely (bounded memory).
+- [x] No unredacted secrets in adapter payloads, runtime snapshots, or decision logs.
+- [x] Secret-bearing memory entries are never injected into prompt text without explicit allow policy.
+- [x] Scrubber can process large tool output safely (bounded memory).
 
 ### Guardrails
-- [ ] Extend `tests/scheduler-memory-runtime.test.ts` with prompt-level scrub assertions.
-- [ ] Extend red-team corpus tests to verify placeholder substitution.
-- [ ] Add regression test that tool output containing PEM keys is never persisted raw.
+- [x] Extend `tests/scheduler-memory-runtime.test.ts` with prompt-level scrub assertions.
+- [x] Extend red-team corpus tests to verify placeholder substitution.
+- [x] Add regression test that tool output containing PEM keys is never persisted raw.
 
 ---
 
@@ -179,14 +179,14 @@ Add a new **Pre-Egress Privacy Pipeline** and **Capability-Based Action Gate**:
    - if action is derived from untrusted content, require stricter approval path.
 
 ### Success criteria
-- [ ] Any network-impacting, mutating, or privileged command requires explicit capability grant.
-- [ ] Capability grants are single-use, scope-bound, and expire automatically.
-- [ ] Denied approvals block execution deterministically and log reason codes.
+- [x] Any network-impacting, mutating, or privileged command requires explicit capability grant.
+- [x] Capability grants are single-use, scope-bound, and expire automatically.
+- [x] Denied approvals block execution deterministically and log reason codes.
 
 ### Guardrails
-- [ ] Existing exec intent tests remain green.
-- [ ] Add tests for approval replay attacks (same token reused).
-- [ ] Add tests for prompt-injection-induced tool calls to verify capability denial.
+- [x] Existing exec intent tests remain green.
+- [x] Add tests for approval replay attacks (same token reused).
+- [x] Add tests for prompt-injection-induced tool calls to verify capability denial.
 
 ---
 
@@ -218,11 +218,11 @@ This reduces growth pressure on runtime/gateway orchestration and enables indepe
 3. Move tool-specific orchestration logic from core runtime into plugin-compatible facades.
 
 ### Success criteria
-- [ ] Plugin contracts compile cleanly and are covered by API tests.
+- [x] Plugin contracts compile cleanly and are covered by API tests.
 - [ ] Core runtime no longer directly depends on feature-specific collector/analyzer logic.
 
 ### Guardrails
-- [ ] No behavior change in existing runtime/gateway integration tests.
+- [x] No behavior change in existing runtime/gateway integration tests.
 - [ ] Type-only contract tests prevent backward-incompatible interface drift.
 
 ---
@@ -236,12 +236,12 @@ This reduces growth pressure on runtime/gateway orchestration and enables indepe
 4. Add error isolation so one plugin failure cannot crash the entire turn.
 
 ### Success criteria
-- [ ] Plugins can be loaded/unloaded without core code edits.
-- [ ] Plugin failures degrade gracefully with typed error reports.
-- [ ] Plugin execution budgets are enforced.
+- [x] Plugins can be loaded/unloaded without core code edits.
+- [x] Plugin failures degrade gracefully with typed error reports.
+- [x] Plugin execution budgets are enforced.
 
 ### Guardrails
-- [ ] Add soak test with failing plugin to verify runtime remains available.
+- [x] Add soak test with failing plugin to verify runtime remains available.
 - [ ] Add throughput guardrail to ensure registry overhead stays within baseline limits.
 
 ---
@@ -257,8 +257,8 @@ This reduces growth pressure on runtime/gateway orchestration and enables indepe
 3. Remove compatibility path only after dual-run validation period.
 
 ### Success criteria
-- [ ] Built-ins run through plugin host in production mode.
-- [ ] No regression in existing behavior and test outcomes.
+- [x] Built-ins run through plugin host in production mode.
+- [x] No regression in existing behavior and test outcomes.
 
 ### Guardrails
 - [ ] Dual-run comparison tests (legacy path vs plugin path output equivalence).
@@ -290,12 +290,12 @@ Add a **Runtime Observation Bus** and **MCP Gateway Integration**:
 3. Add bounded retention and sensitivity labels for observation records.
 
 ### Success criteria
-- [ ] Agent can consume runtime errors/log evidence in turn context.
-- [ ] Observation data is sensitivity-labeled and policy-filtered.
+- [x] Agent can consume runtime errors/log evidence in turn context.
+- [x] Observation data is sensitivity-labeled and policy-filtered.
 
 ### Guardrails
-- [ ] No uncontrolled log ingestion (size/rate caps required).
-- [ ] Add tests for malformed and oversized observation payload rejection.
+- [x] No uncontrolled log ingestion (size/rate caps required).
+- [x] Add tests for malformed and oversized observation payload rejection.
 
 ---
 
@@ -308,11 +308,11 @@ Add a **Runtime Observation Bus** and **MCP Gateway Integration**:
 
 ### Success criteria
 - [ ] Runtime-only bugs become reproducible/fixable from observed context.
-- [ ] Observation summaries remain under strict token/size budget.
+- [x] Observation summaries remain under strict token/size budget.
 
 ### Guardrails
 - [ ] Add regression tests for prompt budget overflow prevention.
-- [ ] Add tests to ensure secret-bearing runtime logs are scrubbed before prompt inclusion.
+- [x] Add tests to ensure secret-bearing runtime logs are scrubbed before prompt inclusion.
 
 ---
 
@@ -331,11 +331,11 @@ Add a **Runtime Observation Bus** and **MCP Gateway Integration**:
 4. Add failure isolation and retry budget for MCP calls.
 
 ### Success criteria
-- [ ] CursorClaw can discover and call MCP resources/tools safely.
-- [ ] MCP interactions are fully auditable with stable reason codes.
+- [x] CursorClaw can discover and call MCP resources/tools safely.
+- [x] MCP interactions are fully auditable with stable reason codes.
 
 ### Guardrails
-- [ ] Add contract tests against mock MCP servers.
+- [x] Add contract tests against mock MCP servers.
 - [ ] Block release on any MCP policy bypass finding.
 
 ---
@@ -362,11 +362,11 @@ Add:
 3. Add rotation and archival policy to avoid unbounded growth.
 
 ### Success criteria
-- [ ] Agent decisions remain reconstructible across context resets/restarts.
-- [ ] Journal entries are human-readable and diff-friendly.
+- [x] Agent decisions remain reconstructible across context resets/restarts.
+- [x] Journal entries are human-readable and diff-friendly.
 
 ### Guardrails
-- [ ] Journal must never contain raw secrets (scrubber required).
+- [x] Journal must never contain raw secrets (scrubber required).
 - [ ] Add integrity test for append-only semantics and corruption recovery.
 
 ---
@@ -379,12 +379,12 @@ Add:
 3. Add anti-recency bias rules (do not blindly repeat old decisions without fresh evidence).
 
 ### Success criteria
-- [ ] Sessions preserve architectural context after context window resets.
+- [x] Sessions preserve architectural context after context window resets.
 - [ ] Decision rationales stay consistent unless contradicted by new evidence.
 
 ### Guardrails
 - [ ] Add tests for decision drift and stale-decision override behavior.
-- [ ] Add bounded context-size checks for journal injection.
+- [x] Add bounded context-size checks for journal injection.
 
 ---
 
@@ -400,12 +400,12 @@ Add:
    - suggestion frequency cap
 
 ### Success criteria
-- [ ] Agent can suggest relevant follow-up actions after meaningful code changes.
-- [ ] Suggestions are rate-limited and low-noise.
+- [x] Agent can suggest relevant follow-up actions after meaningful code changes.
+- [x] Suggestions are rate-limited and low-noise.
 
 ### Guardrails
-- [ ] Anti-spam tests (burst edits should not trigger burst suggestions).
-- [ ] No proactive suggestion while incident mode disables proactive sends.
+- [x] Anti-spam tests (burst edits should not trigger burst suggestions).
+- [x] No proactive suggestion while incident mode disables proactive sends.
 
 ---
 
@@ -427,12 +427,12 @@ Add:
 3. Trigger escalation when threshold reached (default: 2 failed attempts).
 
 ### Success criteria
-- [ ] Repeated identical failures are detected deterministically.
-- [ ] Retry behavior escalates instead of repeating same strategy.
+- [x] Repeated identical failures are detected deterministically.
+- [x] Retry behavior escalates instead of repeating same strategy.
 
 ### Guardrails
-- [ ] Add tests for false-positive suppression (different errors should not collapse incorrectly).
-- [ ] Add telemetry for loop events and resolutions.
+- [x] Add tests for false-positive suppression (different errors should not collapse incorrectly).
+- [x] Add telemetry for loop events and resolutions.
 
 ---
 
@@ -447,11 +447,11 @@ Add:
 3. Require explicit verification plan selection before execution.
 
 ### Success criteria
-- [ ] Third fix attempt cannot proceed without multi-path hypothesis set.
+- [x] Third fix attempt cannot proceed without multi-path hypothesis set.
 - [ ] Successful resolution rate after repeated failures increases vs baseline.
 
 ### Guardrails
-- [ ] Add tests to verify hypothesis diversity gate is mandatory.
+- [x] Add tests to verify hypothesis diversity gate is mandatory.
 - [ ] Add regression checks to prevent infinite hypothesis loops.
 
 ---
@@ -471,31 +471,31 @@ Add:
    - mark checkpoint as verified and prune old checkpoint refs by retention policy.
 
 ### Success criteria
-- [ ] Multi-file refactor failures can be reverted automatically to known-good state.
-- [ ] Rollback actions are auditable and reproducible.
+- [x] Multi-file refactor failures can be reverted automatically to known-good state.
+- [x] Rollback actions are auditable and reproducible.
 
 ### Guardrails
-- [ ] Never auto-reset over user-uncommitted unrelated changes; require clean or isolated agent workspace strategy.
-- [ ] Add integration tests for checkpoint create/fail/reset/succeed lifecycle.
-- [ ] Add safeguards to prevent checkpoint branch leaks.
+- [x] Never auto-reset over user-uncommitted unrelated changes; require clean or isolated agent workspace strategy.
+- [x] Add integration tests for checkpoint create/fail/reset/succeed lifecycle.
+- [x] Add safeguards to prevent checkpoint branch leaks.
 
 ---
 
 ## 9) Cross-Cutting Quality Gates (Release Blocking)
 
-- [ ] `npm test` remains fully green.
-- [ ] `npm run build` remains green.
-- [ ] Security suites remain green:
-  - [ ] `tests/security-tools.test.ts`
-  - [ ] `tests/prompt-injection-redteam.test.ts`
-- [ ] New suites added and green:
-  - [ ] privacy scrubber unit/integration suite
-  - [ ] capability approval workflow suite
-  - [ ] plugin host isolation suite
-  - [ ] runtime observation + MCP contract suite
-  - [ ] decision journal continuity suite
-  - [ ] multi-path reasoning + checkpoint rollback suite
-- [ ] Throughput and memory guardrails show no critical regressions.
+- [x] `npm test` remains fully green.
+- [x] `npm run build` remains green.
+- [x] Security suites remain green:
+  - [x] `tests/security-tools.test.ts`
+  - [x] `tests/prompt-injection-redteam.test.ts`
+- [x] New suites added and green:
+  - [x] privacy scrubber unit/integration suite
+  - [x] capability approval workflow suite
+  - [x] plugin host isolation suite
+  - [x] runtime observation + MCP contract suite
+  - [x] decision journal continuity suite
+  - [x] multi-path reasoning + checkpoint rollback suite
+- [x] Throughput and memory guardrails show no critical regressions.
 
 ---
 

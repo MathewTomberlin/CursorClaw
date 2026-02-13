@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { MemoryStore } from "../src/memory.js";
 import { PrivacyScrubber } from "../src/privacy/privacy-scrubber.js";
+import { RuntimeObservationStore } from "../src/runtime-observation.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { AlwaysAllowApprovalGate, ToolRouter } from "../src/tools.js";
 import type { AdapterEvent } from "../src/types.js";
@@ -127,5 +128,83 @@ describe("runtime privacy integration", () => {
 
     expect(result.assistantText).not.toContain("assistant-secret-abc123xyz");
     expect(result.assistantText).toContain("SECRET_ASSIGNMENT");
+  });
+
+  it("scrubs secret-bearing observation logs before prompt injection", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cursorclaw-runtime-observation-scrub-"));
+    tempDirs.push(dir);
+
+    const capturedMessages: Array<Array<{ role: string; content: string }>> = [];
+    const fakeAdapter = {
+      createSession: async () => ({
+        id: "fake-session",
+        model: "fallback"
+      }),
+      sendTurn: async function* (
+        _session: { id: string; model: string },
+        messages: Array<{ role: string; content: string }>
+      ): AsyncIterable<AdapterEvent> {
+        capturedMessages.push(messages);
+        yield { type: "assistant_delta", data: { content: "ok" } };
+        yield { type: "done", data: {} };
+      },
+      cancel: async () => undefined,
+      close: async () => undefined
+    } as const;
+
+    const config = loadConfig({
+      defaultModel: "fallback",
+      models: {
+        fallback: {
+          provider: "fallback-model",
+          timeoutMs: 5_000,
+          authProfiles: ["default"],
+          fallbackModels: [],
+          enabled: true
+        }
+      }
+    });
+    const observations = new RuntimeObservationStore({
+      maxEvents: 10
+    });
+    await observations.append({
+      sessionId: "s-observation",
+      source: "logs",
+      kind: "crash",
+      sensitivity: "operational",
+      payload: {
+        detail: "token=observation-secret-987654"
+      }
+    });
+
+    const runtime = new AgentRuntime({
+      config,
+      adapter: fakeAdapter as unknown as import("../src/model-adapter.js").CursorAgentModelAdapter,
+      toolRouter: new ToolRouter({
+        approvalGate: new AlwaysAllowApprovalGate(),
+        allowedExecBins: ["echo"]
+      }),
+      memory: new MemoryStore({ workspaceDir: dir }),
+      observationStore: observations,
+      privacyScrubber: new PrivacyScrubber({
+        enabled: true,
+        failClosedOnError: true
+      }),
+      snapshotDir: join(dir, "snapshots")
+    });
+
+    await runtime.runTurn({
+      session: {
+        sessionId: "s-observation",
+        channelId: "dm:s-observation",
+        channelKind: "dm"
+      },
+      messages: [{ role: "user", content: "use observation context" }]
+    });
+
+    const system = capturedMessages[0]?.find((message) => message.role === "system")?.content ?? "";
+    expect(system).toContain("Recent runtime observations");
+    expect(system).not.toContain("observation-secret-987654");
+    expect(system).toContain("SECRET_ASSIGNMENT");
   });
 });

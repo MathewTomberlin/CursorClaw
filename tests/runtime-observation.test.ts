@@ -61,4 +61,42 @@ describe("runtime observation store", () => {
     expect(JSON.stringify(recent[0]?.payload)).toContain("second");
     expect(JSON.stringify(recent[1]?.payload)).toContain("third");
   });
+
+  it("truncates oversized observation payloads", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cursorclaw-observations-size-"));
+    tempDirs.push(dir);
+    const store = new RuntimeObservationStore({
+      maxEvents: 10,
+      stateFile: join(dir, "observations.json")
+    });
+    const oversized = "x".repeat(50_000);
+    const saved = await store.append({
+      sessionId: "s1",
+      source: "runtime",
+      kind: "oversized",
+      sensitivity: "operational",
+      payload: oversized
+    });
+    expect(typeof saved.payload).toBe("string");
+    expect(String(saved.payload).length).toBeLessThan(21_000);
+  });
+
+  it("sanitizes malformed/unserializable payloads", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cursorclaw-observations-malformed-"));
+    tempDirs.push(dir);
+    const store = new RuntimeObservationStore({
+      maxEvents: 10,
+      stateFile: join(dir, "observations.json")
+    });
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    const saved = await store.append({
+      sessionId: "s1",
+      source: "runtime",
+      kind: "malformed",
+      sensitivity: "operational",
+      payload: circular
+    });
+    expect(saved.payload).toBe("[unserializable observation payload]");
+  });
 });

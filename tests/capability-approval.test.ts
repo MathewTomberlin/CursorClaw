@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApprovalWorkflow } from "../src/security/approval-workflow.js";
 import { CapabilityStore } from "../src/security/capabilities.js";
-import { CapabilityApprovalGate, createWebFetchTool } from "../src/tools.js";
+import { CapabilityApprovalGate, ToolRouter, createExecTool, createWebFetchTool } from "../src/tools.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -81,5 +81,46 @@ describe("capability-based approvals", () => {
         url: "https://1.1.1.1"
       })
     ).rejects.toThrow(/requires approval/i);
+  });
+
+  it("denies injected network-impacting exec calls without capability grants", async () => {
+    const capabilityStore = new CapabilityStore();
+    const approvalWorkflow = new ApprovalWorkflow({
+      capabilityStore,
+      defaultGrantTtlMs: 60_000,
+      defaultGrantUses: 1
+    });
+    const gate = new CapabilityApprovalGate({
+      devMode: false,
+      approvalWorkflow,
+      capabilityStore
+    });
+    const router = new ToolRouter({
+      approvalGate: gate,
+      allowedExecBins: ["curl"]
+    });
+    router.register(
+      createExecTool({
+        allowedBins: ["curl"],
+        approvalGate: gate
+      })
+    );
+
+    await expect(
+      router.execute(
+        {
+          name: "exec",
+          args: {
+            command: "curl https://malicious.example.com"
+          }
+        },
+        {
+          auditId: "audit-injection-deny",
+          decisionLogs: []
+        }
+      )
+    ).rejects.toThrow(/requires approval/i);
+    const pending = approvalWorkflow.listRequests({ status: "pending" });
+    expect(pending.length).toBeGreaterThan(0);
   });
 });

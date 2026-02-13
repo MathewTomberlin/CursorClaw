@@ -243,8 +243,6 @@ async function main(): Promise<void> {
   channelHub.register(new SlackChannelAdapter(slackConfig));
   channelHub.register(new LocalEchoChannelAdapter());
   const suggestionEngine = new ProactiveSuggestionEngine();
-  const lastSuggestionByChannel = new Map<string, number>();
-  const suggestionCooldownMs = 60_000;
   let orchestratorRef: AutonomyOrchestrator | null = null;
   const gateway = buildGateway({
     config,
@@ -260,10 +258,8 @@ async function main(): Promise<void> {
     approvalWorkflow,
     capabilityStore,
     onFileChangeSuggestions: async ({ channelId, files, enqueue }) => {
-      const now = Date.now();
-      const lastSentAt = lastSuggestionByChannel.get(channelId) ?? 0;
-      const canSuggest = now - lastSentAt >= suggestionCooldownMs;
-      const suggestions = canSuggest ? suggestionEngine.suggest({ files }) : [];
+      const suggestionResult = suggestionEngine.suggestForChannel(channelId, { files });
+      const suggestions = suggestionResult.suggestions;
       let queued = 0;
       if (enqueue && orchestratorRef && suggestions.length > 0 && !incidentCommander.isProactiveSendsDisabled()) {
         for (const suggestion of suggestions) {
@@ -273,7 +269,6 @@ async function main(): Promise<void> {
           });
           queued += 1;
         }
-        lastSuggestionByChannel.set(channelId, now);
       }
       await decisionJournal.append({
         type: "file-change-suggestions",
@@ -281,7 +276,8 @@ async function main(): Promise<void> {
         metadata: {
           channelId,
           files,
-          queued
+          queued,
+          throttled: suggestionResult.throttled
         }
       });
       return {

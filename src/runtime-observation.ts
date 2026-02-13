@@ -33,7 +33,8 @@ export class RuntimeObservationStore {
     const materialized: ObservationEvent = {
       id: randomUUID(),
       at: new Date().toISOString(),
-      ...event
+      ...event,
+      payload: sanitizeObservationPayload(event.payload)
     };
     this.events.push(materialized);
     if (this.events.length > this.options.maxEvents) {
@@ -95,5 +96,26 @@ export class RuntimeObservationStore {
       await writeFile(this.options.stateFile as string, JSON.stringify(this.events, null, 2), "utf8");
     });
     await this.writeChain;
+  }
+}
+
+function sanitizeObservationPayload(payload: unknown): unknown {
+  if (typeof payload === "string") {
+    if (payload.length > 20_000) {
+      return `${payload.slice(0, 20_000)}…`;
+    }
+    return payload;
+  }
+  try {
+    const serialized = JSON.stringify(payload);
+    if (serialized === undefined) {
+      return payload;
+    }
+    if (serialized.length <= 20_000) {
+      return payload;
+    }
+    return `${serialized.slice(0, 20_000)}…`;
+  } catch {
+    return "[unserializable observation payload]";
   }
 }

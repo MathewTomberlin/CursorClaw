@@ -36,6 +36,15 @@ describe("reliability and continuity components", () => {
     expect(guard.requiresStepBack("s1")).toBe(false);
   });
 
+  it("does not escalate when failure signatures differ", () => {
+    const guard = new FailureLoopGuard({
+      escalationThreshold: 2
+    });
+    guard.recordFailure("s1", new Error("network timeout"));
+    guard.recordFailure("s1", new Error("schema validation failed"));
+    expect(guard.requiresStepBack("s1")).toBe(false);
+  });
+
   it("writes and reads decision journal entries", async () => {
     const dir = await mkdtemp(join(tmpdir(), "cursorclaw-journal-"));
     tempDirs.push(dir);
@@ -67,6 +76,35 @@ describe("reliability and continuity components", () => {
     expect(suggestions.some((item) => /auth/i.test(item))).toBe(true);
   });
 
+  it("throttles repeated proactive suggestions per channel", () => {
+    const engine = new ProactiveSuggestionEngine(60_000);
+    const first = engine.suggestForChannel(
+      "dm:u1",
+      {
+        files: ["src/auth/session.ts"]
+      },
+      100_000
+    );
+    const second = engine.suggestForChannel(
+      "dm:u1",
+      {
+        files: ["src/auth/session.ts"]
+      },
+      100_500
+    );
+    const third = engine.suggestForChannel(
+      "dm:u1",
+      {
+        files: ["src/auth/session.ts"]
+      },
+      161_000
+    );
+    expect(first.suggestions.length).toBeGreaterThan(0);
+    expect(second.throttled).toBe(true);
+    expect(second.suggestions.length).toBe(0);
+    expect(third.throttled).toBe(false);
+  });
+
   it("creates git checkpoints, rolls back on demand, and skips dirty worktree checkpoints", async () => {
     const dir = await mkdtemp(join(tmpdir(), "cursorclaw-checkpoint-"));
     tempDirs.push(dir);
@@ -94,9 +132,31 @@ describe("reliability and continuity components", () => {
     await manager.rollback(checkpoint);
     const contentAfterRollback = await readFile(filePath, "utf8");
     expect(contentAfterRollback).toBe("original\n");
+    await manager.cleanup(checkpoint);
+    await expect(execFileAsync("git", ["rev-parse", "--verify", checkpoint.refName], { cwd: dir })).rejects.toThrow();
 
     await writeFile(filePath, "dirty\n", "utf8");
     const skipped = await manager.createCheckpoint("run-2");
     expect(skipped).toBeNull();
+  });
+
+  it("reports reliability check failures for checkpoint validation", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cursorclaw-checkpoint-verify-"));
+    tempDirs.push(dir);
+    await execFileAsync("git", ["init"], { cwd: dir });
+    await execFileAsync("git", ["config", "user.email", "ci@example.com"], { cwd: dir });
+    await execFileAsync("git", ["config", "user.name", "CI Bot"], { cwd: dir });
+    await writeFile(join(dir, "demo.txt"), "ok\n", "utf8");
+    await execFileAsync("git", ["add", "."], { cwd: dir });
+    await execFileAsync("git", ["commit", "-m", "init"], { cwd: dir });
+
+    const manager = new GitCheckpointManager({
+      workspaceDir: dir,
+      reliabilityCheckCommands: ["exit 1"],
+      commandTimeoutMs: 10_000
+    });
+    const result = await manager.verifyReliabilityChecks();
+    expect(result.ok).toBe(false);
+    expect(result.failedCommand).toBe("exit 1");
   });
 });
