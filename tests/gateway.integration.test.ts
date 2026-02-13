@@ -12,6 +12,8 @@ import { CursorAgentModelAdapter } from "../src/model-adapter.js";
 import { RunStore } from "../src/run-store.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { CronService } from "../src/scheduler.js";
+import { ApprovalWorkflow } from "../src/security/approval-workflow.js";
+import { CapabilityStore } from "../src/security/capabilities.js";
 import { AuthService, IncidentCommander, MethodRateLimiter, PolicyDecisionLogger } from "../src/security.js";
 import { AlwaysAllowApprovalGate, ToolRouter, createExecTool } from "../src/tools.js";
 
@@ -26,7 +28,16 @@ afterEach(async () => {
   }
 });
 
-async function createGateway(options: { channelHub?: ChannelHub } = {}) {
+async function createGateway(options: {
+  channelHub?: ChannelHub;
+  approvalWorkflow?: ApprovalWorkflow;
+  capabilityStore?: CapabilityStore;
+  onFileChangeSuggestions?: (args: {
+    channelId: string;
+    files: string[];
+    enqueue: boolean;
+  }) => Promise<{ suggestions: string[]; queued: number }>;
+} = {}) {
   const dir = await mkdtemp(join(tmpdir(), "cursorclaw-gw-"));
   cleanupPaths.push(dir);
   const config = loadConfig({
@@ -88,6 +99,9 @@ async function createGateway(options: { channelHub?: ChannelHub } = {}) {
     runtime,
     cronService,
     ...(options.channelHub ? { channelHub: options.channelHub } : {}),
+    ...(options.approvalWorkflow ? { approvalWorkflow: options.approvalWorkflow } : {}),
+    ...(options.capabilityStore ? { capabilityStore: options.capabilityStore } : {}),
+    ...(options.onFileChangeSuggestions ? { onFileChangeSuggestions: options.onFileChangeSuggestions } : {}),
     auth,
     rateLimiter,
     policyLogs,
@@ -688,6 +702,107 @@ describe("gateway integration", () => {
     expect(wait.statusCode).toBe(500);
     expect(wait.json().error.code).toBe("INTERNAL");
     expect(runtime.getDecisionLogs().some((entry) => entry.reasonCode === "TOOL_POLICY_BLOCKED")).toBe(true);
+    await app.close();
+  });
+
+  it("lists and resolves approval requests through RPC endpoints", async () => {
+    const capabilityStore = new CapabilityStore();
+    const approvalWorkflow = new ApprovalWorkflow({
+      capabilityStore,
+      defaultGrantTtlMs: 60_000,
+      defaultGrantUses: 1
+    });
+    const request = approvalWorkflow.request({
+      tool: "web_fetch",
+      intent: "network-impacting",
+      plan: "network fetch",
+      args: { url: "https://example.com" }
+    });
+    const app = await createGateway({
+      approvalWorkflow,
+      capabilityStore
+    });
+
+    const listRes = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: {
+        authorization: "Bearer test-token"
+      },
+      payload: {
+        version: "2.0",
+        method: "approval.list",
+        params: {
+          status: "pending"
+        }
+      }
+    });
+    expect(listRes.statusCode).toBe(200);
+    expect(listRes.json().result.requests[0].id).toBe(request.id);
+
+    const resolveRes = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: {
+        authorization: "Bearer test-token"
+      },
+      payload: {
+        version: "2.0",
+        method: "approval.resolve",
+        params: {
+          requestId: request.id,
+          decision: "approve",
+          grantUses: 1
+        }
+      }
+    });
+    expect(resolveRes.statusCode).toBe(200);
+    expect(resolveRes.json().result.request.status).toBe("approved");
+
+    const grantsRes = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: {
+        authorization: "Bearer test-token"
+      },
+      payload: {
+        version: "2.0",
+        method: "approval.capabilities",
+        params: {}
+      }
+    });
+    expect(grantsRes.statusCode).toBe(200);
+    expect(grantsRes.json().result.grants.length).toBeGreaterThan(0);
+    await app.close();
+  });
+
+  it("returns proactive suggestions for file change RPC", async () => {
+    const app = await createGateway({
+      onFileChangeSuggestions: async ({ channelId, files, enqueue }) => ({
+        suggestions: [`suggestion for ${channelId}`, ...files.map((file) => `check ${file}`)],
+        queued: enqueue ? files.length : 0
+      })
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: {
+        authorization: "Bearer test-token"
+      },
+      payload: {
+        version: "2.0",
+        method: "advisor.file_change",
+        params: {
+          channelId: "dm:u1",
+          files: ["src/auth.ts", "docs/api.md"],
+          enqueue: true
+        }
+      }
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().result.suggestions.length).toBeGreaterThanOrEqual(2);
+    expect(response.json().result.queued).toBe(2);
     await app.close();
   });
 });

@@ -6,6 +6,8 @@ import type { BehaviorPolicyEngine } from "./responsiveness.js";
 import type { RunStore } from "./run-store.js";
 import type { AgentRuntime, TurnResult } from "./runtime.js";
 import type { CronService } from "./scheduler.js";
+import type { ApprovalWorkflow } from "./security/approval-workflow.js";
+import type { CapabilityStore } from "./security/capabilities.js";
 import {
   AuthService,
   IncidentCommander,
@@ -43,6 +45,16 @@ export interface GatewayDependencies {
   policyLogs: PolicyDecisionLogger;
   incidentCommander: IncidentCommander;
   behavior?: BehaviorPolicyEngine;
+  approvalWorkflow?: ApprovalWorkflow;
+  capabilityStore?: CapabilityStore;
+  onFileChangeSuggestions?: (args: {
+    channelId: string;
+    files: string[];
+    enqueue: boolean;
+  }) => Promise<{
+    suggestions: string[];
+    queued: number;
+  }>;
 }
 
 const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
@@ -50,7 +62,11 @@ const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
   "agent.wait": ["local", "remote", "admin"],
   "chat.send": ["local", "remote", "admin"],
   "cron.add": ["admin", "local"],
-  "incident.bundle": ["admin"]
+  "incident.bundle": ["admin"],
+  "approval.list": ["admin", "local"],
+  "approval.resolve": ["admin", "local"],
+  "approval.capabilities": ["admin", "local"],
+  "advisor.file_change": ["local", "remote", "admin"]
 };
 
 export function buildGateway(deps: GatewayDependencies): FastifyInstance {
@@ -75,6 +91,10 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
       runtimeMetrics: deps.runtime.getMetrics(),
       schedulerBacklog: deps.cronService.listJobs().length,
       policyDecisions: deps.policyLogs.getAll().length,
+      approvals: {
+        pending: deps.approvalWorkflow?.listRequests({ status: "pending" }).length ?? 0,
+        activeCapabilities: deps.capabilityStore?.listActive().length ?? 0
+      },
       incident: {
         proactiveSendsDisabled: deps.incidentCommander.isProactiveSendsDisabled(),
         toolIsolationEnabled: deps.incidentCommander.isToolIsolationEnabled()
@@ -295,6 +315,61 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         deps.incidentCommander.disableProactiveSends();
         deps.incidentCommander.isolateToolHosts();
         result = deps.incidentCommander.exportForensicLog(deps.policyLogs);
+      } else if (body.method === "approval.list") {
+        if (!deps.approvalWorkflow) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "approval workflow not configured");
+        }
+        const status = body.params?.status;
+        if (status !== undefined && !["pending", "approved", "denied", "expired"].includes(String(status))) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "invalid approval status filter");
+        }
+        result = {
+          requests: deps.approvalWorkflow.listRequests(
+            status !== undefined ? { status: String(status) as "pending" | "approved" | "denied" | "expired" } : undefined
+          )
+        };
+      } else if (body.method === "approval.resolve") {
+        if (!deps.approvalWorkflow) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "approval workflow not configured");
+        }
+        const requestId = String(body.params?.requestId ?? "");
+        if (!requestId) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "approval requestId is required");
+        }
+        const decision = String(body.params?.decision ?? "");
+        if (!["approve", "deny"].includes(decision)) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", 'approval decision must be "approve" or "deny"');
+        }
+        const grantTtlMs = parseOptionalPositiveInteger(body.params?.grantTtlMs, "grantTtlMs");
+        const grantUses = parseOptionalPositiveInteger(body.params?.grantUses, "grantUses");
+        result = {
+          request: deps.approvalWorkflow.resolve({
+            requestId,
+            decision: decision as "approve" | "deny",
+            reason: body.params?.reason !== undefined ? String(body.params.reason) : undefined,
+            ...(grantTtlMs !== undefined ? { grantTtlMs } : {}),
+            ...(grantUses !== undefined ? { grantUses } : {})
+          })
+        };
+      } else if (body.method === "approval.capabilities") {
+        if (!deps.capabilityStore) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "capability store not configured");
+        }
+        result = {
+          grants: deps.capabilityStore.listActive()
+        };
+      } else if (body.method === "advisor.file_change") {
+        if (!deps.onFileChangeSuggestions) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "proactive suggestion engine not configured");
+        }
+        const channelId = String(body.params?.channelId ?? "system");
+        const files = parseStringArray(body.params?.files, "files");
+        const enqueue = Boolean(body.params?.enqueue ?? true);
+        result = await deps.onFileChangeSuggestions({
+          channelId,
+          files,
+          enqueue
+        });
       } else {
         throw new RpcGatewayError(400, "BAD_REQUEST", `unknown method: ${body.method}`);
       }
@@ -372,6 +447,24 @@ function parseIncidentTokens(value: unknown): string[] {
     throw new RpcGatewayError(400, "BAD_REQUEST", "incident tokens must be array");
   }
   return value.map((token) => String(token));
+}
+
+function parseOptionalPositiveInteger(value: unknown, fieldName: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new RpcGatewayError(400, "BAD_REQUEST", `${fieldName} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function parseStringArray(value: unknown, fieldName: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new RpcGatewayError(400, "BAD_REQUEST", `${fieldName} must be array`);
+  }
+  return value.map((entry) => String(entry));
 }
 
 function errorResponse(id: string | undefined, auditId: string, code: string, message: string): RpcResponse {
