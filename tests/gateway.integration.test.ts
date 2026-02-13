@@ -165,6 +165,21 @@ describe("gateway integration", () => {
     expect(waitRes.statusCode).toBe(200);
     const events: Array<{ type: string }> = waitRes.json().result.events;
     expect(events.some((event) => event.type === "completed")).toBe(true);
+
+    const secondWaitRes = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: {
+        authorization: "Bearer test-token"
+      },
+      payload: {
+        version: "2.0",
+        method: "agent.wait",
+        params: { runId }
+      }
+    });
+    expect(secondWaitRes.statusCode).toBe(500);
+    expect(secondWaitRes.json().error.message).toContain(`runId not found: ${runId}`);
     await app.close();
   });
 

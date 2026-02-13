@@ -158,13 +158,19 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         if (!pending) {
           throw new Error(`runId not found: ${runId}`);
         }
-        if (pending.result) {
+        if (pending.result !== undefined) {
+          pendingRuns.delete(runId);
           result = pending.result;
-        } else if (pending.error) {
+        } else if (pending.error !== undefined) {
+          pendingRuns.delete(runId);
           throw new Error(pending.error);
         } else {
-          const resolved = await pending.promise;
-          result = resolved;
+          try {
+            const resolved = await pending.promise;
+            result = resolved;
+          } finally {
+            pendingRuns.delete(runId);
+          }
         }
       } else if (body.method === "cron.add") {
         const type = String(body.params?.type ?? "every") as "at" | "every" | "cron";
