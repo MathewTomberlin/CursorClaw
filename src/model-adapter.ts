@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
-import { Ajv } from "ajv";
+import { Ajv, type ValidateFunction } from "ajv";
 
 import { redactSecrets } from "./security.js";
 import type {
@@ -40,11 +40,26 @@ export class CursorAgentModelAdapter implements ModelAdapter {
   private readonly processes = new Map<string, ChildProcessWithoutNullStreams>();
   private readonly eventLogs: string[] = [];
   private readonly ajv = new Ajv({ strict: false, allErrors: true });
+  private readonly validatorCache = new Map<string, ValidateFunction<unknown>>();
+  private readonly maxLogEntries = 5_000;
+  private readonly metrics = {
+    timeoutCount: 0,
+    crashCount: 0,
+    fallbackAttemptCount: 0
+  };
 
   constructor(private readonly config: CursorAgentAdapterConfig) {}
 
   getRedactedLogs(): string[] {
     return [...this.eventLogs];
+  }
+
+  getMetrics(): {
+    timeoutCount: number;
+    crashCount: number;
+    fallbackAttemptCount: number;
+  } {
+    return { ...this.metrics };
   }
 
   async createSession(_context: SessionContext): Promise<ModelSessionHandle> {
@@ -84,7 +99,8 @@ export class CursorAgentModelAdapter implements ModelAdapter {
           return;
         } catch (error) {
           lastError = error;
-          this.eventLogs.push(redactSecrets(`adapter-fail model=${modelName} profile=${profile} err=${String(error)}`));
+          this.metrics.fallbackAttemptCount += 1;
+          this.pushEventLog(redactSecrets(`adapter-fail model=${modelName} profile=${profile} err=${String(error)}`));
           if (!isRecoverableAdapterError(error)) {
             throw error;
           }
@@ -169,6 +185,7 @@ export class CursorAgentModelAdapter implements ModelAdapter {
       }
       timeoutHandle = setTimeout(() => {
         timedOut = true;
+        this.metrics.timeoutCount += 1;
         this.stageTerminate(child, options.turnId);
       }, timeoutMs);
     };
@@ -227,6 +244,7 @@ export class CursorAgentModelAdapter implements ModelAdapter {
       throw new Error("adapter timeout");
     }
     if (code !== 0 && !sawDone) {
+      this.metrics.crashCount += 1;
       throw new Error(`adapter transport failure (${code}): ${stderrChunks.join(" | ")}`);
     }
     if (!sawDone) {
@@ -254,7 +272,7 @@ export class CursorAgentModelAdapter implements ModelAdapter {
     if (candidate.type === "tool_call") {
       this.validateToolCall(candidate.data, tools);
     }
-    this.eventLogs.push(redactSecrets(JSON.stringify(candidate)));
+    this.pushEventLog(redactSecrets(JSON.stringify(candidate)));
     return {
       type: candidate.type as AdapterEvent["type"],
       data: candidate.data
@@ -270,10 +288,28 @@ export class CursorAgentModelAdapter implements ModelAdapter {
     if (!tool) {
       throw new Error(`unknown tool call: ${payload.name}`);
     }
-    const validate = this.ajv.compile(tool.schema);
+    const validate = this.getValidator(tool);
     if (!validate(payload.args)) {
       throw new Error(`tool call schema invalid: ${payload.name}`);
     }
+  }
+
+  private getValidator(tool: ToolDefinition): ValidateFunction<unknown> {
+    const key = `${tool.name}:${JSON.stringify(tool.schema)}`;
+    const cached = this.validatorCache.get(key);
+    if (cached) {
+      return cached;
+    }
+    const compiled = this.ajv.compile(tool.schema);
+    this.validatorCache.set(key, compiled);
+    return compiled;
+  }
+
+  private pushEventLog(entry: string): void {
+    if (this.eventLogs.length >= this.maxLogEntries) {
+      this.eventLogs.shift();
+    }
+    this.eventLogs.push(entry);
   }
 
   private stageTerminate(child: ChildProcessWithoutNullStreams, turnId: string): void {

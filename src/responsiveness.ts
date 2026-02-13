@@ -76,11 +76,52 @@ export class GreetingPolicy {
     if (!isNewThread) {
       return false;
     }
-    const last = this.lastGreetingByThread.get(threadId) ?? 0;
-    if (now - last < this.cooldownMs) {
+    const last = this.lastGreetingByThread.get(threadId);
+    if (last !== undefined && now - last < this.cooldownMs) {
       return false;
     }
     this.lastGreetingByThread.set(threadId, now);
     return true;
+  }
+}
+
+export interface BehaviorPolicyEngineOptions {
+  typingPolicy: TypingPolicy;
+  presenceManager: PresenceManager;
+  deliveryPacer: DeliveryPacer;
+  greetingPolicy: GreetingPolicy;
+}
+
+export interface SendPlanInput {
+  channelId: string;
+  threadId: string;
+  isNewThread: boolean;
+  isComplex: boolean;
+  hasToolCalls: boolean;
+  urgent?: boolean;
+}
+
+export interface SendPlan {
+  allowSend: boolean;
+  typingEvents: string[];
+  shouldGreet: boolean;
+}
+
+export class BehaviorPolicyEngine {
+  constructor(private readonly options: BehaviorPolicyEngineOptions) {}
+
+  planSend(input: SendPlanInput, now = Date.now()): SendPlan {
+    this.options.presenceManager.set(input.channelId, "online", now);
+    const allowSend = this.options.deliveryPacer.shouldSend(input.channelId, now, input.urgent ?? false);
+    const typingEvents = this.options.typingPolicy.eventsForTurn({
+      isComplex: input.isComplex,
+      hasToolCalls: input.hasToolCalls
+    });
+    const shouldGreet = this.options.greetingPolicy.shouldGreet(input.threadId, input.isNewThread, now);
+    return {
+      allowSend,
+      typingEvents,
+      shouldGreet
+    };
   }
 }

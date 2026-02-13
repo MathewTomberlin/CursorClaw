@@ -151,6 +151,7 @@ describe("CursorAgentModelAdapter", () => {
     }
     expect(outputs).toContain("assistant_delta");
     expect(outputs[outputs.length - 1]).toBe("done");
+    expect(adapter.getMetrics().fallbackAttemptCount).toBeGreaterThanOrEqual(1);
   });
 
   it("rejects unknown tool call names", async () => {
@@ -278,5 +279,29 @@ describe("CursorAgentModelAdapter", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("bounds adapter redacted logs to avoid unbounded memory growth", async () => {
+    const adapter = new CursorAgentModelAdapter({
+      defaultModel: "fallback-model-a",
+      models: {
+        "fallback-model-a": {
+          provider: "fallback-model",
+          timeoutMs: 5_000,
+          authProfiles: ["default"],
+          fallbackModels: [],
+          enabled: true
+        }
+      }
+    });
+    const internal = adapter as unknown as {
+      pushEventLog: (entry: string) => void;
+    };
+    for (let idx = 0; idx < 6_000; idx += 1) {
+      internal.pushEventLog(`entry-${idx}`);
+    }
+    const logs = adapter.getRedactedLogs();
+    expect(logs.length).toBe(5_000);
+    expect(logs[0]).toBe("entry-1000");
   });
 });

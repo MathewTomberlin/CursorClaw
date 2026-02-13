@@ -93,6 +93,21 @@ async function createGateway() {
 }
 
 describe("gateway integration", () => {
+  it("exposes runtime metrics and incident flags on status endpoint", async () => {
+    const app = await createGateway();
+    const status = await app.inject({
+      method: "GET",
+      url: "/status"
+    });
+    expect(status.statusCode).toBe(200);
+    expect(status.json().runtimeMetrics).toBeDefined();
+    expect(status.json().incident).toMatchObject({
+      proactiveSendsDisabled: false,
+      toolIsolationEnabled: false
+    });
+    await app.close();
+  });
+
   it("rejects unsupported protocol versions", async () => {
     const app = await createGateway();
     const res = await app.inject({
@@ -180,7 +195,7 @@ describe("gateway integration", () => {
         params: { runId }
       }
     });
-    expect(secondWaitRes.statusCode).toBe(500);
+    expect(secondWaitRes.statusCode).toBe(404);
     expect(secondWaitRes.json().error.message).toContain(`runId not found: ${runId}`);
     await app.close();
   });
@@ -229,6 +244,240 @@ describe("gateway integration", () => {
     expect(res.json().result.proactiveDisabled).toBe(true);
     expect(res.json().result.isolatedTools).toBe(true);
     expect(res.json().result.revokedTokenHashes).toHaveLength(2);
+    await app.close();
+  });
+
+  it("enforces incident mode by blocking proactive chat sends", async () => {
+    const app = await createGateway();
+    const incident = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: {
+        authorization: "Bearer test-token"
+      },
+      payload: {
+        version: "2.0",
+        method: "incident.bundle",
+        params: {
+          tokens: []
+        }
+      }
+    });
+    expect(incident.statusCode).toBe(200);
+
+    const sendRes = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: {
+        authorization: "Bearer test-token"
+      },
+      payload: {
+        version: "2.0",
+        method: "chat.send",
+        params: {
+          channelId: "c1",
+          text: "hello proactive",
+          proactive: true
+        }
+      }
+    });
+    expect(sendRes.statusCode).toBe(403);
+    expect(sendRes.json().error.code).toBe("FORBIDDEN");
+    await app.close();
+  });
+
+  it("sanitizes internal errors on server faults", async () => {
+    const app = await createGateway();
+    const res = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: {
+        authorization: "Bearer test-token"
+      },
+      payload: {
+        version: "2.0",
+        method: "cron.add",
+        params: {
+          type: "every",
+          expression: "not-a-duration",
+          isolated: true
+        }
+      }
+    });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error.code).toBe("INTERNAL");
+    expect(res.json().error.message).toBe("Internal server error");
+    expect(res.json().error.message).not.toContain("invalid duration");
+    await app.close();
+  });
+
+  it("rejects oversized RPC payloads", async () => {
+    const app = await createGateway();
+    const oversized = "x".repeat(80_000);
+    const res = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: {
+        authorization: "Bearer test-token"
+      },
+      payload: {
+        version: "2.0",
+        method: "chat.send",
+        params: {
+          channelId: "c1",
+          text: oversized
+        }
+      }
+    });
+    expect(res.statusCode).toBe(413);
+    await app.close();
+  });
+
+  it("rejects too-long per-message content in agent turns", async () => {
+    const app = await createGateway();
+    const res = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: {
+        authorization: "Bearer test-token"
+      },
+      payload: {
+        version: "2.0",
+        method: "agent.run",
+        params: {
+          session: {
+            sessionId: "s-big",
+            channelId: "dm:s-big",
+            channelKind: "dm"
+          },
+          messages: [{ role: "user", content: "y".repeat(20_000) }]
+        }
+      }
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe("BAD_REQUEST");
+    expect(String(res.json().error.message)).toContain("message too long");
+    await app.close();
+  });
+
+  it("blocks high-risk tool execution after incident.bundle", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cursorclaw-gw-incident-tool-"));
+    cleanupPaths.push(dir);
+    const script = [
+      "process.stdout.write(JSON.stringify({type:'tool_call',data:{name:'exec',args:{command:'echo hello'}}})+'\\n');",
+      "process.stdout.write(JSON.stringify({type:'done',data:{}})+'\\n');"
+    ].join("");
+    const config = loadConfig({
+      gateway: {
+        auth: { mode: "token", token: "test-token" },
+        protocolVersion: "2.0",
+        bind: "loopback",
+        trustedProxyIps: []
+      },
+      defaultModel: "cursor-auto",
+      models: {
+        "cursor-auto": {
+          provider: "cursor-agent-cli",
+          command: process.execPath,
+          args: ["-e", script],
+          timeoutMs: 10_000,
+          authProfiles: ["default"],
+          fallbackModels: [],
+          enabled: true
+        }
+      }
+    });
+    const memory = new MemoryStore({ workspaceDir: dir });
+    const adapter = new CursorAgentModelAdapter({
+      defaultModel: "cursor-auto",
+      models: config.models
+    });
+    const incidentCommander = new IncidentCommander();
+    const gate = new AlwaysAllowApprovalGate();
+    const toolRouter = new ToolRouter({
+      approvalGate: gate,
+      allowedExecBins: ["echo"],
+      isToolIsolationEnabled: () => incidentCommander.isToolIsolationEnabled()
+    });
+    toolRouter.register(createExecTool({ allowedBins: ["echo"], approvalGate: gate }));
+    const runtime = new AgentRuntime({
+      config,
+      adapter,
+      toolRouter,
+      memory,
+      snapshotDir: join(dir, "snapshots")
+    });
+    const cronService = new CronService({
+      maxConcurrentRuns: 1,
+      stateFile: join(dir, "cron-state.json")
+    });
+    const app = buildGateway({
+      config,
+      runtime,
+      cronService,
+      auth: new AuthService({
+        mode: "token",
+        token: "test-token",
+        trustedProxyIps: []
+      }),
+      rateLimiter: new MethodRateLimiter(10, 60_000),
+      policyLogs: new PolicyDecisionLogger(),
+      incidentCommander
+    });
+
+    const incident = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: {
+        authorization: "Bearer test-token"
+      },
+      payload: {
+        version: "2.0",
+        method: "incident.bundle",
+        params: {}
+      }
+    });
+    expect(incident.statusCode).toBe(200);
+
+    const run = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: {
+        authorization: "Bearer test-token"
+      },
+      payload: {
+        version: "2.0",
+        method: "agent.run",
+        params: {
+          session: {
+            sessionId: "s-incident",
+            channelId: "dm:s-incident",
+            channelKind: "dm"
+          },
+          messages: [{ role: "user", content: "trigger tool" }]
+        }
+      }
+    });
+    expect(run.statusCode).toBe(200);
+    const runId = run.json().result.runId as string;
+
+    const wait = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: {
+        authorization: "Bearer test-token"
+      },
+      payload: {
+        version: "2.0",
+        method: "agent.wait",
+        params: {
+          runId
+        }
+      }
+    });
+    expect(wait.statusCode).toBe(500);
+    expect(wait.json().error.code).toBe("INTERNAL");
+    expect(runtime.getDecisionLogs().some((entry) => entry.reasonCode === "TOOL_POLICY_BLOCKED")).toBe(true);
     await app.close();
   });
 });

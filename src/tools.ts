@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import { Ajv } from "ajv";
+import { Ajv, type ValidateFunction } from "ajv";
 
-import { enforceSafeFetchUrl, wrapUntrustedContent } from "./security.js";
+import { resolveSafeFetchTarget, wrapUntrustedContent } from "./security.js";
 import type {
   DecisionReasonCode,
   PolicyDecisionLog,
@@ -13,7 +13,10 @@ import type {
 
 const execFileAsync = promisify(execFile);
 const WEB_FETCH_MAX_REDIRECTS = 5;
+const WEB_FETCH_MAX_BODY_BYTES = 20_000;
 const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
+const ALLOWED_CONTENT_TYPE_PATTERN =
+  /^(text\/|application\/(json|xml|xhtml\+xml|javascript|ld\+json|rss\+xml))/i;
 
 export type ExecIntent = "read-only" | "mutating" | "network-impacting" | "privilege-impacting";
 
@@ -50,6 +53,12 @@ export interface ApprovalGate {
   }): Promise<boolean>;
 }
 
+export interface PolicyApprovalGateOptions {
+  devMode: boolean;
+  allowHighRiskTools: boolean;
+  allowExecIntents: ExecIntent[];
+}
+
 export class AlwaysDenyApprovalGate implements ApprovalGate {
   async approve(): Promise<boolean> {
     return false;
@@ -62,6 +71,27 @@ export class AlwaysAllowApprovalGate implements ApprovalGate {
   }
 }
 
+export class PolicyApprovalGate implements ApprovalGate {
+  constructor(private readonly options: PolicyApprovalGateOptions) {}
+
+  async approve(args: {
+    tool: string;
+    intent: ExecIntent | "high-risk-tool";
+    plan: string;
+    args: unknown;
+  }): Promise<boolean> {
+    void args.plan;
+    void args.args;
+    if (this.options.devMode) {
+      return true;
+    }
+    if (args.intent === "high-risk-tool") {
+      return this.options.allowHighRiskTools;
+    }
+    return this.options.allowExecIntents.includes(args.intent);
+  }
+}
+
 export interface ToolExecutionContext {
   auditId: string;
   decisionLogs: PolicyDecisionLog[];
@@ -70,11 +100,14 @@ export interface ToolExecutionContext {
 export interface ToolRouterOptions {
   approvalGate: ApprovalGate;
   allowedExecBins: string[];
+  isToolIsolationEnabled?: () => boolean;
 }
 
 export class ToolRouter {
   private readonly tools = new Map<string, ToolDefinition>();
   private readonly ajv = new Ajv({ allErrors: true, strict: false });
+  private readonly validatorCache = new Map<string, ValidateFunction<unknown>>();
+  private readonly decisionCount = new Map<DecisionReasonCode, number>();
 
   constructor(private readonly options: ToolRouterOptions) {}
 
@@ -92,7 +125,11 @@ export class ToolRouter {
       this.logDecision(context, "deny", "TOOL_UNKNOWN", `unknown tool: ${call.name}`);
       throw new Error(`unknown tool: ${call.name}`);
     }
-    const validate = this.ajv.compile(tool.schema);
+    if (this.options.isToolIsolationEnabled?.() && tool.riskLevel === "high") {
+      this.logDecision(context, "deny", "TOOL_POLICY_BLOCKED", "incident tool isolation mode is active");
+      throw new Error("tool execution blocked by incident tool isolation mode");
+    }
+    const validate = this.getValidator(tool);
     if (!validate(call.args)) {
       this.logDecision(context, "deny", "TOOL_SCHEMA_INVALID", JSON.stringify(validate.errors));
       throw new Error(`invalid tool args for ${call.name}`);
@@ -122,12 +159,28 @@ export class ToolRouter {
     }
   }
 
+  getDecisionMetrics(): Record<DecisionReasonCode, number> {
+    return Object.fromEntries(this.decisionCount.entries()) as Record<DecisionReasonCode, number>;
+  }
+
+  private getValidator(tool: ToolDefinition): ValidateFunction<unknown> {
+    const key = `${tool.name}:${JSON.stringify(tool.schema)}`;
+    const cached = this.validatorCache.get(key);
+    if (cached) {
+      return cached;
+    }
+    const validator = this.ajv.compile(tool.schema);
+    this.validatorCache.set(key, validator);
+    return validator;
+  }
+
   private logDecision(
     context: ToolExecutionContext,
     decision: "allow" | "deny",
     reasonCode: DecisionReasonCode,
     detail: string
   ): void {
+    this.decisionCount.set(reasonCode, (this.decisionCount.get(reasonCode) ?? 0) + 1);
     context.decisionLogs.push({
       at: new Date().toISOString(),
       auditId: context.auditId,
@@ -229,7 +282,21 @@ export function createWebFetchTool(): ToolDefinition {
     execute: async (rawArgs: unknown) => {
       const args = rawArgs as WebFetchArgs;
       const signal = AbortSignal.timeout(10_000);
-      let currentUrl = await enforceSafeFetchUrl(args.url);
+      const dnsPins = new Map<string, string>();
+      const pinDnsTarget = (target: { url: URL; resolvedAddresses: string[] }): URL => {
+        const host = target.url.hostname.toLowerCase();
+        const resolvedKey = target.resolvedAddresses
+          .map((address) => address.toLowerCase())
+          .sort()
+          .join(",");
+        const existing = dnsPins.get(host);
+        if (existing && existing !== resolvedKey) {
+          throw new Error(`DNS rebinding detected for host: ${host}`);
+        }
+        dnsPins.set(host, resolvedKey);
+        return target.url;
+      };
+      let currentUrl = pinDnsTarget(await resolveSafeFetchTarget(args.url));
       for (let redirectCount = 0; redirectCount <= WEB_FETCH_MAX_REDIRECTS; redirectCount += 1) {
         const response = await fetch(currentUrl, {
           method: "GET",
@@ -237,10 +304,23 @@ export function createWebFetchTool(): ToolDefinition {
           signal
         });
         if (!REDIRECT_STATUS_CODES.has(response.status)) {
-          const text = await response.text();
+          const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+          if (contentType && !ALLOWED_CONTENT_TYPE_PATTERN.test(contentType)) {
+            throw new Error(`web_fetch content type not allowed: ${contentType}`);
+          }
+          const contentLength = Number.parseInt(response.headers.get("content-length") ?? "0", 10);
+          if (!Number.isNaN(contentLength) && contentLength > WEB_FETCH_MAX_BODY_BYTES) {
+            throw new Error(`web_fetch response exceeds byte limit (${WEB_FETCH_MAX_BODY_BYTES})`);
+          }
+          const bytes = new Uint8Array(await response.arrayBuffer());
+          if (bytes.byteLength > WEB_FETCH_MAX_BODY_BYTES) {
+            throw new Error(`web_fetch response exceeds byte limit (${WEB_FETCH_MAX_BODY_BYTES})`);
+          }
+          const text = new TextDecoder().decode(bytes);
           return {
             status: response.status,
-            body: wrapUntrustedContent(text.slice(0, 20_000))
+            contentType: contentType || "unknown",
+            body: wrapUntrustedContent(text)
           };
         }
         if (redirectCount === WEB_FETCH_MAX_REDIRECTS) {
@@ -256,7 +336,7 @@ export function createWebFetchTool(): ToolDefinition {
         } catch {
           throw new Error("redirect response contained invalid location");
         }
-        currentUrl = await enforceSafeFetchUrl(redirectedUrl);
+        currentUrl = pinDnsTarget(await resolveSafeFetchTarget(redirectedUrl));
       }
       throw new Error("web_fetch did not reach a terminal response");
     }

@@ -169,16 +169,16 @@ Legend:
 
 ### Implementation criteria
 
-- [ ] `main()` reads external config source before boot.
-- [ ] Placeholder tokens are rejected at startup.
-- [ ] Production boot path no longer uses always-allow approvals.
-- [ ] Unit tests cover secure config rejection and dev override path.
+- [x] `main()` reads external config source before boot.
+- [x] Placeholder tokens are rejected at startup.
+- [x] Production boot path no longer uses always-allow approvals.
+- [x] Unit tests cover secure config rejection and dev override path.
 
 ### Guardrails
 
-- [ ] Regression test: insecure default token refuses startup.
-- [ ] Regression test: prod mode denies unapproved high-risk exec.
-- [ ] Regression test: existing unit suites still pass with strict mode on.
+- [x] Regression test: insecure default token refuses startup.
+- [x] Regression test: prod mode denies unapproved high-risk exec.
+- [x] Regression test: existing unit suites still pass with strict mode on.
 
 ---
 
@@ -193,15 +193,15 @@ Legend:
 
 ### Implementation criteria
 
-- [ ] Timing-safe compare is used for auth secrets.
-- [ ] Client-facing 500 messages are generic; detailed errors remain server-side logs only.
-- [ ] Error code mapping is stable and semantically correct.
-- [ ] Payload size limits reject oversized requests predictably.
+- [x] Timing-safe compare is used for auth secrets.
+- [x] Client-facing 500 messages are generic; detailed errors remain server-side logs only.
+- [x] Error code mapping is stable and semantically correct.
+- [x] Payload size limits reject oversized requests predictably.
 
 ### Guardrails
 
-- [ ] Test mirrors OpenClaw #13185 class: no stack/path details in response body.
-- [ ] Negative tests for malformed/oversized RPC envelopes.
+- [x] Test mirrors OpenClaw #13185 class: no stack/path details in response body.
+- [x] Negative tests for malformed/oversized RPC envelopes.
 
 ---
 
@@ -217,14 +217,14 @@ Legend:
 
 ### Implementation criteria
 
-- [ ] Approval decisions are policy-driven and logged with reason codes.
-- [ ] Incident mode materially changes runtime/tool behavior.
-- [ ] `exec` defaults are strict and documented.
+- [x] Approval decisions are policy-driven and logged with reason codes.
+- [x] Incident mode materially changes runtime/tool behavior.
+- [x] `exec` defaults are strict and documented.
 
 ### Guardrails
 
-- [ ] Test: `incident.bundle` followed by high-risk tool call is denied.
-- [ ] Test: approval-required path cannot be bypassed by default.
+- [x] Test: `incident.bundle` followed by high-risk tool call is denied.
+- [x] Test: approval-required path cannot be bypassed by default.
 
 ---
 
@@ -239,14 +239,14 @@ Legend:
 
 ### Implementation criteria
 
-- [ ] Private/local/meta addresses blocked for direct and indirect hostnames.
-- [ ] Redirect chain validation enforces same policy on each hop.
-- [ ] Unit/integration tests include rebinding-style and mapped-address cases.
+- [x] Private/local/meta addresses blocked for direct and indirect hostnames.
+- [x] Redirect chain validation enforces same policy on each hop.
+- [x] Unit/integration tests include rebinding-style and mapped-address cases.
 
 ### Guardrails
 
-- [ ] Keep existing redirect revalidation test passing.
-- [ ] Add tests matching OpenClaw #15604 review concern (hostname -> private resolve).
+- [x] Keep existing redirect revalidation test passing.
+- [x] Add tests matching OpenClaw #15604 review concern (hostname -> private resolve).
 
 ---
 
@@ -261,15 +261,15 @@ Legend:
 
 ### Implementation criteria
 
-- [ ] Cron jobs added through RPC are actually executed over time.
-- [ ] Heartbeat runs only when enabled and budget allows.
-- [ ] Workflow runtime is reachable from orchestrator path.
-- [ ] Shutdown flushes scheduler/checkpoint state.
+- [x] Cron jobs added through RPC are actually executed over time.
+- [x] Heartbeat runs only when enabled and budget allows.
+- [x] Workflow runtime is reachable from orchestrator path.
+- [x] Shutdown flushes scheduler/checkpoint state.
 
 ### Guardrails
 
-- [ ] Integration test: `cron.add` leads to execution without manual `tick`.
-- [ ] Integration test: quiet hours and budget suppress proactive runs.
+- [x] Integration test: `cron.add` leads to execution without manual `tick`.
+- [x] Integration test: quiet hours and budget suppress proactive runs.
 
 ---
 
@@ -283,14 +283,14 @@ Legend:
 
 ### Implementation criteria
 
-- [ ] Typing/presence events are emitted according to policy mode.
-- [ ] Pacing prevents burst spam in normal mode.
-- [ ] Greeting behavior is thread-aware and cooldown-bound.
+- [x] Typing/presence events are emitted according to policy mode.
+- [x] Pacing prevents burst spam in normal mode.
+- [x] Greeting behavior is thread-aware and cooldown-bound.
 
 ### Guardrails
 
-- [ ] Behavior tests for `never/instant/thinking/message` typing modes.
-- [ ] Regression tests for no double-send under pacing rules.
+- [x] Behavior tests for `never/instant/thinking/message` typing modes.
+- [x] Regression tests for no double-send under pacing rules.
 
 ---
 
@@ -304,14 +304,14 @@ Legend:
 
 ### Implementation criteria
 
-- [ ] Integrity findings are generated and observable.
-- [ ] Session boundaries are preserved during retrieval.
-- [ ] Secret records are excluded from prompt context by default.
+- [x] Integrity findings are generated and observable.
+- [x] Session boundaries are preserved during retrieval.
+- [x] Secret records are excluded from prompt context by default.
 
 ### Guardrails
 
-- [ ] Cross-session leak tests.
-- [ ] Prompt construction tests confirm secret suppression.
+- [x] Cross-session leak tests.
+- [x] Prompt construction tests confirm secret suppression.
 
 ---
 
@@ -326,31 +326,31 @@ Legend:
 
 ### Implementation criteria
 
-- [ ] Runtime lifecycle state is instance-local.
-- [ ] Log growth is bounded and policy-controlled.
-- [ ] Validator cache exists and is benchmarked.
-- [ ] Core SLO metrics are emitted.
+- [x] Runtime lifecycle state is instance-local.
+- [x] Log growth is bounded and policy-controlled.
+- [x] Validator cache exists and is benchmarked.
+- [x] Core SLO metrics are emitted.
 
 ### Guardrails
 
-- [ ] Stress test for long-running process memory stability.
-- [ ] Benchmark check for tool-call throughput regression.
+- [x] Stress test for long-running process memory stability.
+- [x] Benchmark check for tool-call throughput regression.
 
 ---
 
 ## 7) Regression Gate Checklist (must stay green)
 
-- [ ] Existing `npm test` suite remains passing.
-- [ ] Existing `npm run build` remains passing.
-- [ ] Security tests include:
-  - [ ] auth token timing-safe behavior,
-  - [ ] RPC error sanitization,
-  - [ ] high-risk tool approval enforcement,
-  - [ ] DNS/redirect SSRF bypass attempts,
-  - [ ] incident mode enforcement,
-  - [ ] heartbeat/cron orchestration integration.
-- [ ] No feature regression in async `agent.run` / `agent.wait`.
-- [ ] No cross-session memory leakage.
+- [x] Existing `npm test` suite remains passing.
+- [x] Existing `npm run build` remains passing.
+- [x] Security tests include:
+  - [x] auth token timing-safe behavior,
+  - [x] RPC error sanitization,
+  - [x] high-risk tool approval enforcement,
+  - [x] DNS/redirect SSRF bypass attempts,
+  - [x] incident mode enforcement,
+  - [x] heartbeat/cron orchestration integration.
+- [x] No feature regression in async `agent.run` / `agent.wait`.
+- [x] No cross-session memory leakage.
 
 ---
 
@@ -368,7 +368,7 @@ Recommended order to minimize risk:
 
 ## 9) Final Assessment Snapshot
 
-- The project has a solid **foundation layer** (typed contracts, runtime queueing, adapter abstraction, policy primitives, and tests).
-- The largest gap is **integration depth**: several v2 capabilities are present as classes but not active in production orchestration.
-- Security posture is **better than minimal baseline**, but key deployment-path hardening is still required before calling it fully security-first in operation.
+- The project now has both a strong **foundation layer** and integrated orchestration/behavior wiring (cron, heartbeat, workflow dispatch path, and responsiveness policy engine).
+- Security hardening controls identified in this audit are now implemented and covered by regression tests (auth timing safety, sanitized errors, policy approvals, SSRF hardening, incident enforcement).
+- Maintenance and reliability guardrails are in place (instance-local runtime execution state, bounded logs, validator caching, and throughput/memory guardrail tests).
 
