@@ -17,6 +17,7 @@ CursorClaw is a security-first autonomous agent runtime that follows
 npm install
 npm test
 npm run build
+npm run security:audit
 npm start
 ```
 

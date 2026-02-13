@@ -10,7 +10,9 @@
     "build": "tsc -p tsconfig.json",
     "start": "tsx src/index.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:security": "vitest run tests/security-tools.test.ts",
+    "security:audit": "npm audit --audit-level=high"
   },
   "dependencies": {
     "ajv": "^8.17.1",
