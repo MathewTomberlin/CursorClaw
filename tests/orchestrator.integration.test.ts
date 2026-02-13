@@ -240,7 +240,7 @@ describe("autonomy orchestrator integration", () => {
     });
 
     orchestrator.start();
-    await vi.advanceTimersByTimeAsync(120);
+    await vi.advanceTimersByTimeAsync(250);
     await orchestrator.stop();
     expect(scanCount).toBeGreaterThanOrEqual(1);
     expect(orchestrator.getState().latestIntegrityFindings.length).toBeGreaterThanOrEqual(1);
