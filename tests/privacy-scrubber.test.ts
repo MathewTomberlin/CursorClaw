@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { performance } from "node:perf_hooks";
 
 import { PrivacyScrubber } from "../src/privacy/privacy-scrubber.js";
 import { SecretScanner } from "../src/privacy/secret-scanner.js";
@@ -61,5 +62,40 @@ describe("privacy scrubber", () => {
     };
     expect(scrubbed.level1.token).not.toContain("supersecret123456");
     expect(scrubbed.level1.array[0]).not.toContain("ghp_");
+  });
+
+  it("redacts PEM private key blocks", () => {
+    const scrubber = new PrivacyScrubber({
+      enabled: true,
+      failClosedOnError: true
+    });
+    const pem = [
+      "-----BEGIN PRIVATE KEY-----",
+      "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQD",
+      "-----END PRIVATE KEY-----"
+    ].join("\n");
+    const result = scrubber.scrubText({
+      text: pem,
+      scopeId: "pem-scope"
+    });
+    expect(result.text).not.toContain("BEGIN PRIVATE KEY");
+    expect(result.text).toContain("PRIVATE_KEY_BLOCK");
+  });
+
+  it("keeps scrubber throughput within baseline for medium payloads", () => {
+    const scrubber = new PrivacyScrubber({
+      enabled: true,
+      failClosedOnError: true
+    });
+    const payload = `token=alpha-token-1234567890 ${"x".repeat(4_000)} ghp_abcdefghijklmnopqrstuvwxyz123456`;
+    const start = performance.now();
+    for (let idx = 0; idx < 400; idx += 1) {
+      scrubber.scrubText({
+        text: payload,
+        scopeId: `perf-${idx % 5}`
+      });
+    }
+    const elapsedMs = performance.now() - start;
+    expect(elapsedMs).toBeLessThan(1_500);
   });
 });
