@@ -85,6 +85,44 @@ describe("scheduler, memory, and runtime", () => {
     expect(jobs[0]?.nextRunAt).toBeDefined();
   });
 
+  it("runs at jobs only once", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cursorclaw-at-"));
+    tempDirs.push(dir);
+    const cron = new CronService({
+      maxConcurrentRuns: 1,
+      stateFile: join(dir, "cron-state.json")
+    });
+
+    const start = Date.now();
+    const runAt = start + 10_000;
+    cron.addJob({
+      type: "at",
+      expression: String(runAt),
+      isolated: true,
+      maxRetries: 2,
+      backoffMs: 100
+    });
+
+    let runs = 0;
+    await cron.tick(async () => {
+      runs += 1;
+    }, start + 1_000);
+    expect(runs).toBe(0);
+
+    await cron.tick(async () => {
+      runs += 1;
+    }, runAt);
+    expect(runs).toBe(1);
+
+    await cron.tick(async () => {
+      runs += 1;
+    }, runAt + 60_000);
+    expect(runs).toBe(1);
+
+    const jobs = cron.listJobs();
+    expect(jobs[0]?.nextRunAt).toBeUndefined();
+  });
+
   it("stores classified memory with provenance and session isolation", async () => {
     const dir = await mkdtemp(join(tmpdir(), "cursorclaw-memory-"));
     tempDirs.push(dir);

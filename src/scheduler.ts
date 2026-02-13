@@ -208,15 +208,20 @@ export class CronService {
   }
 
   private isDue(job: CronJobDefinition, now: number): boolean {
-    if (!job.nextRunAt) {
-      job.nextRunAt = this.computeNextRun(job, now - 1);
+    if (job.nextRunAt === undefined) {
+      const nextRunAt = this.computeNextRun(job, now - 1);
+      if (nextRunAt === undefined) {
+        return false;
+      }
+      job.nextRunAt = nextRunAt;
     }
-    return now >= (job.nextRunAt ?? now);
+    return now >= job.nextRunAt;
   }
 
-  private computeNextRun(job: CronJobDefinition, fromMs: number): number {
+  private computeNextRun(job: CronJobDefinition, fromMs: number): number | undefined {
     if (job.type === "at") {
-      return Number.parseInt(job.expression, 10);
+      const runAt = Number.parseInt(job.expression, 10);
+      return runAt > fromMs ? runAt : undefined;
     }
     if (job.type === "every") {
       return fromMs + parseDurationToMs(job.expression);
