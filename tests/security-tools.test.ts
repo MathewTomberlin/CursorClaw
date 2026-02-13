@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   AuthService,
@@ -13,9 +13,15 @@ import {
   ToolRouter,
   classifyCommandIntent,
   createExecTool,
+  createWebFetchTool,
   isDestructiveCommand
 } from "../src/tools.js";
 import type { ToolExecutionContext } from "../src/tools.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("security and tool policy", () => {
   it("scores risky inbound prompts and wraps external content", () => {
@@ -168,5 +174,61 @@ describe("security and tool policy", () => {
     });
     expect(context.decisionLogs[0]?.detail).toContain("deny:exec:");
     expect(context.decisionLogs.some((entry) => entry.reasonCode === "ALLOWED")).toBe(false);
+  });
+
+  it("revalidates redirect destinations before every fetch hop", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response("", {
+          status: 302,
+          headers: {
+            location: "https://8.8.8.8/final"
+          }
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response("safe body", {
+          status: 200
+        })
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = createWebFetchTool();
+    const result = (await tool.execute({
+      url: "https://1.1.1.1/start"
+    })) as {
+      status: number;
+      body: string;
+    };
+
+    expect(result.status).toBe(200);
+    expect(result.body).toContain("safe body");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
+    expect(fetchMock.mock.calls[1]?.[0]?.toString()).toBe("https://8.8.8.8/final");
+  });
+
+  it("blocks private redirect destinations to prevent SSRF bypass", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response("", {
+          status: 302,
+          headers: {
+            location: "http://127.0.0.1/private"
+          }
+        })
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = createWebFetchTool();
+
+    await expect(
+      tool.execute({
+        url: "https://1.1.1.1/start"
+      })
+    ).rejects.toThrow(/SSRF blocked for private address/i);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

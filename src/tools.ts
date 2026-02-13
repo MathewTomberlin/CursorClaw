@@ -12,6 +12,8 @@ import type {
 } from "./types.js";
 
 const execFileAsync = promisify(execFile);
+const WEB_FETCH_MAX_REDIRECTS = 5;
+const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
 
 export type ExecIntent = "read-only" | "mutating" | "network-impacting" | "privilege-impacting";
 
@@ -226,17 +228,37 @@ export function createWebFetchTool(): ToolDefinition {
     riskLevel: "low",
     execute: async (rawArgs: unknown) => {
       const args = rawArgs as WebFetchArgs;
-      await enforceSafeFetchUrl(args.url);
-      const response = await fetch(args.url, {
-        method: "GET",
-        redirect: "follow",
-        signal: AbortSignal.timeout(10_000)
-      });
-      const text = await response.text();
-      return {
-        status: response.status,
-        body: wrapUntrustedContent(text.slice(0, 20_000))
-      };
+      const signal = AbortSignal.timeout(10_000);
+      let currentUrl = await enforceSafeFetchUrl(args.url);
+      for (let redirectCount = 0; redirectCount <= WEB_FETCH_MAX_REDIRECTS; redirectCount += 1) {
+        const response = await fetch(currentUrl, {
+          method: "GET",
+          redirect: "manual",
+          signal
+        });
+        if (!REDIRECT_STATUS_CODES.has(response.status)) {
+          const text = await response.text();
+          return {
+            status: response.status,
+            body: wrapUntrustedContent(text.slice(0, 20_000))
+          };
+        }
+        if (redirectCount === WEB_FETCH_MAX_REDIRECTS) {
+          throw new Error("web_fetch exceeded redirect limit");
+        }
+        const location = response.headers.get("location");
+        if (!location) {
+          throw new Error("redirect response missing location header");
+        }
+        let redirectedUrl: URL;
+        try {
+          redirectedUrl = new URL(location, currentUrl);
+        } catch {
+          throw new Error("redirect response contained invalid location");
+        }
+        currentUrl = await enforceSafeFetchUrl(redirectedUrl);
+      }
+      throw new Error("web_fetch did not reach a terminal response");
     }
   };
 }

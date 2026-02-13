@@ -142,8 +142,8 @@ function isPrivateIp(ip: string): boolean {
   return ip === "::1" || ip.startsWith("fc") || ip.startsWith("fd") || ip.startsWith("fe80");
 }
 
-export async function enforceSafeFetchUrl(urlText: string): Promise<void> {
-  const url = new URL(urlText);
+export async function enforceSafeFetchUrl(urlInput: string | URL): Promise<URL> {
+  const url = typeof urlInput === "string" ? new URL(urlInput) : urlInput;
   if (!["http:", "https:"].includes(url.protocol)) {
     throw new Error("URL protocol not allowed");
   }
@@ -154,6 +154,7 @@ export async function enforceSafeFetchUrl(urlText: string): Promise<void> {
   if (isPrivateIp(resolved.address)) {
     throw new Error(`SSRF blocked for private address: ${resolved.address}`);
   }
+  return url;
 }
 
 export interface IngressPolicyConfig {
