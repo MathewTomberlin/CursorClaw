@@ -5,6 +5,7 @@ import type { AgentRuntime, TurnResult } from "./runtime.js";
 import type { CronService } from "./scheduler.js";
 import {
   AuthService,
+  IncidentCommander,
   MethodRateLimiter,
   PolicyDecisionLogger,
   createAuditId,
@@ -25,6 +26,7 @@ export interface GatewayDependencies {
   auth: AuthService;
   rateLimiter: MethodRateLimiter;
   policyLogs: PolicyDecisionLogger;
+  incidentCommander: IncidentCommander;
 }
 
 const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
@@ -190,6 +192,14 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           channelId: String(body.params?.channelId ?? "unknown"),
           text: String(body.params?.text ?? "")
         };
+      } else if (body.method === "incident.bundle") {
+        const tokens = parseIncidentTokens(body.params?.tokens);
+        if (tokens.length > 0) {
+          deps.incidentCommander.revokeTokens(tokens);
+        }
+        deps.incidentCommander.disableProactiveSends();
+        deps.incidentCommander.isolateToolHosts();
+        result = deps.incidentCommander.exportForensicLog(deps.policyLogs);
       } else {
         throw new Error(`unknown method: ${body.method}`);
       }
@@ -246,6 +256,16 @@ function parseMessages(value: unknown): Array<{ role: string; content: string }>
       content: String(item.content ?? "")
     };
   });
+}
+
+function parseIncidentTokens(value: unknown): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error("incident tokens must be array");
+  }
+  return value.map((token) => String(token));
 }
 
 function errorResponse(id: string | undefined, auditId: string, code: string, message: string): RpcResponse {

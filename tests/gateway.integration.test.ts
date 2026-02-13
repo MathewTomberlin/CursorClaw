@@ -10,7 +10,7 @@ import { MemoryStore } from "../src/memory.js";
 import { CursorAgentModelAdapter } from "../src/model-adapter.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { CronService } from "../src/scheduler.js";
-import { AuthService, MethodRateLimiter, PolicyDecisionLogger } from "../src/security.js";
+import { AuthService, IncidentCommander, MethodRateLimiter, PolicyDecisionLogger } from "../src/security.js";
 import { AlwaysAllowApprovalGate, ToolRouter, createExecTool } from "../src/tools.js";
 
 const cleanupPaths: string[] = [];
@@ -79,13 +79,15 @@ async function createGateway() {
     "cron.add": 2
   });
   const policyLogs = new PolicyDecisionLogger();
+  const incidentCommander = new IncidentCommander();
   const app = buildGateway({
     config,
     runtime,
     cronService,
     auth,
     rateLimiter,
-    policyLogs
+    policyLogs,
+    incidentCommander
   });
   return app;
 }
@@ -203,6 +205,30 @@ describe("gateway integration", () => {
       }
     });
     expect(res.statusCode).toBe(403);
+    await app.close();
+  });
+
+  it("executes incident.bundle for admin role", async () => {
+    const app = await createGateway();
+    const res = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: {
+        authorization: "Bearer test-token"
+      },
+      payload: {
+        version: "2.0",
+        method: "incident.bundle",
+        params: {
+          tokens: ["token-a", "token-b"]
+        }
+      }
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().ok).toBe(true);
+    expect(res.json().result.proactiveDisabled).toBe(true);
+    expect(res.json().result.isolatedTools).toBe(true);
+    expect(res.json().result.revokedTokenHashes).toHaveLength(2);
     await app.close();
   });
 });

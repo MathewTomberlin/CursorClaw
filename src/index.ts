@@ -5,7 +5,7 @@ import { MemoryStore } from "./memory.js";
 import { CursorAgentModelAdapter } from "./model-adapter.js";
 import { AgentRuntime } from "./runtime.js";
 import { AutonomyBudget, CronService, HeartbeatRunner, WorkflowRuntime } from "./scheduler.js";
-import { AuthService, MethodRateLimiter, PolicyDecisionLogger } from "./security.js";
+import { AuthService, IncidentCommander, MethodRateLimiter, PolicyDecisionLogger } from "./security.js";
 import { AlwaysAllowApprovalGate, ToolRouter, createExecTool, createWebFetchTool } from "./tools.js";
 import { DEFAULT_CONFIG, loadConfig } from "./config.js";
 
@@ -73,13 +73,15 @@ async function main(): Promise<void> {
     "chat.send": 40,
     "cron.add": 10
   });
+  const incidentCommander = new IncidentCommander();
   const gateway = buildGateway({
     config,
     runtime,
     cronService,
     auth,
     rateLimiter,
-    policyLogs
+    policyLogs,
+    incidentCommander
   });
 
   const port = Number.parseInt(process.env.PORT ?? "8787", 10);
