@@ -36,7 +36,7 @@ describe("reflection + reasoning reset + confidence model", () => {
       maxConcurrentJobs: 1
     });
     let runCount = 0;
-    scheduler.noteActivity(0);
+    scheduler.noteActivity(Date.now());
     scheduler.enqueue({
       id: "job-1",
       run: async () => {
