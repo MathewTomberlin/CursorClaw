@@ -258,12 +258,17 @@ export class AgentRuntime {
         emit("failed", { error: String(error) });
         await this.snapshot(runId, request.session.sessionId, events);
         throw error;
-      } finally {
-        executeHandlerRegistry.delete(runId);
       }
     });
 
-    return this.queue.enqueue(pending);
+    try {
+      return this.queue.enqueue(pending).finally(() => {
+        executeHandlerRegistry.delete(runId);
+      });
+    } catch (error) {
+      executeHandlerRegistry.delete(runId);
+      throw error;
+    }
   }
 
   private async ensureModelSession(context: SessionContext) {
