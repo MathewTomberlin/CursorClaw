@@ -36,6 +36,7 @@ describe("reflection + reasoning reset + confidence model", () => {
       maxConcurrentJobs: 1
     });
     let runCount = 0;
+    scheduler.noteActivity(0);
     scheduler.enqueue({
       id: "job-1",
       run: async () => {
@@ -43,7 +44,6 @@ describe("reflection + reasoning reset + confidence model", () => {
       }
     });
     scheduler.start();
-    scheduler.noteActivity(0);
 
     await vi.advanceTimersByTimeAsync(40);
     expect(runCount).toBe(0);
