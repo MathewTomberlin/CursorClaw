@@ -87,7 +87,7 @@ async function createGateway(options: { channelHub?: ChannelHub } = {}) {
     config,
     runtime,
     cronService,
-    channelHub: options.channelHub,
+    ...(options.channelHub ? { channelHub: options.channelHub } : {}),
     auth,
     rateLimiter,
     policyLogs,

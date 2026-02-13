@@ -1,6 +1,11 @@
 import { join } from "node:path";
 
-import { ChannelHub, LocalEchoChannelAdapter, SlackChannelAdapter } from "./channels.js";
+import {
+  ChannelHub,
+  LocalEchoChannelAdapter,
+  SlackChannelAdapter,
+  type SlackAdapterConfig
+} from "./channels.js";
 import { AutonomyStateStore } from "./autonomy-state.js";
 import { buildGateway } from "./gateway.js";
 import { MemoryStore } from "./memory.js";
@@ -131,13 +136,16 @@ async function main(): Promise<void> {
     greetingPolicy: new GreetingPolicy()
   });
   const channelHub = new ChannelHub();
-  channelHub.register(
-    new SlackChannelAdapter({
-      enabled: /^(1|true|yes)$/i.test(process.env.CURSORCLAW_SLACK_ENABLED ?? ""),
-      botToken: process.env.SLACK_BOT_TOKEN,
-      defaultChannel: process.env.SLACK_DEFAULT_CHANNEL
-    })
-  );
+  const slackConfig: SlackAdapterConfig = {
+    enabled: /^(1|true|yes)$/i.test(process.env.CURSORCLAW_SLACK_ENABLED ?? "")
+  };
+  if (process.env.SLACK_BOT_TOKEN) {
+    slackConfig.botToken = process.env.SLACK_BOT_TOKEN;
+  }
+  if (process.env.SLACK_DEFAULT_CHANNEL) {
+    slackConfig.defaultChannel = process.env.SLACK_DEFAULT_CHANNEL;
+  }
+  channelHub.register(new SlackChannelAdapter(slackConfig));
   channelHub.register(new LocalEchoChannelAdapter());
   const gateway = buildGateway({
     config,
