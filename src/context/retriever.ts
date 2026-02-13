@@ -36,16 +36,17 @@ export class SemanticContextRetriever {
     });
     const out: SemanticContextHit[] = [];
     for (const hit of hits) {
+      const summary = await this.options.summaryCache.get({
+        workspace: hit.chunk.workspace,
+        repo: hit.chunk.repo,
+        modulePath: hit.chunk.modulePath
+      });
       out.push({
         workspace: hit.chunk.workspace,
         repo: hit.chunk.repo,
         modulePath: hit.chunk.modulePath,
         score: hit.score,
-        summary: await this.options.summaryCache.get({
-          workspace: hit.chunk.workspace,
-          repo: hit.chunk.repo,
-          modulePath: hit.chunk.modulePath
-        }),
+        ...(summary ? { summary } : {}),
         chunkText: hit.chunk.text,
         chunkIndex: hit.chunk.chunkIndex
       });
@@ -79,7 +80,7 @@ export class SemanticContextRetriever {
         modulePath: first?.modulePath ?? "unknown",
         maxScore: max,
         averageScore: sum / Math.max(1, entries.length),
-        summary: first?.summary,
+        ...(first?.summary ? { summary: first.summary } : {}),
         chunks: entries.sort((lhs, rhs) => rhs.score - lhs.score)
       };
     });

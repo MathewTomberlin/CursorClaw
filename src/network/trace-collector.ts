@@ -74,7 +74,7 @@ export class NetworkTraceCollector {
       linkCandidates: links.candidates
     });
     await this.options.observationStore.append({
-      sessionId: input.sessionId,
+      ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
       source: "net-trace",
       kind: "http-exchange",
       sensitivity: "operational",

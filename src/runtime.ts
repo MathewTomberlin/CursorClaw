@@ -24,9 +24,14 @@ import type { RuntimeObservationStore } from "./runtime-observation.js";
 import type { PolicyDecisionLog, SessionContext, ToolCall } from "./types.js";
 import { ToolRouter, classifyCommandIntent } from "./tools.js";
 
+type RuntimeMessage = {
+  role: string;
+  content: string;
+};
+
 export interface TurnRequest {
   session: SessionContext;
-  messages: Array<{ role: string; content: string }>;
+  messages: RuntimeMessage[];
 }
 
 export interface TurnResult {
@@ -425,13 +430,13 @@ export class AgentRuntime {
           this.metrics.turnsCompleted += 1;
           this.options.failureLoopGuard?.recordSuccess(sessionId);
           this.options.reasoningResetController?.noteTaskResolved(sessionId);
-          const hasRecentTestsPassing = await this.resolveRecentTestSignal();
+          const hasRecentTestsPassingAfterTurn = await this.resolveRecentTestSignal();
           const postConfidence = this.options.confidenceModel?.score({
             failureCount: this.options.failureLoopGuard?.getFailureCount(sessionId) ?? 0,
             hasDeepScan: deepScanIncluded,
             pluginDiagnosticCount,
             toolCallCount: toolCallCountThisTurn,
-            hasRecentTestsPassing
+            hasRecentTestsPassing: hasRecentTestsPassingAfterTurn
           });
           const confidenceScore = clampConfidence(
             postConfidence?.score ?? preliminaryConfidenceScore ?? 80

@@ -231,7 +231,7 @@ function computeVector(text: string, dimensions: number): number[] {
   }
   for (const token of tokens) {
     const index = tokenHash(token) % dimensions;
-    vector[index] += 1;
+    vector[index] = (vector[index] ?? 0) + 1;
   }
   const norm = Math.sqrt(vector.reduce((acc, value) => acc + value * value, 0));
   if (norm <= 0) {
