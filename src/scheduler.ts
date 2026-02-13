@@ -148,9 +148,9 @@ export class CronService {
     const id = randomUUID();
     const full: CronJobDefinition = {
       ...def,
-      id,
-      nextRunAt: this.computeNextRun({ ...def, id }, Date.now())
+      id
     };
+    this.setNextRun(full, this.computeNextRun(full, Date.now()));
     this.jobs.set(id, { def: full, retries: 0, running: false });
     return full;
   }
@@ -176,12 +176,12 @@ export class CronService {
         await runJob(record.def);
         record.retries = 0;
         delete record.lastError;
-        record.def.nextRunAt = this.computeNextRun(record.def, now);
+        this.setNextRun(record.def, this.computeNextRun(record.def, now));
       } catch (error) {
         record.retries += 1;
         record.lastError = String(error);
         if (record.retries > record.def.maxRetries) {
-          record.def.nextRunAt = this.computeNextRun(record.def, now);
+          this.setNextRun(record.def, this.computeNextRun(record.def, now));
           record.retries = 0;
         } else {
           record.def.nextRunAt = now + record.def.backoffMs * 2 ** (record.retries - 1);
@@ -230,6 +230,14 @@ export class CronService {
       currentDate: new Date(fromMs)
     });
     return interval.next().getTime();
+  }
+
+  private setNextRun(job: CronJobDefinition, nextRunAt: number | undefined): void {
+    if (nextRunAt === undefined) {
+      delete job.nextRunAt;
+      return;
+    }
+    job.nextRunAt = nextRunAt;
   }
 
   private async persistState(): Promise<void> {

@@ -217,9 +217,6 @@ describe("CursorAgentModelAdapter", () => {
         kill(signal?: number | NodeJS.Signals): boolean {
           const resolvedSignal = signal ?? "SIGTERM";
           killCalls.push(resolvedSignal);
-          if (resolvedSignal === "SIGTERM") {
-            this.killed = true;
-          }
           return true;
         }
       } as unknown as import("node:child_process").ChildProcessWithoutNullStreams;
@@ -265,9 +262,6 @@ describe("CursorAgentModelAdapter", () => {
         kill(signal?: number | NodeJS.Signals): boolean {
           const resolvedSignal = signal ?? "SIGTERM";
           killCalls.push(resolvedSignal);
-          if (resolvedSignal === "SIGTERM") {
-            this.killed = true;
-          }
           return true;
         }
       } as unknown as import("node:child_process").ChildProcessWithoutNullStreams;
