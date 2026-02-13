@@ -110,8 +110,6 @@ function parseDurationToMs(input: string): number {
   if (!m) {
     throw new Error(`invalid duration: ${input}`);
   }
-  const amount = Number.parseInt(m[1], 10);
-  const unit = m[2];
   const multiplier: Record<string, number> = {
     ms: 1,
     s: 1000,
@@ -119,7 +117,13 @@ function parseDurationToMs(input: string): number {
     h: 60 * 60_000,
     d: 24 * 60 * 60_000
   };
-  return amount * multiplier[unit];
+  const amountToken = m[1];
+  const unitToken = m[2];
+  if (!amountToken || !unitToken || multiplier[unitToken] === undefined) {
+    throw new Error(`invalid duration token: ${input}`);
+  }
+  const amount = Number.parseInt(amountToken, 10);
+  return amount * multiplier[unitToken];
 }
 
 interface CronStateRecord {
@@ -171,7 +175,7 @@ export class CronService {
       try {
         await runJob(record.def);
         record.retries = 0;
-        record.lastError = undefined;
+        delete record.lastError;
         record.def.nextRunAt = this.computeNextRun(record.def, now);
       } catch (error) {
         record.retries += 1;

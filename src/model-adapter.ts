@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
-import Ajv from "ajv";
+import { Ajv } from "ajv";
 
 import { redactSecrets } from "./security.js";
 import type {

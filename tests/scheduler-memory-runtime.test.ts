@@ -81,7 +81,8 @@ describe("scheduler, memory, and runtime", () => {
     }, Date.now() + 2_000);
     expect(attempts).toBe(1);
     const jobs = cron.listJobs();
-    expect(jobs[0].nextRunAt).toBeDefined();
+    expect(jobs[0]).toBeDefined();
+    expect(jobs[0]?.nextRunAt).toBeDefined();
   });
 
   it("stores classified memory with provenance and session isolation", async () => {

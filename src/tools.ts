@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import Ajv from "ajv";
+import { Ajv } from "ajv";
 
 import { enforceSafeFetchUrl, wrapUntrustedContent } from "./security.js";
 import type {

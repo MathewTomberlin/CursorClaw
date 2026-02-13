@@ -48,13 +48,26 @@ async function main(): Promise<void> {
   void workflow;
 
   const policyLogs = new PolicyDecisionLogger();
-  const auth = new AuthService({
+  const authOptions: {
+    mode: "token" | "password" | "none";
+    token?: string;
+    password?: string;
+    trustedProxyIps: string[];
+    trustedIdentityHeader?: string;
+  } = {
     mode: config.gateway.auth.mode,
-    token: config.gateway.auth.token,
-    password: config.gateway.auth.password,
-    trustedProxyIps: config.gateway.trustedProxyIps,
-    trustedIdentityHeader: config.gateway.auth.trustedIdentityHeader
-  });
+    trustedProxyIps: config.gateway.trustedProxyIps
+  };
+  if (config.gateway.auth.token !== undefined) {
+    authOptions.token = config.gateway.auth.token;
+  }
+  if (config.gateway.auth.password !== undefined) {
+    authOptions.password = config.gateway.auth.password;
+  }
+  if (config.gateway.auth.trustedIdentityHeader !== undefined) {
+    authOptions.trustedIdentityHeader = config.gateway.auth.trustedIdentityHeader;
+  }
+  const auth = new AuthService(authOptions);
   const rateLimiter = new MethodRateLimiter(60, 60_000, {
     "agent.run": 20,
     "chat.send": 40,

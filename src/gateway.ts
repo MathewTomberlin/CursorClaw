@@ -196,11 +196,13 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         detail: "request completed"
       });
       const response: RpcResponse = {
-        id: body.id,
         auditId,
         ok: true,
         result
       };
+      if (body.id !== undefined) {
+        response.id = body.id;
+      }
       return response;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -216,12 +218,15 @@ function parseSessionContext(value: unknown): SessionContext {
   if (!session?.sessionId || !session.channelId || !session.channelKind) {
     throw new Error("invalid session context");
   }
-  return {
+  const out: SessionContext = {
     sessionId: session.sessionId,
     channelId: session.channelId,
-    channelKind: session.channelKind,
-    userId: session.userId
+    channelKind: session.channelKind
   };
+  if (session.userId !== undefined) {
+    out.userId = session.userId;
+  }
+  return out;
 }
 
 function parseMessages(value: unknown): Array<{ role: string; content: string }> {
@@ -238,8 +243,7 @@ function parseMessages(value: unknown): Array<{ role: string; content: string }>
 }
 
 function errorResponse(id: string | undefined, auditId: string, code: string, message: string): RpcResponse {
-  return {
-    id,
+  const response: RpcResponse = {
     auditId,
     ok: false,
     error: {
@@ -247,6 +251,10 @@ function errorResponse(id: string | undefined, auditId: string, code: string, me
       message
     }
   };
+  if (id !== undefined) {
+    response.id = id;
+  }
+  return response;
 }
 
 function mapHeaders(headers: Record<string, unknown>): Record<string, string | undefined> {

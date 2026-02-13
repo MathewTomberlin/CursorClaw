@@ -269,11 +269,19 @@ export class AgentRuntime {
   private async ensureModelSession(context: SessionContext) {
     const existingId = this.sessionHandles.get(context.sessionId);
     if (existingId) {
-      return {
+      const handle: {
+        id: string;
+        model: string;
+        authProfile?: string;
+      } = {
         id: existingId,
-        model: this.options.config.defaultModel,
-        authProfile: this.options.config.models[this.options.config.defaultModel].authProfiles[0]
+        model: this.options.config.defaultModel
       };
+      const profile = this.options.config.models[this.options.config.defaultModel]?.authProfiles[0];
+      if (profile !== undefined) {
+        handle.authProfile = profile;
+      }
+      return handle;
     }
     const handle = await this.options.adapter.createSession(context);
     this.sessionHandles.set(context.sessionId, handle.id);

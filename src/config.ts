@@ -121,7 +121,7 @@ function merge<T extends object>(base: T, override?: Partial<T>): T {
   if (!override) {
     return base;
   }
-  const out: Record<string, unknown> = { ...base };
+  const out: Record<string, unknown> = { ...(base as Record<string, unknown>) };
   for (const [key, value] of Object.entries(override)) {
     if (value === undefined) {
       continue;
