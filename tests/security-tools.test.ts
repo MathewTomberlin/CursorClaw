@@ -8,12 +8,14 @@ import {
   wrapUntrustedContent
 } from "../src/security.js";
 import {
+  AlwaysAllowApprovalGate,
   AlwaysDenyApprovalGate,
   ToolRouter,
   classifyCommandIntent,
   createExecTool,
   isDestructiveCommand
 } from "../src/tools.js";
+import type { ToolExecutionContext } from "../src/tools.js";
 
 describe("security and tool policy", () => {
   it("scores risky inbound prompts and wraps external content", () => {
@@ -128,5 +130,43 @@ describe("security and tool policy", () => {
         }
       )
     ).rejects.toThrow(/tool execution denied|destructive command denied/i);
+  });
+
+  it("logs execution failures as deny instead of allowed", async () => {
+    const allowGate = new AlwaysAllowApprovalGate();
+    const router = new ToolRouter({
+      approvalGate: allowGate,
+      allowedExecBins: ["echo"]
+    });
+    router.register(
+      createExecTool({
+        allowedBins: ["echo"],
+        approvalGate: allowGate
+      })
+    );
+    const context: ToolExecutionContext = {
+      auditId: "audit-exec-deny",
+      decisionLogs: []
+    };
+
+    await expect(
+      router.execute(
+        {
+          name: "exec",
+          args: {
+            command: "rm -rf /tmp/a"
+          }
+        },
+        context
+      )
+    ).rejects.toThrow(/destructive command denied/i);
+
+    expect(context.decisionLogs).toHaveLength(1);
+    expect(context.decisionLogs[0]).toMatchObject({
+      decision: "deny",
+      reasonCode: "TOOL_EXEC_DENIED"
+    });
+    expect(context.decisionLogs[0]?.detail).toContain("deny:exec:");
+    expect(context.decisionLogs.some((entry) => entry.reasonCode === "ALLOWED")).toBe(false);
   });
 });

@@ -109,8 +109,15 @@ export class ToolRouter {
       }
     }
 
-    this.logDecision(context, "allow", "ALLOWED", `allow:${call.name}`);
-    return tool.execute(call.args);
+    try {
+      const result = await tool.execute(call.args);
+      this.logDecision(context, "allow", "ALLOWED", `allow:${call.name}`);
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logDecision(context, "deny", "TOOL_EXEC_DENIED", `deny:${call.name}:${message}`);
+      throw error;
+    }
   }
 
   private logDecision(
