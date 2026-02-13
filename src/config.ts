@@ -1,7 +1,10 @@
 import type { HeartbeatConfig } from "./types.js";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 export interface GatewayConfig {
   bind: "loopback" | "0.0.0.0";
+  bodyLimitBytes: number;
   auth: {
     mode: "token" | "password" | "none";
     token?: string;
@@ -19,6 +22,8 @@ export interface SessionConfig {
   queueDropStrategy: "drop-oldest" | "defer-new";
   turnTimeoutMs: number;
   snapshotEveryEvents: number;
+  maxMessagesPerTurn: number;
+  maxMessageChars: number;
 }
 
 export interface CompactionConfig {
@@ -40,8 +45,14 @@ export interface ToolsConfig {
     host: "sandbox" | "host";
     security: "deny" | "allowlist";
     ask: "always" | "on-miss" | "never";
+    profile: "strict" | "developer";
     allowBins: string[];
   };
+}
+
+export interface MemoryConfig {
+  includeSecretsInPrompt: boolean;
+  integrityScanEveryMs: number;
 }
 
 export interface CursorClawConfig {
@@ -49,6 +60,7 @@ export interface CursorClawConfig {
   session: SessionConfig;
   heartbeat: HeartbeatConfig;
   compaction: CompactionConfig;
+  memory: MemoryConfig;
   tools: ToolsConfig;
   models: Record<string, ModelProviderConfig>;
   defaultModel: string;
@@ -59,9 +71,18 @@ export interface CursorClawConfig {
   };
 }
 
+export type DeepPartial<T> = {
+  [K in keyof T]?: T[K] extends Array<infer U>
+    ? U[]
+    : T[K] extends object
+      ? DeepPartial<T[K]>
+      : T[K];
+};
+
 export const DEFAULT_CONFIG: CursorClawConfig = {
   gateway: {
     bind: "loopback",
+    bodyLimitBytes: 64 * 1024,
     auth: { mode: "token", token: "changeme" },
     trustedProxyIps: [],
     protocolVersion: "2.0"
@@ -72,7 +93,9 @@ export const DEFAULT_CONFIG: CursorClawConfig = {
     queueHardLimit: 64,
     queueDropStrategy: "drop-oldest",
     turnTimeoutMs: 60_000,
-    snapshotEveryEvents: 12
+    snapshotEveryEvents: 12,
+    maxMessagesPerTurn: 64,
+    maxMessageChars: 8_000
   },
   heartbeat: {
     enabled: true,
@@ -84,11 +107,16 @@ export const DEFAULT_CONFIG: CursorClawConfig = {
   compaction: {
     memoryFlush: true
   },
+  memory: {
+    includeSecretsInPrompt: false,
+    integrityScanEveryMs: 60 * 60_000
+  },
   tools: {
     exec: {
       host: "sandbox",
       security: "allowlist",
       ask: "on-miss",
+      profile: "strict",
       allowBins: ["echo", "pwd", "ls", "cat", "node"]
     }
   },
@@ -117,7 +145,7 @@ export const DEFAULT_CONFIG: CursorClawConfig = {
   }
 };
 
-function merge<T extends object>(base: T, override?: Partial<T>): T {
+function merge<T extends object>(base: T, override?: DeepPartial<T>): T {
   if (!override) {
     return base;
   }
@@ -128,7 +156,7 @@ function merge<T extends object>(base: T, override?: Partial<T>): T {
     }
     const current = out[key];
     if (value && typeof value === "object" && !Array.isArray(value) && current && typeof current === "object") {
-      out[key] = merge(current as object, value as object);
+      out[key] = merge(current as object, value as DeepPartial<object>);
       continue;
     }
     out[key] = value;
@@ -136,10 +164,70 @@ function merge<T extends object>(base: T, override?: Partial<T>): T {
   return out as T;
 }
 
-export function loadConfig(raw?: Partial<CursorClawConfig>): CursorClawConfig {
+export function loadConfig(raw?: DeepPartial<CursorClawConfig>): CursorClawConfig {
   const config = merge(DEFAULT_CONFIG, raw);
   if (config.gateway.auth.mode !== "none" && !config.gateway.auth.token && !config.gateway.auth.password) {
     throw new Error("secure config requires gateway auth token or password");
   }
   return config;
+}
+
+export interface LoadConfigFromDiskOptions {
+  configPath?: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+}
+
+function isLiteralNullishToken(value: string | undefined): boolean {
+  if (value === undefined) {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized === "undefined" || normalized === "null";
+}
+
+export function resolveConfigPath(options: LoadConfigFromDiskOptions = {}): string {
+  if (options.configPath !== undefined) {
+    return options.configPath;
+  }
+  const env = options.env ?? process.env;
+  if (env.CURSORCLAW_CONFIG_PATH) {
+    return env.CURSORCLAW_CONFIG_PATH;
+  }
+  return join(options.cwd ?? process.cwd(), "openclaw.json");
+}
+
+export function loadConfigFromDisk(options: LoadConfigFromDiskOptions = {}): CursorClawConfig {
+  const configPath = resolveConfigPath(options);
+  if (!existsSync(configPath)) {
+    return loadConfig(DEFAULT_CONFIG);
+  }
+  const rawText = readFileSync(configPath, "utf8");
+  const parsed = JSON.parse(rawText) as DeepPartial<CursorClawConfig>;
+  return loadConfig(parsed);
+}
+
+export interface StartupValidationOptions {
+  allowInsecureDefaults: boolean;
+}
+
+export function validateStartupConfig(
+  config: CursorClawConfig,
+  options: StartupValidationOptions
+): void {
+  if (options.allowInsecureDefaults || config.gateway.auth.mode === "none") {
+    return;
+  }
+  const token = config.gateway.auth.token;
+  const password = config.gateway.auth.password;
+  if (token?.trim() === "changeme" || password?.trim() === "changeme") {
+    throw new Error("refusing startup with placeholder gateway credentials");
+  }
+  if (isLiteralNullishToken(token) || isLiteralNullishToken(password)) {
+    throw new Error('refusing startup with invalid literal gateway credentials ("undefined"/"null")');
+  }
+}
+
+export function isDevMode(env: NodeJS.ProcessEnv = process.env): boolean {
+  return /^(1|true|yes)$/i.test(env.CURSORCLAW_DEV_MODE ?? "");
 }

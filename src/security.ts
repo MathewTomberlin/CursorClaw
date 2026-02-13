@@ -1,5 +1,5 @@
-import { createHash, randomUUID } from "node:crypto";
-import { lookup } from "node:dns/promises";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import * as dns from "node:dns/promises";
 import { isIP } from "node:net";
 import { URL } from "node:url";
 
@@ -8,6 +8,9 @@ import type {
   DecisionReasonCode,
   PolicyDecisionLog
 } from "./types.js";
+
+type DnsLookupFn = typeof dns.lookup;
+let dnsLookupFn: DnsLookupFn = dns.lookup;
 
 export interface AuthContext {
   isLocal: boolean;
@@ -24,7 +27,12 @@ export interface AuthResult {
 export class PolicyDecisionLogger {
   private readonly logs: PolicyDecisionLog[] = [];
 
+  constructor(private readonly maxEntries = 5_000) {}
+
   add(entry: Omit<PolicyDecisionLog, "at">): void {
+    if (this.logs.length >= this.maxEntries) {
+      this.logs.shift();
+    }
     this.logs.push({ at: new Date().toISOString(), ...entry });
   }
 
@@ -115,7 +123,11 @@ function ipToLong(ip: string): number {
   if (parts.length !== 4 || parts.some((part) => Number.isNaN(part))) {
     return -1;
   }
-  return ((parts[0] as number) << 24) + ((parts[1] as number) << 16) + ((parts[2] as number) << 8) + (parts[3] as number);
+  const [a, b, c, d] = parts;
+  if (a === undefined || b === undefined || c === undefined || d === undefined) {
+    return -1;
+  }
+  return a * 256 ** 3 + b * 256 ** 2 + c * 256 + d;
 }
 
 function isPrivateIpv4(ip: string): boolean {
@@ -129,20 +141,75 @@ function isPrivateIpv4(ip: string): boolean {
     [ipToLong("169.254.0.0"), ipToLong("169.254.255.255")],
     [ipToLong("172.16.0.0"), ipToLong("172.31.255.255")],
     [ipToLong("192.168.0.0"), ipToLong("192.168.255.255")],
-    [ipToLong("0.0.0.0"), ipToLong("0.255.255.255")]
+    [ipToLong("0.0.0.0"), ipToLong("0.255.255.255")],
+    [ipToLong("100.64.0.0"), ipToLong("100.127.255.255")],
+    [ipToLong("198.18.0.0"), ipToLong("198.19.255.255")],
+    [ipToLong("224.0.0.0"), ipToLong("255.255.255.255")]
   ];
   return ranges.some(([start, end]) => n >= start && n <= end);
+}
+
+function parseMappedIpv4(ip: string): string | null {
+  const lower = ip.toLowerCase();
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(lower);
+  if (!mapped) {
+    return null;
+  }
+  return mapped[1] ?? null;
 }
 
 function isPrivateIp(ip: string): boolean {
   if (isIP(ip) === 4) {
     return isPrivateIpv4(ip);
   }
-  // Conservative deny for IPv6 local-ish blocks.
-  return ip === "::1" || ip.startsWith("fc") || ip.startsWith("fd") || ip.startsWith("fe80");
+  if (isIP(ip) !== 6) {
+    return false;
+  }
+  const normalized = ip.toLowerCase();
+  if (normalized.startsWith("::ffff:")) {
+    const mappedV4 = parseMappedIpv4(normalized);
+    if (mappedV4 !== null) {
+      return isPrivateIpv4(mappedV4);
+    }
+    // Deny IPv4-mapped IPv6 variants we cannot safely normalize.
+    return true;
+  }
+  if (normalized === "::1" || normalized === "::") {
+    return true;
+  }
+  if (normalized.startsWith("fc") || normalized.startsWith("fd")) {
+    return true;
+  }
+  // fe80::/10 link-local
+  if (/^fe[89ab]/i.test(normalized)) {
+    return true;
+  }
+  return false;
 }
 
-export async function enforceSafeFetchUrl(urlInput: string | URL): Promise<URL> {
+async function resolveHostAddresses(hostname: string): Promise<string[]> {
+  const normalizedHost = hostname.replace(/^\[/, "").replace(/\]$/, "");
+  const literalIpVersion = isIP(normalizedHost);
+  if (literalIpVersion !== 0) {
+    return [normalizedHost];
+  }
+  const resolved = await dnsLookupFn(normalizedHost, { all: true, verbatim: true });
+  if (!resolved.length) {
+    throw new Error(`unable to resolve host: ${hostname}`);
+  }
+  return resolved.map((entry) => entry.address);
+}
+
+export function setDnsLookupForTests(lookupImpl: DnsLookupFn | null): void {
+  dnsLookupFn = lookupImpl ?? dns.lookup;
+}
+
+export interface SafeFetchTarget {
+  url: URL;
+  resolvedAddresses: string[];
+}
+
+export async function resolveSafeFetchTarget(urlInput: string | URL): Promise<SafeFetchTarget> {
   const url = typeof urlInput === "string" ? new URL(urlInput) : urlInput;
   if (!["http:", "https:"].includes(url.protocol)) {
     throw new Error("URL protocol not allowed");
@@ -150,11 +217,33 @@ export async function enforceSafeFetchUrl(urlInput: string | URL): Promise<URL> 
   if (!url.hostname) {
     throw new Error("URL hostname missing");
   }
-  const resolved = await lookup(url.hostname);
-  if (isPrivateIp(resolved.address)) {
-    throw new Error(`SSRF blocked for private address: ${resolved.address}`);
+  const resolvedAddresses = await resolveHostAddresses(url.hostname);
+  for (const resolvedAddress of resolvedAddresses) {
+    if (isPrivateIp(resolvedAddress)) {
+      throw new Error(`SSRF blocked for private address: ${resolvedAddress}`);
+    }
   }
-  return url;
+  return {
+    url,
+    resolvedAddresses: [...new Set(resolvedAddresses)]
+  };
+}
+
+export async function enforceSafeFetchUrl(urlInput: string | URL): Promise<URL> {
+  const resolved = await resolveSafeFetchTarget(urlInput);
+  return resolved.url;
+}
+
+function safeSecretCompare(lhs: string | undefined, rhs: string | undefined): boolean {
+  if (lhs === undefined || rhs === undefined) {
+    return false;
+  }
+  const left = Buffer.from(lhs, "utf8");
+  const right = Buffer.from(rhs, "utf8");
+  if (left.length !== right.length) {
+    return false;
+  }
+  return timingSafeEqual(left, right);
 }
 
 export interface IngressPolicyConfig {
@@ -220,10 +309,10 @@ export class AuthService {
       return { ok: false, reason: "AUTH_MISSING", role: "remote" };
     }
 
-    if (this.options.mode === "token" && headerToken !== this.options.token) {
+    if (this.options.mode === "token" && !safeSecretCompare(headerToken, this.options.token)) {
       return { ok: false, reason: "AUTH_INVALID", role: "remote" };
     }
-    if (this.options.mode === "password" && headerPassword !== this.options.password) {
+    if (this.options.mode === "password" && !safeSecretCompare(headerPassword, this.options.password)) {
       return { ok: false, reason: "AUTH_INVALID", role: "remote" };
     }
 
@@ -301,6 +390,14 @@ export class IncidentCommander {
 
   isolateToolHosts(): void {
     this.isolatedTools = true;
+  }
+
+  isProactiveSendsDisabled(): boolean {
+    return this.proactiveDisabled;
+  }
+
+  isToolIsolationEnabled(): boolean {
+    return this.isolatedTools;
   }
 
   exportForensicLog(policyLogs: PolicyDecisionLogger): {

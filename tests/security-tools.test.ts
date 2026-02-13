@@ -3,13 +3,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AuthService,
   MethodRateLimiter,
+  PolicyDecisionLogger,
+  enforceSafeFetchUrl,
   evaluateIngressPolicy,
+  setDnsLookupForTests,
   scoreInboundRisk,
   wrapUntrustedContent
 } from "../src/security.js";
 import {
   AlwaysAllowApprovalGate,
   AlwaysDenyApprovalGate,
+  PolicyApprovalGate,
   ToolRouter,
   classifyCommandIntent,
   createExecTool,
@@ -19,6 +23,7 @@ import {
 import type { ToolExecutionContext } from "../src/tools.js";
 
 afterEach(() => {
+  setDnsLookupForTests(null);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -176,6 +181,63 @@ describe("security and tool policy", () => {
     expect(context.decisionLogs.some((entry) => entry.reasonCode === "ALLOWED")).toBe(false);
   });
 
+  it("enforces strict approval gate for non-read exec intents", async () => {
+    const policyGate = new PolicyApprovalGate({
+      devMode: false,
+      allowHighRiskTools: false,
+      allowExecIntents: ["read-only"]
+    });
+    const router = new ToolRouter({
+      approvalGate: policyGate,
+      allowedExecBins: ["echo", "curl"]
+    });
+    router.register(
+      createExecTool({
+        allowedBins: ["echo", "curl"],
+        approvalGate: policyGate
+      })
+    );
+    await expect(
+      router.execute(
+        {
+          name: "exec",
+          args: { command: "curl https://example.com" }
+        },
+        {
+          auditId: "audit-policy",
+          decisionLogs: []
+        }
+      )
+    ).rejects.toThrow(/approval gate|requires approval/i);
+  });
+
+  it("blocks high-risk tools when incident isolation is active", async () => {
+    const allowGate = new AlwaysAllowApprovalGate();
+    const router = new ToolRouter({
+      approvalGate: allowGate,
+      allowedExecBins: ["echo"],
+      isToolIsolationEnabled: () => true
+    });
+    router.register(
+      createExecTool({
+        allowedBins: ["echo"],
+        approvalGate: allowGate
+      })
+    );
+    await expect(
+      router.execute(
+        {
+          name: "exec",
+          args: { command: "echo hello" }
+        },
+        {
+          auditId: "audit-isolation",
+          decisionLogs: []
+        }
+      )
+    ).rejects.toThrow(/tool isolation mode/i);
+  });
+
   it("revalidates redirect destinations before every fetch hop", async () => {
     const fetchMock = vi
       .fn()
@@ -230,5 +292,102 @@ describe("security and tool policy", () => {
       })
     ).rejects.toThrow(/SSRF blocked for private address/i);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks mapped IPv6 loopback forms in SSRF guard", async () => {
+    await expect(enforceSafeFetchUrl("http://[::ffff:127.0.0.1]/private")).rejects.toThrow(
+      /SSRF blocked for private address/i
+    );
+  });
+
+  it("blocks hostnames that resolve to private addresses", async () => {
+    setDnsLookupForTests(async () => [{ address: "127.0.0.1", family: 4 }] as never);
+    await expect(enforceSafeFetchUrl("https://example.com")).rejects.toThrow(
+      /SSRF blocked for private address/i
+    );
+  });
+
+  it("detects DNS rebinding across redirect hops", async () => {
+    let lookupCount = 0;
+    setDnsLookupForTests(async () => {
+      lookupCount += 1;
+      if (lookupCount === 1) {
+        return [{ address: "8.8.8.8", family: 4 }] as never;
+      }
+      return [{ address: "1.1.1.1", family: 4 }] as never;
+    });
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response("", {
+        status: 302,
+        headers: {
+          location: "/next"
+        }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const tool = createWebFetchTool();
+
+    await expect(
+      tool.execute({
+        url: "https://example.test/start"
+      })
+    ).rejects.toThrow(/DNS rebinding detected/i);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("caches tool validators for repeated executions", async () => {
+    const allowGate = new AlwaysAllowApprovalGate();
+    const router = new ToolRouter({
+      approvalGate: allowGate,
+      allowedExecBins: ["echo"]
+    });
+    router.register(
+      createExecTool({
+        allowedBins: ["echo"],
+        approvalGate: allowGate
+      })
+    );
+    await router.execute(
+      {
+        name: "exec",
+        args: {
+          command: "echo first"
+        }
+      },
+      {
+        auditId: "audit-cache-1",
+        decisionLogs: []
+      }
+    );
+    await router.execute(
+      {
+        name: "exec",
+        args: {
+          command: "echo second"
+        }
+      },
+      {
+        auditId: "audit-cache-2",
+        decisionLogs: []
+      }
+    );
+
+    const cacheSize = (router as unknown as { validatorCache: Map<string, unknown> }).validatorCache.size;
+    expect(cacheSize).toBe(1);
+  });
+
+  it("bounds policy decision logs to configured limits", () => {
+    const logger = new PolicyDecisionLogger(100);
+    for (let idx = 0; idx < 1_000; idx += 1) {
+      logger.add({
+        auditId: `audit-${idx}`,
+        decision: "allow",
+        reasonCode: "ALLOWED",
+        detail: `detail-${idx}`
+      });
+    }
+    const logs = logger.getAll();
+    expect(logs.length).toBe(100);
+    expect(logs[0]?.auditId).toBe("audit-900");
   });
 });

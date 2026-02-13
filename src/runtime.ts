@@ -39,6 +39,7 @@ export interface RuntimeEvent {
 interface PendingTurn {
   runId: string;
   request: TurnRequest;
+  execute: () => Promise<TurnResult>;
   resolve: (result: TurnResult) => void;
   reject: (error: unknown) => void;
 }
@@ -112,7 +113,7 @@ export class SessionQueue {
         continue;
       }
       try {
-        const result = await runPendingTurn(item);
+        const result = await item.execute();
         item.resolve(result);
       } catch (error) {
         item.reject(error);
@@ -121,12 +122,6 @@ export class SessionQueue {
     state.running = false;
   }
 }
-
-async function runPendingTurn(turn: PendingTurn): Promise<TurnResult> {
-  return executeHandlerRegistry.get(turn.runId)?.() ?? Promise.reject(new Error("missing turn handler"));
-}
-
-const executeHandlerRegistry = new Map<string, () => Promise<TurnResult>>();
 
 export interface AgentRuntimeOptions {
   config: CursorClawConfig;
@@ -141,6 +136,13 @@ export class AgentRuntime {
   private readonly queue: SessionQueue;
   private readonly decisionLogs: PolicyDecisionLog[] = [];
   private readonly sessionHandles = new Map<string, string>();
+  private readonly metrics = {
+    turnsStarted: 0,
+    turnsCompleted: 0,
+    turnsFailed: 0,
+    toolCalls: 0
+  };
+  private readonly maxDecisionLogs = 5_000;
 
   constructor(private readonly options: AgentRuntimeOptions) {
     this.queue = new SessionQueue({
@@ -158,6 +160,15 @@ export class AgentRuntime {
     return this.queue.getWarnings();
   }
 
+  getMetrics(): {
+    turnsStarted: number;
+    turnsCompleted: number;
+    turnsFailed: number;
+    toolCalls: number;
+  } {
+    return { ...this.metrics };
+  }
+
   startTurn(request: TurnRequest): { runId: string; promise: Promise<TurnResult> } {
     const runId = randomUUID();
     const promise = this.scheduleTurn(runId, request);
@@ -173,6 +184,84 @@ export class AgentRuntime {
     const pending: PendingTurn = {
       runId,
       request,
+      execute: async () => {
+        let assistantText = "";
+        try {
+          emit("started");
+          this.metrics.turnsStarted += 1;
+          const modelSession = await this.ensureModelSession(request.session);
+          const promptMessages = await this.buildPromptMessages(request);
+          const adapterStream = this.options.adapter.sendTurn(
+            modelSession,
+            promptMessages,
+            this.options.toolRouter.list(),
+            {
+              turnId: runId,
+              timeoutMs: this.options.config.session.turnTimeoutMs
+            }
+          );
+          let emittedCount = 2;
+          for await (const event of adapterStream) {
+            if (event.type === "assistant_delta") {
+              const content = String((event.data as { content?: string })?.content ?? "");
+              assistantText += content;
+              emit("assistant", { content });
+              emittedCount += 1;
+            } else if (event.type === "tool_call") {
+              const call = event.data as ToolCall;
+              const output = await this.options.toolRouter.execute(call, {
+                auditId: runId,
+                decisionLogs: this.decisionLogs
+              });
+              this.metrics.toolCalls += 1;
+              if (this.decisionLogs.length > this.maxDecisionLogs) {
+                this.decisionLogs.splice(0, this.decisionLogs.length - this.maxDecisionLogs);
+              }
+              emit("tool", { call, output });
+              emittedCount += 1;
+            } else if (event.type === "error") {
+              throw new Error(`adapter error: ${JSON.stringify(event.data)}`);
+            } else if (event.type === "done") {
+              break;
+            }
+            if (
+              emittedCount > 0 &&
+              emittedCount % this.options.config.session.snapshotEveryEvents === 0
+            ) {
+              await this.snapshot(runId, request.session.sessionId, events);
+            }
+          }
+
+          if (assistantText.length > 3_000) {
+            if (this.options.config.compaction.memoryFlush) {
+              await this.options.memory.flushPreCompaction(request.session.sessionId);
+            }
+            emit("compaction", { reason: "assistant text exceeded 3000 chars" });
+          }
+
+          await this.options.memory.append({
+            sessionId: request.session.sessionId,
+            category: "turn-summary",
+            text: assistantText.slice(0, 500),
+            provenance: {
+              sourceChannel: request.session.channelId,
+              confidence: 0.8,
+              timestamp: new Date().toISOString(),
+              sensitivity: "operational"
+            }
+          });
+
+          emit("completed", { chars: assistantText.length });
+          this.metrics.turnsCompleted += 1;
+          await this.snapshot(runId, request.session.sessionId, events);
+          return { runId, assistantText, events };
+        } catch (error) {
+          emit("failed", { error: String(error) });
+          this.metrics.turnsFailed += 1;
+          await this.snapshot(runId, request.session.sessionId, events);
+          throw error;
+        }
+      },
       resolve: () => undefined,
       reject: () => undefined
     };
@@ -190,85 +279,7 @@ export class AgentRuntime {
     };
     emit("queued");
 
-    executeHandlerRegistry.set(runId, async () => {
-      let assistantText = "";
-      try {
-        emit("started");
-        const modelSession = await this.ensureModelSession(request.session);
-        const adapterStream = this.options.adapter.sendTurn(
-          modelSession,
-          request.messages,
-          this.options.toolRouter.list(),
-          {
-            turnId: runId,
-            timeoutMs: this.options.config.session.turnTimeoutMs
-          }
-        );
-        let emittedCount = 2;
-        for await (const event of adapterStream) {
-          if (event.type === "assistant_delta") {
-            const content = String((event.data as { content?: string })?.content ?? "");
-            assistantText += content;
-            emit("assistant", { content });
-            emittedCount += 1;
-          } else if (event.type === "tool_call") {
-            const call = event.data as ToolCall;
-            const output = await this.options.toolRouter.execute(call, {
-              auditId: runId,
-              decisionLogs: this.decisionLogs
-            });
-            emit("tool", { call, output });
-            emittedCount += 1;
-          } else if (event.type === "error") {
-            throw new Error(`adapter error: ${JSON.stringify(event.data)}`);
-          } else if (event.type === "done") {
-            break;
-          }
-          if (
-            emittedCount > 0 &&
-            emittedCount % this.options.config.session.snapshotEveryEvents === 0
-          ) {
-            await this.snapshot(runId, request.session.sessionId, events);
-          }
-        }
-
-        if (assistantText.length > 3_000) {
-          if (this.options.config.compaction.memoryFlush) {
-            await this.options.memory.flushPreCompaction(request.session.sessionId);
-          }
-          emit("compaction", { reason: "assistant text exceeded 3000 chars" });
-        }
-
-        await this.options.memory.append({
-          sessionId: request.session.sessionId,
-          category: "turn-summary",
-          text: assistantText.slice(0, 500),
-          provenance: {
-            sourceChannel: request.session.channelId,
-            confidence: 0.8,
-            timestamp: new Date().toISOString(),
-            sensitivity: "operational"
-          }
-        });
-
-        emit("completed", { chars: assistantText.length });
-        await this.snapshot(runId, request.session.sessionId, events);
-        return { runId, assistantText, events };
-      } catch (error) {
-        emit("failed", { error: String(error) });
-        await this.snapshot(runId, request.session.sessionId, events);
-        throw error;
-      }
-    });
-
-    try {
-      return this.queue.enqueue(pending).finally(() => {
-        executeHandlerRegistry.delete(runId);
-      });
-    } catch (error) {
-      executeHandlerRegistry.delete(runId);
-      throw error;
-    }
+    return this.queue.enqueue(pending);
   }
 
   private async ensureModelSession(context: SessionContext) {
@@ -309,5 +320,26 @@ export class AgentRuntime {
       ),
       "utf8"
     );
+  }
+
+  private async buildPromptMessages(request: TurnRequest): Promise<Array<{ role: string; content: string }>> {
+    const memories = await this.options.memory.retrieveForSession({
+      sessionId: request.session.sessionId,
+      allowSecret: this.options.config.memory.includeSecretsInPrompt
+    });
+    const memoryContext = memories
+      .slice(-10)
+      .map((record) => `[${record.category}] ${record.text}`)
+      .join("\n");
+    if (!memoryContext) {
+      return request.messages;
+    }
+    return [
+      {
+        role: "system",
+        content: `Relevant session memory:\n${memoryContext}`
+      },
+      ...request.messages
+    ];
   }
 }

@@ -207,6 +207,10 @@ export class CronService {
     }
   }
 
+  async flushState(): Promise<void> {
+    await this.persistState();
+  }
+
   private isDue(job: CronJobDefinition, now: number): boolean {
     if (job.nextRunAt === undefined) {
       const nextRunAt = this.computeNextRun(job, now - 1);

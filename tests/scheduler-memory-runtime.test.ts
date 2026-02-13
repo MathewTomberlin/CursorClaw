@@ -57,6 +57,16 @@ describe("scheduler, memory, and runtime", () => {
       turn: async () => "HEARTBEAT_OK"
     });
     expect(result).toBe("HEARTBEAT_OK");
+
+    const quietBudget = new AutonomyBudget({
+      maxPerHourPerChannel: 5,
+      maxPerDayPerChannel: 10,
+      quietHours: {
+        startHour: 22,
+        endHour: 6
+      }
+    });
+    expect(quietBudget.allow("chan-a", new Date("2026-02-13T23:00:00Z"))).toBe(false);
   });
 
   it("runs cron jobs with retry backoff and max concurrency", async () => {
@@ -285,5 +295,92 @@ describe("scheduler, memory, and runtime", () => {
 
     const snapshots = await readFile(join(dir, "snapshots", `session-main-${result.runId}.json`), "utf8");
     expect(snapshots).toContain(result.runId);
+  });
+
+  it("excludes secret memory from prompt assembly by default", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cursorclaw-runtime-memory-filter-"));
+    tempDirs.push(dir);
+    const config = loadConfig({
+      defaultModel: "fallback",
+      models: {
+        fallback: {
+          provider: "fallback-model",
+          timeoutMs: 5_000,
+          authProfiles: ["default"],
+          fallbackModels: [],
+          enabled: true
+        }
+      },
+      memory: {
+        includeSecretsInPrompt: false
+      }
+    });
+    const memory = new MemoryStore({ workspaceDir: dir });
+    await memory.append({
+      sessionId: "s-memory",
+      category: "profile",
+      text: "public preference tea",
+      provenance: {
+        sourceChannel: "dm:s-memory",
+        confidence: 0.9,
+        timestamp: new Date().toISOString(),
+        sensitivity: "public"
+      }
+    });
+    await memory.append({
+      sessionId: "s-memory",
+      category: "secret",
+      text: "secret-api-key-value",
+      provenance: {
+        sourceChannel: "dm:s-memory",
+        confidence: 0.9,
+        timestamp: new Date().toISOString(),
+        sensitivity: "secret"
+      }
+    });
+
+    const observedMessages: Array<Array<{ role: string; content: string }>> = [];
+    const fakeAdapter = {
+      createSession: async () => ({ id: "fake-session", model: "fallback" }),
+      sendTurn: async function* (
+        _session: { id: string; model: string },
+        messages: Array<{ role: string; content: string }>
+      ) {
+        observedMessages.push(messages);
+        yield { type: "assistant_delta", data: { content: "ok" } };
+        yield { type: "done", data: {} };
+      },
+      cancel: async () => undefined,
+      close: async () => undefined
+    } as unknown as CursorAgentModelAdapter;
+
+    const gate = new AlwaysAllowApprovalGate();
+    const tools = new ToolRouter({
+      approvalGate: gate,
+      allowedExecBins: ["echo"]
+    });
+    tools.register(createExecTool({ allowedBins: ["echo"], approvalGate: gate }));
+
+    const runtime = new AgentRuntime({
+      config,
+      adapter: fakeAdapter,
+      toolRouter: tools,
+      memory,
+      snapshotDir: join(dir, "snapshots")
+    });
+
+    await runtime.runTurn({
+      session: {
+        sessionId: "s-memory",
+        channelId: "dm:s-memory",
+        channelKind: "dm"
+      },
+      messages: [{ role: "user", content: "summarize memory context" }]
+    });
+
+    expect(observedMessages.length).toBeGreaterThanOrEqual(1);
+    const systemMessage = observedMessages[0]?.find((message) => message.role === "system")?.content ?? "";
+    expect(systemMessage).toContain("public preference tea");
+    expect(systemMessage).not.toContain("secret-api-key-value");
   });
 });
