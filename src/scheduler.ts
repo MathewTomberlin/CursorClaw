@@ -249,7 +249,7 @@ export class WorkflowRuntime {
     approval: (stepId: string) => Promise<boolean>;
   }): Promise<WorkflowState> {
     const key = `${def.id}:${args.idempotencyKey}`;
-    const existing = this.state.get(key);
+    const existing = this.state.get(key) ?? (await this.loadPersistedState(def.id, args.idempotencyKey));
     const runtimeState: WorkflowState = existing ?? {
       workflowId: def.id,
       idempotencyKey: args.idempotencyKey,
@@ -275,7 +275,39 @@ export class WorkflowRuntime {
 
   private async persist(state: WorkflowState): Promise<void> {
     await mkdir(this.stateDir, { recursive: true });
-    const file = join(this.stateDir, `${state.workflowId}-${state.idempotencyKey}.json`);
+    const file = this.getStateFile(state.workflowId, state.idempotencyKey);
     await writeFile(file, JSON.stringify(state, null, 2), "utf8");
+  }
+
+  private async loadPersistedState(
+    workflowId: string,
+    idempotencyKey: string
+  ): Promise<WorkflowState | undefined> {
+    const file = this.getStateFile(workflowId, idempotencyKey);
+    try {
+      const raw = await readFile(file, "utf8");
+      const parsed = JSON.parse(raw) as WorkflowState;
+      if (
+        parsed.workflowId !== workflowId ||
+        parsed.idempotencyKey !== idempotencyKey ||
+        !Array.isArray(parsed.completedStepIds)
+      ) {
+        throw new Error(`invalid workflow state file: ${file}`);
+      }
+      return {
+        workflowId: parsed.workflowId,
+        idempotencyKey: parsed.idempotencyKey,
+        completedStepIds: [...parsed.completedStepIds]
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  private getStateFile(workflowId: string, idempotencyKey: string): string {
+    return join(this.stateDir, `${workflowId}-${idempotencyKey}.json`);
   }
 }

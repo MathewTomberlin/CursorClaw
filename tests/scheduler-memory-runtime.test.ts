@@ -154,6 +154,50 @@ describe("scheduler, memory, and runtime", () => {
     expect(counter).toBe(2);
   });
 
+  it("resumes persisted workflow state across runtime restarts", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cursorclaw-workflow-restart-"));
+    tempDirs.push(dir);
+
+    const stepRuns: string[] = [];
+    const def = {
+      id: "wf-restart",
+      steps: [
+        {
+          id: "s1",
+          requiresApproval: false,
+          run: async () => {
+            stepRuns.push("s1");
+          }
+        },
+        {
+          id: "s2",
+          requiresApproval: true,
+          run: async () => {
+            stepRuns.push("s2");
+          }
+        }
+      ]
+    };
+
+    const firstRuntime = new WorkflowRuntime(join(dir, "state"));
+    await expect(
+      firstRuntime.run(def, {
+        idempotencyKey: "id-restart",
+        approval: async (stepId) => stepId !== "s2"
+      })
+    ).rejects.toThrow("workflow step denied: s2");
+    expect(stepRuns).toEqual(["s1"]);
+
+    const secondRuntime = new WorkflowRuntime(join(dir, "state"));
+    const resumed = await secondRuntime.run(def, {
+      idempotencyKey: "id-restart",
+      approval: async () => true
+    });
+
+    expect(resumed.completedStepIds).toEqual(["s1", "s2"]);
+    expect(stepRuns).toEqual(["s1", "s2"]);
+  });
+
   it("executes runtime lifecycle and snapshots events", async () => {
     const dir = await mkdtemp(join(tmpdir(), "cursorclaw-runtime-"));
     tempDirs.push(dir);
