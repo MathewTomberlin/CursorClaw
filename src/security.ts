@@ -174,10 +174,6 @@ function isPrivateIp(ip: string): boolean {
     // Deny IPv4-mapped IPv6 variants we cannot safely normalize.
     return true;
   }
-  const mappedV4 = parseMappedIpv4(normalized);
-  if (mappedV4 !== null) {
-    return isPrivateIpv4(mappedV4);
-  }
   if (normalized === "::1" || normalized === "::") {
     return true;
   }
