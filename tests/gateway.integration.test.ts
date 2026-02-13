@@ -349,7 +349,7 @@ describe("gateway integration", () => {
     const runId = runRes.json().result.runId as string;
 
     await new Promise((resolve) => {
-      setTimeout(resolve, 25);
+      setTimeout(resolve, 200);
     });
     await app1.close();
 
