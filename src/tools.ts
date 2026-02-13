@@ -3,7 +3,15 @@ import { promisify } from "node:util";
 
 import { Ajv, type ValidateFunction } from "ajv";
 
-import { resolveSafeFetchTarget, wrapUntrustedContent } from "./security.js";
+import type { DecisionJournal } from "./decision-journal.js";
+import { McpRegistry } from "./mcp.js";
+import { ApprovalWorkflow } from "./security/approval-workflow.js";
+import {
+  CapabilityStore,
+  type Capability,
+  requiredCapabilitiesForApproval
+} from "./security/capabilities.js";
+import { redactSecrets, resolveSafeFetchTarget, wrapUntrustedContent } from "./security.js";
 import type {
   DecisionReasonCode,
   PolicyDecisionLog,
@@ -51,6 +59,12 @@ export interface ApprovalGate {
     plan: string;
     args: unknown;
   }): Promise<boolean>;
+  getLastDenial?(): {
+    reason: string;
+    requestId?: string;
+    requiredCapabilities?: Capability[];
+  } | null;
+  supportsDestructiveApproval?(): boolean;
 }
 
 export interface PolicyApprovalGateOptions {
@@ -63,15 +77,33 @@ export class AlwaysDenyApprovalGate implements ApprovalGate {
   async approve(): Promise<boolean> {
     return false;
   }
+
+  getLastDenial(): { reason: string } {
+    return { reason: "always-deny policy gate" };
+  }
 }
 
 export class AlwaysAllowApprovalGate implements ApprovalGate {
   async approve(): Promise<boolean> {
     return true;
   }
+
+  getLastDenial(): null {
+    return null;
+  }
+
+  supportsDestructiveApproval(): boolean {
+    return false;
+  }
 }
 
 export class PolicyApprovalGate implements ApprovalGate {
+  private lastDenial: {
+    reason: string;
+    requestId?: string;
+    requiredCapabilities?: Capability[];
+  } | null = null;
+
   constructor(private readonly options: PolicyApprovalGateOptions) {}
 
   async approve(args: {
@@ -83,12 +115,94 @@ export class PolicyApprovalGate implements ApprovalGate {
     void args.plan;
     void args.args;
     if (this.options.devMode) {
+      this.lastDenial = null;
       return true;
     }
     if (args.intent === "high-risk-tool") {
-      return this.options.allowHighRiskTools;
+      const allow = this.options.allowHighRiskTools;
+      this.lastDenial = allow ? null : { reason: "high-risk tool policy blocked" };
+      return allow;
     }
-    return this.options.allowExecIntents.includes(args.intent);
+    const allow = this.options.allowExecIntents.includes(args.intent);
+    this.lastDenial = allow ? null : { reason: `intent blocked: ${args.intent}` };
+    return allow;
+  }
+
+  getLastDenial(): {
+    reason: string;
+    requestId?: string;
+    requiredCapabilities?: Capability[];
+  } | null {
+    return this.lastDenial;
+  }
+
+  supportsDestructiveApproval(): boolean {
+    return false;
+  }
+}
+
+export interface CapabilityApprovalGateOptions {
+  devMode: boolean;
+  approvalWorkflow: ApprovalWorkflow;
+  capabilityStore: CapabilityStore;
+  allowReadOnlyWithoutGrant?: boolean;
+}
+
+export class CapabilityApprovalGate implements ApprovalGate {
+  private lastDenial: {
+    reason: string;
+    requestId?: string;
+    requiredCapabilities?: Capability[];
+  } | null = null;
+
+  constructor(private readonly options: CapabilityApprovalGateOptions) {}
+
+  async approve(args: {
+    tool: string;
+    intent: ExecIntent | "high-risk-tool";
+    plan: string;
+    args: unknown;
+  }): Promise<boolean> {
+    if (this.options.devMode) {
+      this.lastDenial = null;
+      return true;
+    }
+    if ((this.options.allowReadOnlyWithoutGrant ?? true) && args.intent === "read-only") {
+      this.lastDenial = null;
+      return true;
+    }
+    const requiredCapabilities = requiredCapabilitiesForApproval(args);
+    if (requiredCapabilities.length === 0) {
+      this.lastDenial = null;
+      return true;
+    }
+    const allowed = this.options.capabilityStore.consumeRequired(
+      requiredCapabilities,
+      `${args.tool}:${args.intent}`
+    );
+    if (allowed) {
+      this.lastDenial = null;
+      return true;
+    }
+    const request = this.options.approvalWorkflow.request(args);
+    this.lastDenial = {
+      reason: "missing capability grant",
+      requestId: request.id,
+      requiredCapabilities
+    };
+    return false;
+  }
+
+  getLastDenial(): {
+    reason: string;
+    requestId?: string;
+    requiredCapabilities?: Capability[];
+  } | null {
+    return this.lastDenial;
+  }
+
+  supportsDestructiveApproval(): boolean {
+    return true;
   }
 }
 
@@ -101,6 +215,7 @@ export interface ToolRouterOptions {
   approvalGate: ApprovalGate;
   allowedExecBins: string[];
   isToolIsolationEnabled?: () => boolean;
+  decisionJournal?: DecisionJournal;
 }
 
 export class ToolRouter {
@@ -135,7 +250,7 @@ export class ToolRouter {
       throw new Error(`invalid tool args for ${call.name}`);
     }
 
-    if (tool.riskLevel === "high") {
+    if (tool.riskLevel === "high" && call.name !== "exec") {
       const approved = await this.options.approvalGate.approve({
         tool: call.name,
         intent: "high-risk-tool",
@@ -143,8 +258,12 @@ export class ToolRouter {
         args: call.args
       });
       if (!approved) {
+        const denial = this.options.approvalGate.getLastDenial?.();
+        const detail = denial?.requestId
+          ? `high-risk tool denied; requestId=${denial.requestId}`
+          : "high-risk tool denied";
         this.logDecision(context, "deny", "TOOL_APPROVAL_REQUIRED", "high-risk tool denied");
-        throw new Error("tool execution denied by approval gate");
+        throw new Error(detail);
       }
     }
 
@@ -189,6 +308,14 @@ export class ToolRouter {
       reasonCode,
       detail
     });
+    void this.options.decisionJournal?.append({
+      type: "tool-policy-decision",
+      summary: `${decision.toUpperCase()} ${reasonCode}`,
+      detail: redactSecrets(detail),
+      metadata: {
+        auditId: context.auditId
+      }
+    });
   }
 }
 
@@ -218,7 +345,20 @@ export function createExecTool(args: {
       const parsed = rawArgs as ExecToolArgs;
       const intent = classifyCommandIntent(parsed.command);
       if (isDestructiveCommand(parsed.command)) {
-        throw new Error("destructive command denied by default policy");
+        if (!(args.approvalGate.supportsDestructiveApproval?.() ?? false)) {
+          throw new Error("destructive command denied by default policy");
+        }
+        const approved = await args.approvalGate.approve({
+          tool: "exec",
+          intent: "privilege-impacting",
+          plan: "destructive command signature matched",
+          args: parsed
+        });
+        if (!approved) {
+          const denial = args.approvalGate.getLastDenial?.();
+          const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
+          throw new Error(`destructive command requires explicit approval${suffix}`);
+        }
       }
 
       const [bin, ...binArgs] = parsed.command.split(/\s+/).filter(Boolean);
@@ -233,7 +373,9 @@ export function createExecTool(args: {
           args: parsed
         });
         if (!approved) {
-          throw new Error(`bin "${bin}" denied by allowlist policy`);
+          const denial = args.approvalGate.getLastDenial?.();
+          const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
+          throw new Error(`bin "${bin}" denied by allowlist policy${suffix}`);
         }
       }
       if (intent !== "read-only") {
@@ -244,7 +386,9 @@ export function createExecTool(args: {
           args: parsed
         });
         if (!approved) {
-          throw new Error(`command intent "${intent}" requires approval`);
+          const denial = args.approvalGate.getLastDenial?.();
+          const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
+          throw new Error(`command intent "${intent}" requires approval${suffix}`);
         }
       }
       const { stdout, stderr } = await execFileAsync(bin, binArgs, {
@@ -266,7 +410,11 @@ export interface WebFetchArgs {
   url: string;
 }
 
-export function createWebFetchTool(): ToolDefinition {
+export function createWebFetchTool(args: {
+  approvalGate: ApprovalGate;
+} = {
+  approvalGate: new AlwaysAllowApprovalGate()
+}): ToolDefinition {
   return {
     name: "web_fetch",
     description: "Fetch external web content with SSRF guard and safe wrapping",
@@ -280,7 +428,18 @@ export function createWebFetchTool(): ToolDefinition {
     },
     riskLevel: "low",
     execute: async (rawArgs: unknown) => {
-      const args = rawArgs as WebFetchArgs;
+      const parsed = rawArgs as WebFetchArgs;
+      const approved = await args.approvalGate.approve({
+        tool: "web_fetch",
+        intent: "network-impacting",
+        plan: "network fetch of external content",
+        args: parsed
+      });
+      if (!approved) {
+        const denial = args.approvalGate.getLastDenial?.();
+        const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
+        throw new Error(`web_fetch requires approval${suffix}`);
+      }
       const signal = AbortSignal.timeout(10_000);
       const dnsPins = new Map<string, string>();
       const pinDnsTarget = (target: { url: URL; resolvedAddresses: string[] }): URL => {
@@ -296,7 +455,7 @@ export function createWebFetchTool(): ToolDefinition {
         dnsPins.set(host, resolvedKey);
         return target.url;
       };
-      let currentUrl = pinDnsTarget(await resolveSafeFetchTarget(args.url));
+      let currentUrl = pinDnsTarget(await resolveSafeFetchTarget(parsed.url));
       for (let redirectCount = 0; redirectCount <= WEB_FETCH_MAX_REDIRECTS; redirectCount += 1) {
         const response = await fetch(currentUrl, {
           method: "GET",
@@ -339,6 +498,99 @@ export function createWebFetchTool(): ToolDefinition {
         currentUrl = pinDnsTarget(await resolveSafeFetchTarget(redirectedUrl));
       }
       throw new Error("web_fetch did not reach a terminal response");
+    }
+  };
+}
+
+export function createMcpListResourcesTool(args: {
+  registry: McpRegistry;
+}): ToolDefinition {
+  return {
+    name: "mcp_list_resources",
+    description: "List MCP resources from configured servers",
+    schema: {
+      type: "object",
+      properties: {
+        server: { type: "string" }
+      },
+      additionalProperties: false
+    },
+    riskLevel: "low",
+    execute: async (rawArgs: unknown) => {
+      const server = (rawArgs as { server?: string })?.server;
+      return {
+        resources: await args.registry.listResources(server)
+      };
+    }
+  };
+}
+
+export function createMcpReadResourceTool(args: {
+  registry: McpRegistry;
+}): ToolDefinition {
+  return {
+    name: "mcp_read_resource",
+    description: "Read a specific MCP resource",
+    schema: {
+      type: "object",
+      properties: {
+        server: { type: "string", minLength: 1 },
+        uri: { type: "string", minLength: 1 }
+      },
+      required: ["server", "uri"],
+      additionalProperties: false
+    },
+    riskLevel: "low",
+    execute: async (rawArgs: unknown) => {
+      const parsed = rawArgs as { server: string; uri: string };
+      return args.registry.readResource({
+        server: parsed.server,
+        uri: parsed.uri
+      });
+    }
+  };
+}
+
+export function createMcpCallTool(args: {
+  registry: McpRegistry;
+  approvalGate: ApprovalGate;
+}): ToolDefinition {
+  return {
+    name: "mcp_call_tool",
+    description: "Invoke an MCP tool on a configured server",
+    schema: {
+      type: "object",
+      properties: {
+        server: { type: "string", minLength: 1 },
+        tool: { type: "string", minLength: 1 },
+        input: {}
+      },
+      required: ["server", "tool"],
+      additionalProperties: false
+    },
+    riskLevel: "high",
+    execute: async (rawArgs: unknown) => {
+      const parsed = rawArgs as {
+        server: string;
+        tool: string;
+        input?: unknown;
+      };
+      const approved = await args.approvalGate.approve({
+        tool: "mcp_call_tool",
+        intent: "network-impacting",
+        plan: `invoke MCP tool ${parsed.server}:${parsed.tool}`,
+        args: parsed
+      });
+      if (!approved) {
+        const denial = args.approvalGate.getLastDenial?.();
+        const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
+        throw new Error(`mcp_call_tool requires approval${suffix}`);
+      }
+      return args.registry.callTool({
+        server: parsed.server,
+        tool: parsed.tool,
+        input: parsed.input
+      });
     }
   };
 }

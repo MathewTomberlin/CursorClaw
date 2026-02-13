@@ -55,12 +55,35 @@ export interface MemoryConfig {
   integrityScanEveryMs: number;
 }
 
+export interface PrivacyConfig {
+  scanBeforeEgress: boolean;
+  failClosedOnScannerError: boolean;
+  detectors: string[];
+}
+
+export interface McpConfig {
+  enabled: boolean;
+  allowServers: string[];
+}
+
+export interface ReliabilityConfig {
+  failureEscalationThreshold: number;
+  checkpoint: {
+    enabled: boolean;
+    reliabilityCommands: string[];
+    commandTimeoutMs: number;
+  };
+}
+
 export interface CursorClawConfig {
   gateway: GatewayConfig;
   session: SessionConfig;
   heartbeat: HeartbeatConfig;
   compaction: CompactionConfig;
   memory: MemoryConfig;
+  privacy: PrivacyConfig;
+  mcp: McpConfig;
+  reliability: ReliabilityConfig;
   tools: ToolsConfig;
   models: Record<string, ModelProviderConfig>;
   defaultModel: string;
@@ -110,6 +133,30 @@ export const DEFAULT_CONFIG: CursorClawConfig = {
   memory: {
     includeSecretsInPrompt: false,
     integrityScanEveryMs: 60 * 60_000
+  },
+  privacy: {
+    scanBeforeEgress: true,
+    failClosedOnScannerError: true,
+    detectors: [
+      "generic-assignment",
+      "github-token",
+      "aws-access-key-id",
+      "jwt",
+      "private-key-block",
+      "high-entropy-token"
+    ]
+  },
+  mcp: {
+    enabled: true,
+    allowServers: []
+  },
+  reliability: {
+    failureEscalationThreshold: 2,
+    checkpoint: {
+      enabled: true,
+      reliabilityCommands: [],
+      commandTimeoutMs: 5 * 60_000
+    }
   },
   tools: {
     exec: {

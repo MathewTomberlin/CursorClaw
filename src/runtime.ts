@@ -3,10 +3,22 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import type { CursorClawConfig } from "./config.js";
+import type { DecisionJournal } from "./decision-journal.js";
 import type { MemoryStore } from "./memory.js";
 import type { CursorAgentModelAdapter } from "./model-adapter.js";
+import {
+  ContextAnalyzerPlugin,
+  MemoryCollectorPlugin,
+  ObservationCollectorPlugin,
+  PromptSynthesizerPlugin
+} from "./plugins/builtins.js";
+import { PluginHost } from "./plugins/host.js";
+import type { PrivacyScrubber } from "./privacy/privacy-scrubber.js";
+import type { FailureLoopGuard } from "./reliability/failure-loop.js";
+import type { GitCheckpointHandle, GitCheckpointManager } from "./reliability/git-checkpoint.js";
+import type { RuntimeObservationStore } from "./runtime-observation.js";
 import type { PolicyDecisionLog, SessionContext, ToolCall } from "./types.js";
-import { ToolRouter } from "./tools.js";
+import { ToolRouter, classifyCommandIntent } from "./tools.js";
 
 export interface TurnRequest {
   session: SessionContext;
@@ -128,12 +140,19 @@ export interface AgentRuntimeOptions {
   adapter: CursorAgentModelAdapter;
   toolRouter: ToolRouter;
   memory: MemoryStore;
+  pluginHost?: PluginHost;
+  observationStore?: RuntimeObservationStore;
+  decisionJournal?: DecisionJournal;
+  failureLoopGuard?: FailureLoopGuard;
+  gitCheckpointManager?: GitCheckpointManager;
+  privacyScrubber?: PrivacyScrubber;
   snapshotDir: string;
   onEvent?: (event: RuntimeEvent) => void;
 }
 
 export class AgentRuntime {
   private readonly queue: SessionQueue;
+  private readonly promptPluginHost: PluginHost;
   private readonly decisionLogs: PolicyDecisionLog[] = [];
   private readonly sessionHandles = new Map<string, string>();
   private readonly metrics = {
@@ -150,6 +169,13 @@ export class AgentRuntime {
       hardLimit: options.config.session.queueHardLimit,
       dropStrategy: options.config.session.queueDropStrategy
     });
+    this.promptPluginHost =
+      options.pluginHost ??
+      createDefaultPromptPluginHost({
+        memory: options.memory,
+        allowSecretMemory: options.config.memory.includeSecretsInPrompt,
+        ...(options.observationStore ? { observationStore: options.observationStore } : {})
+      });
   }
 
   getDecisionLogs(): PolicyDecisionLog[] {
@@ -185,12 +211,32 @@ export class AgentRuntime {
       runId,
       request,
       execute: async () => {
+        const scrubScopeId = `${request.session.sessionId}:${runId}`;
+        const shouldForceMultiPath =
+          this.options.failureLoopGuard?.requiresStepBack(request.session.sessionId) ?? false;
+        let checkpointHandle: GitCheckpointHandle | null = null;
         let assistantText = "";
         try {
           emit("started");
           this.metrics.turnsStarted += 1;
+          if (shouldForceMultiPath) {
+            await this.options.decisionJournal?.append({
+              type: "multi-path-escalation",
+              summary: "Forced multi-path reasoning after repeated failures",
+              metadata: {
+                runId,
+                sessionId: request.session.sessionId,
+                failureCount: this.options.failureLoopGuard?.getFailureCount(request.session.sessionId) ?? 0
+              }
+            });
+          }
           const modelSession = await this.ensureModelSession(request.session);
-          const promptMessages = await this.buildPromptMessages(request);
+          const promptMessages = await this.buildPromptMessages(
+            request,
+            runId,
+            scrubScopeId,
+            shouldForceMultiPath
+          );
           const adapterStream = this.options.adapter.sendTurn(
             modelSession,
             promptMessages,
@@ -203,21 +249,27 @@ export class AgentRuntime {
           let emittedCount = 2;
           for await (const event of adapterStream) {
             if (event.type === "assistant_delta") {
-              const content = String((event.data as { content?: string })?.content ?? "");
+              const rawContent = String((event.data as { content?: string })?.content ?? "");
+              const content = this.scrubText(rawContent, scrubScopeId);
               assistantText += content;
               emit("assistant", { content });
               emittedCount += 1;
             } else if (event.type === "tool_call") {
               const call = event.data as ToolCall;
+              if (!checkpointHandle && this.shouldCreateCheckpoint(call)) {
+                checkpointHandle = await this.options.gitCheckpointManager?.createCheckpoint(runId) ?? null;
+              }
               const output = await this.options.toolRouter.execute(call, {
                 auditId: runId,
                 decisionLogs: this.decisionLogs
               });
+              const safeCall = this.scrubUnknown(call, scrubScopeId) as ToolCall;
+              const safeOutput = this.scrubUnknown(output, scrubScopeId);
               this.metrics.toolCalls += 1;
               if (this.decisionLogs.length > this.maxDecisionLogs) {
                 this.decisionLogs.splice(0, this.decisionLogs.length - this.maxDecisionLogs);
               }
-              emit("tool", { call, output });
+              emit("tool", { call: safeCall, output: safeOutput });
               emittedCount += 1;
             } else if (event.type === "error") {
               throw new Error(`adapter error: ${JSON.stringify(event.data)}`);
@@ -230,6 +282,28 @@ export class AgentRuntime {
             ) {
               await this.snapshot(runId, request.session.sessionId, events);
             }
+          }
+
+          if (checkpointHandle && this.options.gitCheckpointManager) {
+            const check = await this.options.gitCheckpointManager.verifyReliabilityChecks();
+            if (!check.ok) {
+              await this.options.gitCheckpointManager.rollback(checkpointHandle);
+              await this.options.decisionJournal?.append({
+                type: "checkpoint-rollback",
+                summary: "Reliability checks failed after checkpointed turn",
+                ...(check.failedCommand !== undefined ? { detail: check.failedCommand } : {}),
+                metadata: {
+                  runId,
+                  sessionId: request.session.sessionId,
+                  checkpointRef: checkpointHandle.refName
+                }
+              });
+              throw new Error(
+                `reliability check failed${check.failedCommand ? ` (${check.failedCommand})` : ""}`
+              );
+            }
+            await this.options.gitCheckpointManager.cleanup(checkpointHandle);
+            checkpointHandle = null;
           }
 
           if (assistantText.length > 3_000) {
@@ -253,13 +327,42 @@ export class AgentRuntime {
 
           emit("completed", { chars: assistantText.length });
           this.metrics.turnsCompleted += 1;
+          this.options.failureLoopGuard?.recordSuccess(request.session.sessionId);
           await this.snapshot(runId, request.session.sessionId, events);
           return { runId, assistantText, events };
         } catch (error) {
-          emit("failed", { error: String(error) });
+          const safeError = this.scrubText(String(error), scrubScopeId);
+          emit("failed", { error: safeError });
           this.metrics.turnsFailed += 1;
+          this.options.failureLoopGuard?.recordFailure(request.session.sessionId, error);
+          await this.options.observationStore?.append({
+            sessionId: request.session.sessionId,
+            source: "runtime",
+            kind: "turn-failure",
+            sensitivity: "operational",
+            payload: {
+              runId,
+              error: safeError
+            }
+          });
+          await this.options.decisionJournal?.append({
+            type: "turn-failure",
+            summary: "Turn failed",
+            detail: safeError,
+            metadata: {
+              runId,
+              sessionId: request.session.sessionId
+            }
+          });
+          if (checkpointHandle && this.options.gitCheckpointManager) {
+            await this.options.gitCheckpointManager.rollback(checkpointHandle);
+            await this.options.gitCheckpointManager.cleanup(checkpointHandle);
+            checkpointHandle = null;
+          }
           await this.snapshot(runId, request.session.sessionId, events);
           throw error;
+        } finally {
+          this.options.privacyScrubber?.clearScope(scrubScopeId);
         }
       },
       resolve: () => undefined,
@@ -322,24 +425,144 @@ export class AgentRuntime {
     );
   }
 
-  private async buildPromptMessages(request: TurnRequest): Promise<Array<{ role: string; content: string }>> {
-    const memories = await this.options.memory.retrieveForSession({
-      sessionId: request.session.sessionId,
-      allowSecret: this.options.config.memory.includeSecretsInPrompt
-    });
-    const memoryContext = memories
-      .slice(-10)
-      .map((record) => `[${record.category}] ${record.text}`)
-      .join("\n");
-    if (!memoryContext) {
-      return request.messages;
-    }
-    return [
-      {
+  private async buildPromptMessages(
+    request: TurnRequest,
+    runId: string,
+    scopeId: string,
+    forceMultiPathReasoning: boolean
+  ): Promise<Array<{ role: string; content: string }>> {
+    const userMessages = request.messages.map((message) => ({
+      role: message.role,
+      content: this.scrubText(message.content, scopeId)
+    }));
+    const systemMessages: Array<{ role: string; content: string }> = [];
+
+    if (forceMultiPathReasoning) {
+      systemMessages.push({
         role: "system",
-        content: `Relevant session memory:\n${memoryContext}`
-      },
-      ...request.messages
-    ];
+        content: this.scrubText(
+          [
+            "Reliability escalation is active.",
+            "Before proposing a fix, step back and provide three distinct architectural hypotheses.",
+            "Then choose one with explicit verification signals and execute only that selected path."
+          ].join(" "),
+          scopeId
+        )
+      });
+    }
+
+    if (this.options.decisionJournal) {
+      const recentDecisions = await this.options.decisionJournal.readRecent(5);
+      if (recentDecisions.length > 0) {
+        systemMessages.push({
+          role: "system",
+          content: this.scrubText(
+            [
+              "Recent decision journal context:",
+              ...recentDecisions,
+              "Maintain rationale continuity unless new runtime evidence contradicts prior decisions."
+            ].join("\n"),
+            scopeId
+          )
+        });
+      }
+    }
+
+    const pluginResult = await this.promptPluginHost.run({
+      runId,
+      sessionId: request.session.sessionId,
+      inputMessages: userMessages
+    });
+    for (const message of pluginResult.messages) {
+      systemMessages.push({
+        role: message.role,
+        content: this.scrubText(message.content, scopeId)
+      });
+    }
+    if (pluginResult.diagnostics.length > 0) {
+      await this.options.observationStore?.append({
+        sessionId: request.session.sessionId,
+        source: "plugin-host",
+        kind: "plugin-diagnostics",
+        sensitivity: "operational",
+        payload: {
+          runId,
+          diagnostics: pluginResult.diagnostics
+        }
+      });
+    }
+
+    const boundedSystemMessages = this.applySystemPromptBudget(systemMessages);
+    return [...boundedSystemMessages, ...userMessages];
   }
+
+  private scrubText(text: string, scopeId: string): string {
+    const scrubber = this.options.privacyScrubber;
+    if (!scrubber) {
+      return text;
+    }
+    return scrubber.scrubText({ text, scopeId }).text;
+  }
+
+  private scrubUnknown(value: unknown, scopeId: string): unknown {
+    const scrubber = this.options.privacyScrubber;
+    if (!scrubber) {
+      return value;
+    }
+    return scrubber.scrubUnknown(value, scopeId);
+  }
+
+  private shouldCreateCheckpoint(call: ToolCall): boolean {
+    if (!this.options.gitCheckpointManager) {
+      return false;
+    }
+    if (call.name !== "exec") {
+      return call.name === "mcp_call_tool";
+    }
+    const parsed = call.args as { command?: string };
+    if (!parsed.command) {
+      return false;
+    }
+    const intent = classifyCommandIntent(parsed.command);
+    return intent !== "read-only";
+  }
+
+  private applySystemPromptBudget(messages: Array<{ role: string; content: string }>): Array<{ role: string; content: string }> {
+    const perMessageMax = this.options.config.session.maxMessageChars;
+    const totalSystemBudget = Math.max(perMessageMax, Math.floor(perMessageMax * 1.5));
+    let remaining = totalSystemBudget;
+    const out: Array<{ role: string; content: string }> = [];
+    for (const message of messages) {
+      if (remaining <= 0) {
+        break;
+      }
+      const bounded = message.content.slice(0, Math.min(perMessageMax, remaining));
+      if (bounded.length === 0) {
+        continue;
+      }
+      out.push({
+        role: message.role,
+        content: bounded
+      });
+      remaining -= bounded.length;
+    }
+    return out;
+  }
+}
+
+function createDefaultPromptPluginHost(args: {
+  memory: MemoryStore;
+  allowSecretMemory: boolean;
+  observationStore?: RuntimeObservationStore;
+}): PluginHost {
+  const host = new PluginHost({
+    defaultTimeoutMs: 2_000
+  });
+  host.registerCollector(new MemoryCollectorPlugin(args.memory, args.allowSecretMemory));
+  if (args.observationStore) {
+    host.registerCollector(new ObservationCollectorPlugin(args.observationStore));
+  }
+  host.registerAnalyzer(new ContextAnalyzerPlugin());
+  host.registerSynthesizer(new PromptSynthesizerPlugin());
+  return host;
 }

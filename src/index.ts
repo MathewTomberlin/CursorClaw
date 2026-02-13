@@ -8,10 +8,30 @@ import {
 } from "./channels.js";
 import { AutonomyStateStore } from "./autonomy-state.js";
 import { buildGateway } from "./gateway.js";
+import { DecisionJournal } from "./decision-journal.js";
 import { MemoryStore } from "./memory.js";
+import { InMemoryMcpServerAdapter, McpRegistry } from "./mcp.js";
 import { CursorAgentModelAdapter } from "./model-adapter.js";
+import {
+  ContextAnalyzerPlugin,
+  MemoryCollectorPlugin,
+  ObservationCollectorPlugin,
+  PromptSynthesizerPlugin
+} from "./plugins/builtins.js";
+import { PluginHost } from "./plugins/host.js";
+import { ProactiveSuggestionEngine } from "./proactive-suggestions.js";
+import {
+  PrivacyScrubber
+} from "./privacy/privacy-scrubber.js";
+import {
+  DEFAULT_SECRET_SCANNER_DETECTORS,
+  type SecretDetectorName
+} from "./privacy/secret-scanner.js";
 import { RunStore } from "./run-store.js";
 import { AgentRuntime } from "./runtime.js";
+import { FailureLoopGuard } from "./reliability/failure-loop.js";
+import { GitCheckpointManager } from "./reliability/git-checkpoint.js";
+import { RuntimeObservationStore } from "./runtime-observation.js";
 import { AutonomyBudget, CronService, HeartbeatRunner, WorkflowRuntime } from "./scheduler.js";
 import {
   BehaviorPolicyEngine,
@@ -20,12 +40,23 @@ import {
   PresenceManager,
   TypingPolicy
 } from "./responsiveness.js";
+import { ApprovalWorkflow } from "./security/approval-workflow.js";
+import { CapabilityStore } from "./security/capabilities.js";
 import { AuthService, IncidentCommander, MethodRateLimiter, PolicyDecisionLogger } from "./security.js";
-import { PolicyApprovalGate, ToolRouter, createExecTool, createWebFetchTool } from "./tools.js";
+import {
+  CapabilityApprovalGate,
+  ToolRouter,
+  createExecTool,
+  createMcpCallTool,
+  createMcpListResourcesTool,
+  createMcpReadResourceTool,
+  createWebFetchTool
+} from "./tools.js";
 import { isDevMode, loadConfigFromDisk, validateStartupConfig } from "./config.js";
 import { AutonomyOrchestrator } from "./orchestrator.js";
 
 const STRICT_EXEC_BINS = new Set(["echo", "pwd", "ls", "cat", "node"]);
+const VALID_SECRET_DETECTORS = new Set(DEFAULT_SECRET_SCANNER_DETECTORS);
 
 function resolveAllowedExecBins(args: {
   bins: string[];
@@ -50,19 +81,60 @@ async function main(): Promise<void> {
     allowInsecureDefaults: devMode
   });
   const incidentCommander = new IncidentCommander();
+  const decisionJournal = new DecisionJournal({
+    path: join(workspaceDir, "CLAW_HISTORY.log"),
+    maxBytes: 5 * 1024 * 1024
+  });
+  const observationStore = new RuntimeObservationStore({
+    maxEvents: 5_000,
+    stateFile: join(workspaceDir, "tmp", "observations.json")
+  });
+  await observationStore.load();
 
   const memory = new MemoryStore({ workspaceDir });
+  const configuredDetectors = config.privacy.detectors.filter(
+    (detector): detector is SecretDetectorName => VALID_SECRET_DETECTORS.has(detector as SecretDetectorName)
+  );
+  const privacyScrubber = new PrivacyScrubber({
+    enabled: config.privacy.scanBeforeEgress,
+    failClosedOnError: devMode ? config.privacy.failClosedOnScannerError : true,
+    detectors: configuredDetectors.length > 0 ? configuredDetectors : DEFAULT_SECRET_SCANNER_DETECTORS
+  });
   const adapter = new CursorAgentModelAdapter({
     models: config.models,
     defaultModel: config.defaultModel
   });
+  const pluginHost = new PluginHost({
+    defaultTimeoutMs: 2_500
+  });
+  pluginHost.registerCollector(new MemoryCollectorPlugin(memory, config.memory.includeSecretsInPrompt));
+  pluginHost.registerCollector(new ObservationCollectorPlugin(observationStore));
+  pluginHost.registerAnalyzer(new ContextAnalyzerPlugin());
+  pluginHost.registerSynthesizer(new PromptSynthesizerPlugin());
+  const mcpRegistry = new McpRegistry({
+    allowedServers: config.mcp.allowServers
+  });
+  const localMcpServer = new InMemoryMcpServerAdapter("local");
+  localMcpServer.defineResource(
+    "cursorclaw://status",
+    "CursorClaw local MCP status resource.",
+    "text/plain",
+    "status"
+  );
+  localMcpServer.defineTool("echo", async (args) => ({ echoed: args }));
+  mcpRegistry.register(localMcpServer);
 
-  const allowExecIntents =
-    config.tools.exec.ask === "always" ? [] : (["read-only"] as const);
-  const approvalGate = new PolicyApprovalGate({
+  const capabilityStore = new CapabilityStore();
+  const approvalWorkflow = new ApprovalWorkflow({
+    capabilityStore,
+    defaultGrantTtlMs: 10 * 60_000,
+    defaultGrantUses: 1
+  });
+  const approvalGate = new CapabilityApprovalGate({
     devMode,
-    allowHighRiskTools: false,
-    allowExecIntents: [...allowExecIntents]
+    approvalWorkflow,
+    capabilityStore,
+    allowReadOnlyWithoutGrant: config.tools.exec.ask !== "always"
   });
   const allowedExecBins = resolveAllowedExecBins({
     bins: config.tools.exec.allowBins,
@@ -72,16 +144,39 @@ async function main(): Promise<void> {
   const toolRouter = new ToolRouter({
     approvalGate,
     allowedExecBins,
-    isToolIsolationEnabled: () => incidentCommander.isToolIsolationEnabled()
+    isToolIsolationEnabled: () => incidentCommander.isToolIsolationEnabled(),
+    decisionJournal
   });
   toolRouter.register(createExecTool({ allowedBins: allowedExecBins, approvalGate }));
-  toolRouter.register(createWebFetchTool());
+  toolRouter.register(createWebFetchTool({ approvalGate }));
+  if (config.mcp.enabled) {
+    toolRouter.register(createMcpListResourcesTool({ registry: mcpRegistry }));
+    toolRouter.register(createMcpReadResourceTool({ registry: mcpRegistry }));
+    toolRouter.register(createMcpCallTool({ registry: mcpRegistry, approvalGate }));
+  }
 
   const runtime = new AgentRuntime({
     config,
     adapter,
     toolRouter,
     memory,
+    pluginHost,
+    observationStore,
+    decisionJournal,
+    failureLoopGuard: new FailureLoopGuard({
+      escalationThreshold: config.reliability.failureEscalationThreshold
+    }),
+    ...(config.reliability.checkpoint.enabled
+      ? {
+          gitCheckpointManager: new GitCheckpointManager({
+            workspaceDir,
+            reliabilityCheckCommands: config.reliability.checkpoint.reliabilityCommands,
+            commandTimeoutMs: config.reliability.checkpoint.commandTimeoutMs,
+            decisionJournal
+          })
+        }
+      : {}),
+    privacyScrubber,
     snapshotDir: join(workspaceDir, "tmp", "snapshots")
   });
 
@@ -147,6 +242,8 @@ async function main(): Promise<void> {
   }
   channelHub.register(new SlackChannelAdapter(slackConfig));
   channelHub.register(new LocalEchoChannelAdapter());
+  const suggestionEngine = new ProactiveSuggestionEngine();
+  let orchestratorRef: AutonomyOrchestrator | null = null;
   const gateway = buildGateway({
     config,
     runtime,
@@ -157,7 +254,37 @@ async function main(): Promise<void> {
     rateLimiter,
     policyLogs,
     incidentCommander,
-    behavior
+    behavior,
+    approvalWorkflow,
+    capabilityStore,
+    onFileChangeSuggestions: async ({ channelId, files, enqueue }) => {
+      const suggestionResult = suggestionEngine.suggestForChannel(channelId, { files });
+      const suggestions = suggestionResult.suggestions;
+      let queued = 0;
+      if (enqueue && orchestratorRef && suggestions.length > 0 && !incidentCommander.isProactiveSendsDisabled()) {
+        for (const suggestion of suggestions) {
+          await orchestratorRef.queueProactiveIntent({
+            channelId,
+            text: suggestion
+          });
+          queued += 1;
+        }
+      }
+      await decisionJournal.append({
+        type: "file-change-suggestions",
+        summary: `Generated ${suggestions.length} proactive suggestions`,
+        metadata: {
+          channelId,
+          files,
+          queued,
+          throttled: suggestionResult.throttled
+        }
+      });
+      return {
+        suggestions,
+        queued
+      };
+    }
   });
 
   const port = Number.parseInt(process.env.PORT ?? "8787", 10);
@@ -220,6 +347,7 @@ async function main(): Promise<void> {
       return delivered.delivered;
     }
   });
+  orchestratorRef = orchestrator;
   orchestrator.start();
 
   let shuttingDown = false;
