@@ -109,4 +109,56 @@ describe("config security startup rules", () => {
     expect(config.gateway.bodyLimitBytes).toBe(12345);
     expect(config.tools.exec.profile).toBe("developer");
   });
+
+  it("prefers explicit configPath over env and cwd defaults", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cursorclaw-config-path-option-"));
+    tempDirs.push(dir);
+    const explicitPath = join(dir, "explicit.json");
+    const envPath = join(dir, "env.json");
+    await writeFile(
+      explicitPath,
+      JSON.stringify({
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "explicit-token"
+          },
+          bodyLimitBytes: 33333
+        }
+      }),
+      "utf8"
+    );
+    await writeFile(
+      envPath,
+      JSON.stringify({
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "env-token"
+          },
+          bodyLimitBytes: 22222
+        }
+      }),
+      "utf8"
+    );
+
+    const resolvedPath = resolveConfigPath({
+      configPath: explicitPath,
+      cwd: "/definitely/missing-path",
+      env: {
+        CURSORCLAW_CONFIG_PATH: envPath
+      } as NodeJS.ProcessEnv
+    });
+    expect(resolvedPath).toBe(explicitPath);
+
+    const config = loadConfigFromDisk({
+      configPath: explicitPath,
+      cwd: "/definitely/missing-path",
+      env: {
+        CURSORCLAW_CONFIG_PATH: envPath
+      } as NodeJS.ProcessEnv
+    });
+    expect(config.gateway.auth.token).toBe("explicit-token");
+    expect(config.gateway.bodyLimitBytes).toBe(33333);
+  });
 });

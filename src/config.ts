@@ -187,6 +187,9 @@ function isLiteralNullishToken(value: string | undefined): boolean {
 }
 
 export function resolveConfigPath(options: LoadConfigFromDiskOptions = {}): string {
+  if (options.configPath !== undefined) {
+    return options.configPath;
+  }
   const env = options.env ?? process.env;
   if (env.CURSORCLAW_CONFIG_PATH) {
     return env.CURSORCLAW_CONFIG_PATH;
