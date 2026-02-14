@@ -3,3 +3,8 @@ dist/
 coverage/
 *.log
 tmp/
+
+# Runtime config contains secrets — never commit
+openclaw.json
+.env
+.env.local

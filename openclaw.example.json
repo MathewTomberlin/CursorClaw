@@ -1,0 +1,30 @@
+{
+  "gateway": {
+    "bind": "loopback",
+    "protocolVersion": "2.0",
+    "auth": {
+      "mode": "token",
+      "token": "REPLACE-WITH-STRONG-RANDOM-TOKEN"
+    },
+    "trustedProxyIps": []
+  },
+  "defaultModel": "fallback-default",
+  "models": {
+    "fallback-default": {
+      "provider": "fallback-model",
+      "timeoutMs": 120000,
+      "authProfiles": ["default"],
+      "fallbackModels": [],
+      "enabled": true
+    }
+  },
+  "mcp": { "enabled": true, "allowServers": [] },
+  "contextCompression": {
+    "semanticRetrievalEnabled": true,
+    "topK": 8
+  },
+  "privacy": {
+    "scanBeforeEgress": true,
+    "failClosedOnScannerError": true
+  }
+}

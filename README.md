@@ -12,6 +12,8 @@ CursorClaw is a security-first autonomous agent runtime with:
 
 ## Documentation
 
+**First-time setup:** see **[RUNBOOK.md](./RUNBOOK.md)** for step-by-step secure setup and running.
+
 Start here:
 
 - [Documentation Index](./docs/README.md)
