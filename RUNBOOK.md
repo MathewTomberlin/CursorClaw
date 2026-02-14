@@ -85,9 +85,13 @@ npm run security:audit
 
 ## Step 4 — Start the runtime
 
+From the **same directory** that contains your `openclaw.json` (or set `$env:CURSORCLAW_CONFIG_PATH` to its full path before starting):
+
 ```powershell
 npm start
 ```
+
+On startup you should see a line like: `[CursorClaw] config: C:\...\openclaw.json | gateway auth token length: 44`. Use that to confirm which config file is loaded and that the token length matches what you'll send in requests.
 
 Default:
 
@@ -120,15 +124,22 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8787/status" | ConvertTo-Json -Depth 5
 
 ## Step 6 — First authenticated RPC call
 
-Set your token (same value as in `openclaw.json`):
+Set your token to the **exact** value in `openclaw.json` under `gateway.auth.token` (not the placeholder):
 
 ```powershell
-$env:TOKEN = "your-strong-token-here"
+$env:TOKEN = "paste-your-actual-token-from-openclaw-json-here"
+```
+
+Verify it’s set (optional; doesn’t print the secret):
+
+```powershell
+if (-not $env:TOKEN) { Write-Warning "TOKEN is not set" } else { Write-Host "Token is set ($($env:TOKEN.Length) chars)" }
 ```
 
 **Send a chat message (`chat.send`):**
 
 ```powershell
+$headers = @{ Authorization = "Bearer $env:TOKEN" }
 $body = @{
   id     = "1"
   version = "2.0"
@@ -139,15 +150,12 @@ $body = @{
   }
 } | ConvertTo-Json -Depth 5
 
-Invoke-RestMethod -Uri "http://127.0.0.1:8787/rpc" -Method Post `
-  -ContentType "application/json" `
-  -Headers @{ Authorization = "Bearer $env:TOKEN" } `
-  -Body $body
+Invoke-RestMethod -Uri "http://127.0.0.1:8787/rpc" -Method Post -ContentType "application/json" -Headers $headers -Body $body
 ```
 
 **Run an agent turn (`agent.run` + `agent.wait`):**
 
-1. Create a run (capture `runId` from the response):
+1. Create a run (capture `runId` from the response). Use the same `$headers` from the chat.send step (or set `$headers = @{ Authorization = "Bearer $env:TOKEN" }` again):
 
    ```powershell
    $runBody = @{
@@ -165,22 +173,33 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8787/rpc" -Method Post `
      }
    } | ConvertTo-Json -Depth 6
 
-   $runResp = Invoke-RestMethod -Uri "http://127.0.0.1:8787/rpc" -Method Post `
-     -ContentType "application/json" `
-     -Headers @{ Authorization = "Bearer $env:TOKEN" } `
-     -Body $runBody
-
+   $runResp = Invoke-RestMethod -Uri "http://127.0.0.1:8787/rpc" -Method Post -ContentType "application/json" -Headers $headers -Body $runBody
    $runId = $runResp.result.runId
    ```
 
-2. Wait for completion:
+2. Wait for completion and **read the agent response**:
 
    ```powershell
    $waitBody = @{ version = "2.0"; method = "agent.wait"; params = @{ runId = $runId } } | ConvertTo-Json
-   Invoke-RestMethod -Uri "http://127.0.0.1:8787/rpc" -Method Post `
-     -ContentType "application/json" `
-     -Headers @{ Authorization = "Bearer $env:TOKEN" } `
-     -Body $waitBody
+   $waitResp = Invoke-RestMethod -Uri "http://127.0.0.1:8787/rpc" -Method Post -ContentType "application/json" -Headers $headers -Body $waitBody
+   ```
+
+   The agent’s reply is in the **`result`** of the wait response:
+
+   - **`$waitResp.result.assistantText`** — the assistant’s reply text (this is what you want to see).
+   - `$waitResp.result.events` — turn events (queued, started, tool, assistant, completed, etc.).
+   - `$waitResp.result.runId` — same run id.
+
+   To print the agent’s reply in the console:
+
+   ```powershell
+   $waitResp.result.assistantText
+   ```
+
+   To see the full result (including events) as JSON:
+
+   ```powershell
+   $waitResp.result | ConvertTo-Json -Depth 5
    ```
 
 ---
@@ -195,7 +214,45 @@ Edit `openclaw.json` as needed. Key sections:
 | **Semantic context** | `contextCompression.semanticRetrievalEnabled: true`, `topK` | Already in example |
 | **Reflection jobs** | `reflection.enabled: true`, `idleAfterMs`, `tickMs`, `flakyTestCommand` | Runs background checks when idle |
 | **Exec tool (dev)** | `tools.exec.profile: "developer"`, `tools.exec.allowBins` | Only on loopback/dev; strict profile is safer |
-| **Cursor model** | Add `cursor-auto` model with `cursor-agent-cli` | See [Configuration Reference](docs/configuration-reference.md) § 4.14 and § 6 |
+| **Cursor model** | Add `cursor-auto` model with `cursor-agent-cli` | See below. |
+
+### Using your local Cursor-Agent CLI
+
+To use your local **Cursor-Agent CLI** (real model) instead of the fallback, add a `cursor-auto` model and set it as default.
+
+1. **Ensure the CLI is available.** The adapter spawns a process; the executable must be on your `PATH`, or you must set `command` to the full path (e.g. `C:\path\to\cursor-agent.exe` or `/usr/local/bin/cursor-agent`).
+
+2. **In `openclaw.json`, set `defaultModel` and add the model entry:**
+
+   ```json
+   "defaultModel": "cursor-auto",
+   "models": {
+     "cursor-auto": {
+       "provider": "cursor-agent-cli",
+       "command": "cursor-agent",
+       "args": ["auto", "--stream-json"],
+       "timeoutMs": 600000,
+       "authProfiles": ["default"],
+       "fallbackModels": ["fallback-default"],
+       "enabled": true
+     },
+     "fallback-default": {
+       "provider": "fallback-model",
+       "timeoutMs": 120000,
+       "authProfiles": ["default"],
+       "fallbackModels": [],
+       "enabled": true
+     }
+   }
+   ```
+
+   - **`command`** — Executable name if on `PATH` (e.g. `"cursor-agent"`), or full path. On Windows you can point to `cursor-agent.cmd` or `cursor-agent.bat`; CursorClaw will run them via `cmd.exe /c` so they don’t cause spawn errors.
+   - **`args`** — Must include `"--stream-json"` so the adapter can read NDJSON events from stdout. `"auto"` is the typical first argument; use whatever your CLI expects.
+   - **`fallbackModels`** — If the CLI fails (auth, timeout, crash), CursorClaw will try `fallback-default` automatically.
+
+3. **Restart CursorClaw** after changing config. Then run an `agent.run` / `agent.wait`; the turn will use the CLI and you should see real model output in `result.assistantText`.
+
+The CLI must follow the [Cursor-Agent Adapter Contract](docs/cursor-agent-adapter.md): it receives a JSON turn on stdin and emits NDJSON events on stdout (`assistant_delta`, `tool_call`, `done`, etc.).
 
 For a **production-like** setup:
 
@@ -233,12 +290,18 @@ These are normal; add `tmp/` and log paths to backup/exclusion rules as needed.
 | Health | `GET http://127.0.0.1:8787/health` |
 | Status | `GET http://127.0.0.1:8787/status` |
 | RPC | `POST http://127.0.0.1:8787/rpc` with `Authorization: Bearer <token>` |
+| Agent reply after `agent.wait` | In the response: `$waitResp.result.assistantText` |
 
 ---
 
 ## Troubleshooting
 
-- **401 AUTH_MISSING / AUTH_INVALID** — Use `Authorization: Bearer <token>` with the same value as in `openclaw.json`.
+- **401 AUTH_MISSING** — No token was sent. Set `$env:TOKEN` and use `-Headers @{ Authorization = "Bearer $env:TOKEN" }` (or the `$headers` variable from Step 6).
+- **401 AUTH_INVALID** — The token in the request does not match the server. Do this:
+  1. **Same config for server and client:** The server loads `openclaw.json` from the directory where you ran `npm start` (or from `CURSORCLAW_CONFIG_PATH` if set). When you start the server, check the first log line: `[CursorClaw] config: <path> | gateway auth token length: N`. The path must be the same file you edit, and N must match your token length (e.g. 44). If you use a different folder (e.g. `CursorClaw_Dev` vs `CursorClaw`), start the server from the folder that has the `openclaw.json` you edited, or set `$env:CURSORCLAW_CONFIG_PATH = "C:\full\path\to\openclaw.json"` **before** running `npm start`.
+  2. Open that same `openclaw.json` and copy the value of `gateway.auth.token` (the whole string, no extra spaces or newlines).
+  3. In the **same** PowerShell session where you run `Invoke-RestMethod`, run: `$env:TOKEN = "paste-that-value-here"`.
+  4. Run the RPC command again. Do not use the placeholder `"your-strong-token-here"`; use the real token from the file.
 - **Startup rejects config** — Ensure token is not `changeme`, `undefined`, or `null`.
 - **400 PROTO_VERSION_UNSUPPORTED** — Send `"version": "2.0"` in RPC JSON.
 - **Tool execution blocked** — Check approval/capability policy or incident mode; see [Configuration Reference](docs/configuration-reference.md) and [RPC API Reference](docs/rpc-api-reference.md).

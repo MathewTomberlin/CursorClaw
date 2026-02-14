@@ -66,7 +66,7 @@ import {
   createMcpReadResourceTool,
   createWebFetchTool
 } from "./tools.js";
-import { isDevMode, loadConfigFromDisk, validateStartupConfig } from "./config.js";
+import { isDevMode, loadConfigFromDisk, validateStartupConfig, resolveConfigPath } from "./config.js";
 import { AutonomyOrchestrator } from "./orchestrator.js";
 import { WorkspaceCatalog } from "./workspaces/catalog.js";
 import { MultiRootIndexer } from "./workspaces/multi-root-indexer.js";
@@ -91,7 +91,11 @@ function resolveAllowedExecBins(args: {
 
 async function main(): Promise<void> {
   const workspaceDir = process.cwd();
+  const configPath = resolveConfigPath({ cwd: workspaceDir });
   const config = loadConfigFromDisk({ cwd: workspaceDir });
+  const tokenLen = config.gateway.auth.token?.length ?? config.gateway.auth.password?.length ?? 0;
+  // eslint-disable-next-line no-console
+  console.log("[CursorClaw] config:", configPath, "| gateway auth token length:", tokenLen);
   const devMode = isDevMode();
   validateStartupConfig(config, {
     allowInsecureDefaults: devMode

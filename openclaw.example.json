@@ -4,7 +4,7 @@
     "protocolVersion": "2.0",
     "auth": {
       "mode": "token",
-      "token": "REPLACE-WITH-STRONG-RANDOM-TOKEN"
+      "token": "dlTrT4NhRhdcHkNGHC6zCyzSqqlfvzJXFLYjmxQ+03A="
     },
     "trustedProxyIps": []
   },

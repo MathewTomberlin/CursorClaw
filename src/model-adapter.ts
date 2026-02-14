@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
+import { platform } from "node:os";
 import { Ajv, type ValidateFunction } from "ajv";
 
 import { redactSecrets } from "./security.js";
@@ -144,6 +145,18 @@ export class CursorAgentModelAdapter implements ModelAdapter {
     yield { type: "done", data: { fallback: true, model: modelName } };
   }
 
+  /**
+   * On Windows, .cmd/.bat files cannot be spawned directly (EINVAL). Run them via cmd.exe /c.
+   */
+  private resolveSpawnCommand(command: string, args: string[]): { command: string; args: string[] } {
+    const isWindows = platform() === "win32";
+    const lower = command.toLowerCase();
+    if (isWindows && (lower.endsWith(".cmd") || lower.endsWith(".bat"))) {
+      return { command: "cmd.exe", args: ["/c", command, ...args] };
+    }
+    return { command, args };
+  }
+
   private async *streamViaCli(
     modelName: string,
     authProfile: string,
@@ -156,7 +169,8 @@ export class CursorAgentModelAdapter implements ModelAdapter {
       throw new Error(`model config missing command: ${modelName}`);
     }
     const timeoutMs = options.timeoutMs ?? modelConfig.timeoutMs;
-    const child = spawn(modelConfig.command, modelConfig.args ?? [], {
+    const { command, args } = this.resolveSpawnCommand(modelConfig.command, modelConfig.args ?? []);
+    const child = spawn(command, args, {
       env: {
         PATH: process.env.PATH ?? "",
         HOME: process.env.HOME ?? "",
