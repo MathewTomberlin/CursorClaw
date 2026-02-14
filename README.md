@@ -1,15 +1,25 @@
 # CursorClaw
 
-CursorClaw is a security-first autonomous agent runtime that follows
-`OPENCLAW_ARCHITECTURE_ANALYSIS.md` and implements:
+CursorClaw is a security-first autonomous agent runtime with:
 
-- Gateway control plane with typed RPC, auth, rate limits, risk scoring, and audit IDs.
-- Session-ordered turn runtime with lifecycle events and crash snapshots.
-- Cursor-Agent CLI adapter (stream parser, cancellation, timeout watchdog, fallback strategy).
-- Scheduler stack (heartbeat + cron + deterministic workflow runtime).
-- Memory model (markdown durable store, provenance + sensitivity labels, secret filtering).
-- Tool safety (schema validation, SSRF guard, exec intent classifier, approval gates).
-- Responsiveness behavior policies (typing/presence/pacing/greeting).
+- a guarded RPC gateway (`/rpc`) with auth, role scopes, rate limits, and risk scoring
+- queued session turn execution with lifecycle event snapshots
+- policy-gated tools (`exec`, `web_fetch`, MCP tools) with approval/capability flows
+- privacy-first prompt/tool scrubbing for secret-like content
+- autonomy orchestration (cron, heartbeat, workflows, proactive intents)
+- semantic workspace indexing and context compression
+- reflection/reliability controls (failure-loop detection, reasoning reset, checkpoints, confidence gating)
+
+## Documentation
+
+Start here:
+
+- [Documentation Index](./docs/README.md)
+- [Getting Started](./docs/getting-started.md)
+- [Configuration Reference](./docs/configuration-reference.md)
+- [RPC API Reference](./docs/rpc-api-reference.md)
+- [Codebase Reference](./docs/codebase-reference.md)
+- [Cursor-Agent Adapter Contract](./docs/cursor-agent-adapter.md)
 
 ## Quick Start
 
@@ -18,7 +28,12 @@ npm install
 npm test
 npm run build
 npm run security:audit
+```
+
+Create `openclaw.json` with secure credentials (example in `docs/getting-started.md`), then run:
+
+```bash
 npm start
 ```
 
-Default gateway listen address is `127.0.0.1:8787`.
+Default gateway bind: `127.0.0.1:8787` (unless config/environment overrides).
