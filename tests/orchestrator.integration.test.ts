@@ -241,8 +241,48 @@ describe("autonomy orchestrator integration", () => {
 
     orchestrator.start();
     await vi.advanceTimersByTimeAsync(250);
+    for (let i = 0; i < 10; i++) {
+      await Promise.resolve();
+    }
     await orchestrator.stop();
     expect(scanCount).toBeGreaterThanOrEqual(1);
     expect(orchestrator.getState().latestIntegrityFindings.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("integrityScan returns expected shape (contradiction and staleness)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cursorclaw-integrity-shape-"));
+    tempDirs.push(dir);
+    const memory = new MemoryStore({ workspaceDir: dir });
+    await memory.append({
+      sessionId: "s1",
+      category: "cat",
+      text: "first",
+      provenance: {
+        sourceChannel: "ch",
+        confidence: 1,
+        timestamp: new Date().toISOString(),
+        sensitivity: "public"
+      }
+    });
+    await memory.append({
+      sessionId: "s1",
+      category: "cat",
+      text: "second",
+      provenance: {
+        sourceChannel: "ch",
+        confidence: 1,
+        timestamp: new Date().toISOString(),
+        sensitivity: "public"
+      }
+    });
+    const findings = await memory.integrityScan();
+    expect(Array.isArray(findings)).toBe(true);
+    expect(findings.length).toBeGreaterThanOrEqual(1);
+    for (const f of findings) {
+      expect(f).toHaveProperty("recordId");
+      expect(f).toHaveProperty("severity");
+      expect(f).toHaveProperty("issue");
+      expect(["warning", "error"]).toContain(f.severity);
+    }
   });
 });

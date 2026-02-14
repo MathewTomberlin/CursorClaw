@@ -213,10 +213,10 @@ export class CursorAgentModelAdapter implements ModelAdapter {
           throw new Error("malformed framed JSON: missing start marker");
         }
         const parsed = this.parseEventFrame(sentinelBuffer, tools);
-        if (parsed.type === "done") {
-          sawDone = true;
+        if (parsed) {
+          if (parsed.type === "done") sawDone = true;
+          yield parsed;
         }
-        yield parsed;
         sentinelBuffer = null;
         continue;
       }
@@ -225,10 +225,10 @@ export class CursorAgentModelAdapter implements ModelAdapter {
         continue;
       }
       const parsed = this.parseEventFrame(trimmed, tools);
-      if (parsed.type === "done") {
-        sawDone = true;
+      if (parsed) {
+        if (parsed.type === "done") sawDone = true;
+        yield parsed;
       }
-      yield parsed;
     }
 
     if (timeoutHandle) {
@@ -252,7 +252,7 @@ export class CursorAgentModelAdapter implements ModelAdapter {
     }
   }
 
-  private parseEventFrame(raw: string, tools: ToolDefinition[]): AdapterEvent {
+  private parseEventFrame(raw: string, tools: ToolDefinition[]): AdapterEvent | null {
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
@@ -266,8 +266,17 @@ export class CursorAgentModelAdapter implements ModelAdapter {
     if (!candidate.type) {
       throw new Error("malformed frame missing type");
     }
-    if (!["assistant_delta", "tool_call", "usage", "error", "done"].includes(candidate.type)) {
+    const supportedEventTypes = ["assistant_delta", "tool_call", "usage", "error", "done", "protocol"];
+    if (!supportedEventTypes.includes(candidate.type)) {
       throw new Error(`unknown adapter event type: ${candidate.type}`);
+    }
+    if (candidate.type === "protocol") {
+      const version = (candidate.data as { version?: string })?.version;
+      const supportedVersions = ["1.0"];
+      if (version && !supportedVersions.includes(version)) {
+        throw new Error(`unsupported protocol version: ${version}`);
+      }
+      return null;
     }
     if (candidate.type === "tool_call") {
       this.validateToolCall(candidate.data, tools);

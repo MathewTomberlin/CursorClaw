@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadConfig } from "../src/config.js";
+import { InMemoryLifecycleStream } from "../src/lifecycle-stream/in-memory-stream.js";
 import { MemoryStore } from "../src/memory.js";
 import { CursorAgentModelAdapter } from "../src/model-adapter.js";
 import { AgentRuntime } from "../src/runtime.js";
@@ -295,6 +296,66 @@ describe("scheduler, memory, and runtime", () => {
 
     const snapshots = await readFile(join(dir, "snapshots", `session-main-${result.runId}.json`), "utf8");
     expect(snapshots).toContain(result.runId);
+  });
+
+  it("lifecycle stream subscriber receives events for a run", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cursorclaw-lifecycle-"));
+    tempDirs.push(dir);
+    const config = loadConfig({
+      defaultModel: "fallback",
+      models: {
+        fallback: {
+          provider: "fallback-model",
+          timeoutMs: 5_000,
+          authProfiles: ["default"],
+          fallbackModels: [],
+          enabled: true
+        }
+      }
+    });
+    const memory = new MemoryStore({ workspaceDir: dir });
+    const adapter = new CursorAgentModelAdapter({
+      defaultModel: "fallback",
+      models: config.models
+    });
+    const gate = new AlwaysAllowApprovalGate();
+    const tools = new ToolRouter({
+      approvalGate: gate,
+      allowedExecBins: ["echo"]
+    });
+    tools.register(createExecTool({ allowedBins: ["echo"], approvalGate: gate }));
+
+    const lifecycleStream = new InMemoryLifecycleStream();
+    const runtime = new AgentRuntime({
+      config,
+      adapter,
+      toolRouter: tools,
+      memory,
+      lifecycleStream,
+      snapshotDir: join(dir, "snapshots")
+    });
+
+    const collected: string[] = [];
+    const subPromise = (async () => {
+      for await (const event of lifecycleStream.subscribe("session-lc")) {
+        collected.push(event.type);
+        if (event.type === "completed" || event.type === "failed") break;
+      }
+    })();
+
+    await runtime.runTurn({
+      session: {
+        sessionId: "session-lc",
+        channelId: "chan-lc",
+        channelKind: "dm"
+      },
+      messages: [{ role: "user", content: "hi" }]
+    });
+
+    await subPromise;
+    expect(collected).toContain("queued");
+    expect(collected).toContain("started");
+    expect(collected).toContain("completed");
   });
 
   it("excludes secret memory from prompt assembly by default", async () => {

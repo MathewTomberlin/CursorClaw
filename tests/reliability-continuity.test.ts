@@ -147,7 +147,7 @@ describe("reliability and continuity components", () => {
       throw new Error("checkpoint not created");
     }
     await manager.rollback(checkpoint);
-    const contentAfterRollback = await readFile(filePath, "utf8");
+    const contentAfterRollback = (await readFile(filePath, "utf8")).replace(/\r\n/g, "\n");
     expect(contentAfterRollback).toBe("original\n");
     await manager.cleanup(checkpoint);
     await expect(execFileAsync("git", ["rev-parse", "--verify", checkpoint.refName], { cwd: dir })).rejects.toThrow();

@@ -118,6 +118,36 @@ export function redactSecrets(value: string): string {
     .replace(/gh[pousr]_[a-zA-Z0-9_]+/g, "[REDACTED_GH_TOKEN]");
 }
 
+/**
+ * Normalize IPv4 host to dotted-decimal form. Handles octal (0177), hex (0x7f),
+ * and decimal segments so private-range check is applied consistently.
+ * Returns normalized "a.b.c.d" or null if not a valid IPv4 form.
+ */
+export function normalizeAndParseIpv4(host: string): string | null {
+  const trimmed = host.trim().toLowerCase();
+  const segments = trimmed.split(".");
+  if (segments.length !== 4) {
+    return null;
+  }
+  const nums: number[] = [];
+  for (const seg of segments) {
+    const s = seg.trim();
+    let n: number;
+    if (s.startsWith("0x")) {
+      n = Number.parseInt(s.slice(2), 16);
+    } else if (s.length > 1 && s.startsWith("0")) {
+      n = Number.parseInt(s, 8);
+    } else {
+      n = Number.parseInt(s, 10);
+    }
+    if (Number.isNaN(n) || n < 0 || n > 255) {
+      return null;
+    }
+    nums.push(n);
+  }
+  return `${nums[0]}.${nums[1]}.${nums[2]}.${nums[3]}`;
+}
+
 function ipToLong(ip: string): number {
   const parts = ip.split(".").map((part) => Number.parseInt(part, 10));
   if (parts.length !== 4 || parts.some((part) => Number.isNaN(part))) {
@@ -190,8 +220,16 @@ function isPrivateIp(ip: string): boolean {
 async function resolveHostAddresses(hostname: string): Promise<string[]> {
   const normalizedHost = hostname.replace(/^\[/, "").replace(/\]$/, "");
   const literalIpVersion = isIP(normalizedHost);
-  if (literalIpVersion !== 0) {
+  if (literalIpVersion === 4) {
+    const canonical = normalizeAndParseIpv4(normalizedHost) ?? normalizedHost;
+    return [canonical];
+  }
+  if (literalIpVersion === 6) {
     return [normalizedHost];
+  }
+  const normalizedIpv4 = normalizeAndParseIpv4(normalizedHost);
+  if (normalizedIpv4 !== null) {
+    return [normalizedIpv4];
   }
   const resolved = await dnsLookupFn(normalizedHost, { all: true, verbatim: true });
   if (!resolved.length) {

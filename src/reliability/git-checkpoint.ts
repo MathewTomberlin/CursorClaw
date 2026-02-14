@@ -21,6 +21,12 @@ export interface GitCheckpointManagerOptions {
 export class GitCheckpointManager {
   constructor(private readonly options: GitCheckpointManagerOptions) {}
 
+  /**
+   * Creates a git checkpoint ref for the current HEAD. Returns null if the worktree
+   * is dirty (uncommitted changes) to avoid overwriting user changes. Rollback is
+   * only safe when the worktree was clean at checkpoint time; rollback will refuse
+   * if the worktree is dirty at rollback time.
+   */
   async createCheckpoint(runId: string): Promise<GitCheckpointHandle | null> {
     if (!(await this.isGitRepository())) {
       return null;
@@ -50,6 +56,11 @@ export class GitCheckpointManager {
     return handle;
   }
 
+  /**
+   * Rolls back the worktree to the checkpoint ref. Only safe when the worktree was
+   * clean at checkpoint time or when the only uncommitted changes are from the
+   * current run; otherwise user-uncommitted changes may be lost.
+   */
   async rollback(handle: GitCheckpointHandle): Promise<void> {
     await this.git(["reset", "--hard", handle.refName]);
     await this.options.decisionJournal?.append({

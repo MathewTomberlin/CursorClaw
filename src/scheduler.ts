@@ -36,7 +36,7 @@ export class AutonomyBudget {
     this.daily.set(channelId, dayWindow);
 
     if (this.config.quietHours) {
-      const hour = now.getHours();
+      const hour = now.getUTCHours(); // quiet hours are interpreted in UTC
       const { startHour, endHour } = this.config.quietHours;
       if (startHour <= endHour && hour >= startHour && hour < endHour) {
         return false;

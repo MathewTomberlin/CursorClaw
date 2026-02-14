@@ -1,11 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { fetchWithPinnedDns } from "../src/network/ssrf-pin.js";
 import { ApprovalWorkflow } from "../src/security/approval-workflow.js";
 import { CapabilityStore } from "../src/security/capabilities.js";
 import { CapabilityApprovalGate, ToolRouter, createExecTool, createWebFetchTool } from "../src/tools.js";
 
+vi.mock("../src/network/ssrf-pin.js", () => ({
+  fetchWithPinnedDns: vi.fn()
+}));
+
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.clearAllMocks();
 });
 
 describe("capability-based approvals", () => {
@@ -48,15 +54,11 @@ describe("capability-based approvals", () => {
     });
     const webFetch = createWebFetchTool({ approvalGate: gate });
 
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response("hello", {
-        status: 200,
-        headers: {
-          "content-type": "text/plain"
-        }
-      })
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    vi.mocked(fetchWithPinnedDns).mockResolvedValue({
+      status: 200,
+      headers: { get: (n: string) => (n.toLowerCase() === "content-type" ? "text/plain" : null) },
+      arrayBuffer: () => Promise.resolve(new TextEncoder().encode("hello").buffer)
+    });
 
     await expect(
       webFetch.execute({
@@ -122,5 +124,51 @@ describe("capability-based approvals", () => {
     ).rejects.toThrow(/requires approval/i);
     const pending = approvalWorkflow.listRequests({ status: "pending" });
     expect(pending.length).toBeGreaterThan(0);
+  });
+
+  it("denies untrusted-derived high-risk tool call without untrusted-scope grant", async () => {
+    const capabilityStore = new CapabilityStore();
+    const approvalWorkflow = new ApprovalWorkflow({
+      capabilityStore,
+      defaultGrantTtlMs: 60_000,
+      defaultGrantUses: 1
+    });
+    const gate = new CapabilityApprovalGate({
+      devMode: false,
+      approvalWorkflow,
+      capabilityStore
+    });
+    capabilityStore.grant({
+      capability: "process.exec",
+      scope: "exec:network-impacting",
+      ttlMs: 60_000,
+      uses: 1
+    });
+    const router = new ToolRouter({
+      approvalGate: gate,
+      allowedExecBins: ["curl"]
+    });
+    router.register(
+      createExecTool({
+        allowedBins: ["curl"],
+        approvalGate: gate
+      })
+    );
+    await expect(
+      router.execute(
+        {
+          name: "exec",
+          args: { command: "curl https://example.com" }
+        },
+        {
+          auditId: "audit-untrusted",
+          decisionLogs: [],
+          provenance: "untrusted"
+        }
+      )
+    ).rejects.toThrow(/requires approval|missing capability/i);
+    const pending = approvalWorkflow.listRequests({ status: "pending" });
+    expect(pending.length).toBeGreaterThan(0);
+    expect(pending[0]?.provenance).toBe("untrusted");
   });
 });

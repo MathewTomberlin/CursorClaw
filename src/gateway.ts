@@ -16,6 +16,7 @@ import {
   createAuditId,
   scoreInboundRisk
 } from "./security.js";
+import type { LifecycleStream } from "./lifecycle-stream/types.js";
 import type { RpcRequest, RpcResponse, SessionContext } from "./types.js";
 
 interface PendingRun {
@@ -77,6 +78,9 @@ export interface GatewayDependencies {
     symbol: string;
   }) => Promise<unknown>;
   onActivity?: () => void;
+  lifecycleStream?: LifecycleStream;
+  /** If provided, called before channelHub.send; return false to skip delivery. */
+  onBeforeSend?: (channelId: string, text: string) => Promise<boolean>;
 }
 
 const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
@@ -109,12 +113,65 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
     };
   });
 
+  const streamConnectionsBySubject = new Map<string, number>();
+  const MAX_STREAM_CONNECTIONS_PER_SUBJECT = 2;
+
+  app.get("/stream", async (request, reply) => {
+    const auth = deps.auth.authorize({
+      isLocal: request.ip === "127.0.0.1" || request.ip === "::1",
+      remoteIp: request.ip,
+      headers: mapHeaders(request.headers)
+    });
+    if (!auth.ok) {
+      return reply.code(401).send({ error: "Unauthorized" });
+    }
+    if (!deps.lifecycleStream) {
+      return reply.code(503).send({ error: "Lifecycle stream not configured" });
+    }
+    const sessionId = (request.query as { sessionId?: string }).sessionId;
+    const subject = sessionId ?? request.ip ?? "unknown";
+    const count = streamConnectionsBySubject.get(subject) ?? 0;
+    if (count >= MAX_STREAM_CONNECTIONS_PER_SUBJECT) {
+      return reply.code(429).send({ error: "Too many stream connections" });
+    }
+    streamConnectionsBySubject.set(subject, count + 1);
+    request.raw.on("close", () => {
+      const n = (streamConnectionsBySubject.get(subject) ?? 1) - 1;
+      if (n <= 0) streamConnectionsBySubject.delete(subject);
+      else streamConnectionsBySubject.set(subject, n);
+    });
+
+    reply.raw.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive"
+    });
+    const send = (event: unknown) => {
+      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+    void (async () => {
+      try {
+        for await (const event of deps.lifecycleStream!.subscribe(sessionId)) {
+          send(event);
+          if (request.raw.destroyed) break;
+        }
+      } catch {
+        // client disconnected or stream closed
+      }
+    })();
+    return reply;
+  });
+
   app.get("/status", async () => {
     return {
       gateway: "ok",
       defaultModel: deps.config.defaultModel,
       queueWarnings: deps.runtime.getQueueWarnings(),
       runtimeMetrics: deps.runtime.getMetrics(),
+      reliability: {
+        multiPathResolutionsLast24h: deps.runtime.getMultiPathResolutionsLast24h()
+      },
+      adapterMetrics: deps.runtime.getAdapterMetrics() ?? {},
       schedulerBacklog: deps.cronService.listJobs().length,
       policyDecisions: deps.policyLogs.getAll().length,
       approvals: {
@@ -312,7 +369,17 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
             behaviorPlan?.shouldGreet === true && !/^(hi|hello|hey)\b/i.test(text)
               ? `Hi! ${text}`
               : text;
-          if (deps.channelHub) {
+          const allowSend =
+            deps.onBeforeSend === undefined ? true : await deps.onBeforeSend(channelId, finalText);
+          if (!allowSend) {
+            result = {
+              delivered: false,
+              channelId,
+              text: finalText,
+              provider: "callback",
+              detail: "onBeforeSend returned false"
+            };
+          } else if (deps.channelHub) {
             const dispatch = await deps.channelHub.send({
               channelId,
               text: finalText,

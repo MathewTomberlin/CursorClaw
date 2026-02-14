@@ -20,6 +20,7 @@ export interface ApprovalRequest {
   plan: string;
   args: unknown;
   requiredCapabilities: Capability[];
+  provenance?: CapabilityApprovalInput["provenance"];
   grants?: CapabilityGrant[];
   deniedReason?: string;
 }
@@ -39,7 +40,13 @@ export class ApprovalWorkflow {
   request(input: CapabilityApprovalInput): ApprovalRequest {
     this.expireStaleRequests();
     const requiredCapabilities = requiredCapabilitiesForApproval(input);
-    const fingerprint = stableFingerprint(input.tool, input.intent, input.plan, requiredCapabilities);
+    const fingerprint = stableFingerprint(
+      input.tool,
+      input.intent,
+      input.plan,
+      requiredCapabilities,
+      input.provenance
+    );
     const existingId = this.requestsByFingerprint.get(fingerprint);
     if (existingId) {
       const existing = this.requests.get(existingId);
@@ -57,7 +64,8 @@ export class ApprovalWorkflow {
       intent: input.intent,
       plan: input.plan,
       args: sanitizeArgs(input.args),
-      requiredCapabilities
+      requiredCapabilities,
+      provenance: input.provenance
     };
     this.requests.set(request.id, request);
     this.requestsByFingerprint.set(fingerprint, request.id);
@@ -158,13 +166,15 @@ function stableFingerprint(
   tool: string,
   intent: CapabilityApprovalInput["intent"],
   plan: string,
-  requiredCapabilities: Capability[]
+  requiredCapabilities: Capability[],
+  provenance?: CapabilityApprovalInput["provenance"]
 ): string {
-  return `${tool}|${intent}|${plan}|${requiredCapabilities.sort().join(",")}`;
+  return `${tool}|${intent}|${plan}|${requiredCapabilities.sort().join(",")}|${provenance ?? ""}`;
 }
 
 function requestScopeKey(request: ApprovalRequest): string {
-  return `${request.tool}:${request.intent}`;
+  const base = `${request.tool}:${request.intent}`;
+  return request.provenance === "untrusted" ? `untrusted:${base}` : base;
 }
 
 function cloneRequest(request: ApprovalRequest): ApprovalRequest {

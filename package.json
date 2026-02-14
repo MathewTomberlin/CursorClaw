@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "test:security": "vitest run tests/security-tools.test.ts",
     "test:redteam": "vitest run tests/prompt-injection-redteam.test.ts",
+    "test:bench": "vitest run tests/bench/",
     "security:audit": "npm audit --audit-level=high"
   },
   "dependencies": {

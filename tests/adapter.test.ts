@@ -74,6 +74,80 @@ describe("CursorAgentModelAdapter", () => {
     expect(events).toEqual(["assistant_delta", "assistant_delta", "done"]);
   });
 
+  it("accepts protocol version 1.0 when sent as first event", async () => {
+    const script = [
+      "process.stdout.write(JSON.stringify({type:'protocol',data:{version:'1.0'}})+'\\n');",
+      "process.stdout.write(JSON.stringify({type:'assistant_delta',data:{content:'ok'}})+'\\n');",
+      "process.stdout.write(JSON.stringify({type:'done',data:{finishReason:'stop'}})+'\\n');"
+    ].join("");
+    const adapter = new CursorAgentModelAdapter({
+      defaultModel: "cursor-auto",
+      models: {
+        "cursor-auto": {
+          provider: "cursor-agent-cli",
+          command: process.execPath,
+          args: ["-e", script],
+          timeoutMs: 20_000,
+          authProfiles: ["default"],
+          fallbackModels: [],
+          enabled: true
+        }
+      }
+    });
+    const session = await adapter.createSession({
+      sessionId: "s1v",
+      channelId: "c1",
+      channelKind: "dm"
+    });
+    const events: string[] = [];
+    for await (const event of adapter.sendTurn(
+      session,
+      [{ role: "user", content: "hi" }],
+      [simpleTool],
+      { turnId: "t-v1" }
+    )) {
+      events.push(event.type);
+    }
+    expect(events).toEqual(["assistant_delta", "done"]);
+  });
+
+  it("rejects unsupported protocol version", async () => {
+    const script = [
+      "process.stdout.write(JSON.stringify({type:'protocol',data:{version:'99.0'}})+'\\n');",
+      "process.stdout.write(JSON.stringify({type:'done',data:{finishReason:'stop'}})+'\\n');"
+    ].join("");
+    const adapter = new CursorAgentModelAdapter({
+      defaultModel: "cursor-auto",
+      models: {
+        "cursor-auto": {
+          provider: "cursor-agent-cli",
+          command: process.execPath,
+          args: ["-e", script],
+          timeoutMs: 5_000,
+          authProfiles: ["default"],
+          fallbackModels: [],
+          enabled: true
+        }
+      }
+    });
+    const session = await adapter.createSession({
+      sessionId: "s2v",
+      channelId: "c2",
+      channelKind: "dm"
+    });
+    const collect = async (): Promise<void> => {
+      for await (const _event of adapter.sendTurn(
+        session,
+        [{ role: "user", content: "hi" }],
+        [simpleTool],
+        { turnId: "t-v99" }
+      )) {
+        // no-op
+      }
+    };
+    await expect(collect()).rejects.toThrow(/unsupported protocol version/);
+  });
+
   it("fails closed on malformed JSON frame", async () => {
     const script = "process.stdout.write('not-json\\n')";
     const adapter = new CursorAgentModelAdapter({

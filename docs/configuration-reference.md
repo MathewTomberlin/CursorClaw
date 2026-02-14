@@ -84,6 +84,8 @@ Defaults:
   "queueSoftLimit": 16,
   "queueHardLimit": 64,
   "queueDropStrategy": "drop-oldest",
+  "queueBackend": "memory",
+  "queueFilePath": null,
   "turnTimeoutMs": 60000,
   "snapshotEveryEvents": 12,
   "maxMessagesPerTurn": 64,
@@ -131,6 +133,10 @@ Defaults:
   "integrityScanEveryMs": 3600000
 }
 ```
+
+**Warning:** Setting `includeSecretsInPrompt` to `true` can send secret-bearing memory to the model. Use only in controlled environments (e.g. local-only, no logging to external services).
+
+**Memory integrity scan:** The orchestrator runs `memory.integrityScan()` every `integrityScanEveryMs` (default 1 hour). The scan returns findings such as potential contradictions (same session/category, different text) and staleness (records older than 120 days). Findings can be logged or used for future auto-remediation.
 
 ## 4.6 `privacy`
 
@@ -218,6 +224,15 @@ Defaults:
 
 When enabled, traces are accepted only for localhost or configured hosts.
 
+### 4.10.1 `metrics`
+
+Optional metrics export for operational monitoring.
+
+- **`metrics.export`**: `"none"` (default) or `"log"`. If `"log"`, the process logs a single JSON line periodically to stdout with adapter metrics (no PII or secrets). Format: `{ "ts": "<ISO date>", "adapterMetrics": { ... } }`.
+- **`metrics.intervalSeconds`**: When export is `"log"`, interval in seconds between log lines (default `60`).
+
+Default is `export: "none"`. Use `"log"` only for operational dashboards; log output is best-effort and may be delayed under load.
+
 ## 4.11 `reflection`
 
 Defaults:
@@ -268,6 +283,22 @@ Notes:
 
 - In strict non-dev mode, bootstrap further constrains allowed bins to a strict internal set.
 - In dev or profile `developer`, configured bins are used as-is.
+
+#### Security: Exec allowlist
+
+- **Strict profile (default in non-dev):** Only binaries from a fixed internal set are allowed: `echo`, `pwd`, `ls`, `cat`, `node`. Config `allowBins` is ignored except for bins in this set. Use for production or locked-down environments.
+- **Developer profile:** All bins listed in `tools.exec.allowBins` are allowed as-is. Commands run with the same privileges as the CursorClaw process. **Warning:** developer profile and cwd-relative or arbitrary bins run with process privileges; use only in trusted environments (e.g. loopback and dev mode).
+- **Optional `runAsUser`:** Reserved for future use (e.g. run exec as a specific OS user). Not enforced by the runtime today; documented for extension.
+- **`maxBufferBytes` (optional):** Max stdout/stderr buffer per exec in bytes. Default `65536`. There is no OS-level CPU or memory cap; only timeout and buffer are enforced by CursorClaw.
+- **`maxChildProcessesPerTurn` (optional):** Max concurrent exec invocations system-wide. Default `100`. Used to limit runaway or DoS from many concurrent child processes.
+
+#### Security — SSRF and DNS pinning
+
+`web_fetch` resolves the hostname once and then connects to the first resolved IP (DNS pinning) with the original hostname sent in the `Host` header, so DNS changes after resolution do not change the destination. Redirects are re-resolved and re-validated (private-IP and allowlist); max redirect hops apply. IPv4 hostnames are normalized (octal, e.g. `0177.0.0.1`; hex, e.g. `0x7f.0.0.0.1`) to dotted-decimal before the private-range check so edge forms cannot bypass it.
+
+#### Security — Destructive commands
+
+Destructive command detection is signature-based (`src/security/destructive-denylist.ts`). Patterns block recursive force-remove, raw device writes, filesystem format, and redirects to devices. The denylist may need updates for new shells or environments; no attestation of custom tool definitions is enforced.
 
 ## 4.14 `models` and `defaultModel`
 

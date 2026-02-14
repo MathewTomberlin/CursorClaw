@@ -21,6 +21,10 @@ import type { DeepScanService } from "./reliability/deep-scan.js";
 import { type ActionEnvelope, clampConfidence } from "./reliability/action-envelope.js";
 import type { ReasoningResetController } from "./reliability/reasoning-reset.js";
 import type { RuntimeObservationStore } from "./runtime-observation.js";
+import { scoreInboundRisk } from "./security.js";
+import type { QueueBackend } from "./queue/types.js";
+import { InMemoryQueueBackend } from "./queue/in-memory-backend.js";
+import type { LifecycleStream } from "./lifecycle-stream/types.js";
 import type { PolicyDecisionLog, SessionContext, ToolCall } from "./types.js";
 import { ToolRouter, classifyCommandIntent } from "./tools.js";
 
@@ -70,7 +74,6 @@ interface PendingTurn {
 
 interface SessionQueueState {
   running: boolean;
-  queue: PendingTurn[];
 }
 
 export class SessionQueue {
@@ -78,6 +81,7 @@ export class SessionQueue {
   private readonly warnings: string[] = [];
 
   constructor(
+    private readonly backend: QueueBackend,
     private readonly options: {
       softLimit: number;
       hardLimit: number;
@@ -95,34 +99,37 @@ export class SessionQueue {
       turn.reject = reject;
     });
     const key = turn.request.session.sessionId;
-    const state = this.sessions.get(key) ?? { running: false, queue: [] };
-    const depth = state.queue.length + (state.running ? 1 : 0);
+    void this.enqueueAsync(key, turn).catch(() => {});
+    return resultPromise;
+  }
+
+  private async enqueueAsync(key: string, turn: PendingTurn): Promise<void> {
+    const state = this.sessions.get(key) ?? { running: false };
+    const pendingIds = await this.backend.listPending(key);
+    const depth = pendingIds.length + (state.running ? 1 : 0);
     if (depth >= this.options.softLimit) {
       this.warnings.push(`soft queue depth reached for session ${key}: ${depth}`);
     }
 
     if (depth >= this.options.hardLimit) {
       if (this.options.dropStrategy === "defer-new") {
-        const error = new Error(`hard queue cap reached for session ${key}`);
-        turn.reject(error);
-        return resultPromise;
+        turn.reject(new Error(`hard queue cap reached for session ${key}`));
+        return;
       }
-      const dropped = state.queue.shift();
-      if (dropped) {
-        dropped.reject(new Error("dropped due to queue cap"));
+      const droppedPayload = await this.backend.dequeue(key);
+      if (droppedPayload) {
+        (droppedPayload as PendingTurn).reject(new Error("dropped due to queue cap"));
       } else if (state.running) {
-        const error = new Error(`queue cap reached and no drop candidate for session ${key}`);
-        turn.reject(error);
-        return resultPromise;
+        turn.reject(new Error(`queue cap reached and no drop candidate for session ${key}`));
+        return;
       }
     }
 
-    state.queue.push(turn);
+    await this.backend.enqueue(key, turn);
     this.sessions.set(key, state);
     this.drain(key).catch((error) => {
       this.warnings.push(`drain failure for session ${key}: ${String(error)}`);
     });
-    return resultPromise;
   }
 
   private async drain(sessionId: string): Promise<void> {
@@ -131,11 +138,12 @@ export class SessionQueue {
       return;
     }
     state.running = true;
-    while (state.queue.length > 0) {
-      const item = state.queue.shift();
-      if (!item) {
-        continue;
+    for (;;) {
+      const payload = await this.backend.dequeue(sessionId);
+      if (payload == null) {
+        break;
       }
+      const item = payload as PendingTurn;
       try {
         const result = await item.execute();
         item.resolve(result);
@@ -163,6 +171,8 @@ export interface AgentRuntimeOptions {
   hasRecentTestsPassing?: () => Promise<boolean>;
   gitCheckpointManager?: GitCheckpointManager;
   privacyScrubber?: PrivacyScrubber;
+  queueBackend?: QueueBackend;
+  lifecycleStream?: LifecycleStream;
   snapshotDir: string;
   onEvent?: (event: RuntimeEvent) => void;
 }
@@ -180,9 +190,12 @@ export class AgentRuntime {
   };
   private readonly maxDecisionLogs = 5_000;
   private readonly touchedFileHintsBySession = new Map<string, Set<string>>();
+  private readonly multiPathResolutionEvents: Array<{ at: number; outcome: "success" | "failure" }> = [];
+  private static readonly MULTI_PATH_RESOLUTION_MAX = 100;
 
   constructor(private readonly options: AgentRuntimeOptions) {
-    this.queue = new SessionQueue({
+    const queueBackend = options.queueBackend ?? new InMemoryQueueBackend();
+    this.queue = new SessionQueue(queueBackend, {
       softLimit: options.config.session.queueSoftLimit,
       hardLimit: options.config.session.queueHardLimit,
       dropStrategy: options.config.session.queueDropStrategy
@@ -211,6 +224,21 @@ export class AgentRuntime {
     toolCalls: number;
   } {
     return { ...this.metrics };
+  }
+
+  getMultiPathResolutionsLast24h(): { success: number; failure: number } {
+    const floor = Date.now() - 24 * 60 * 60 * 1000;
+    const recent = this.multiPathResolutionEvents.filter((e) => e.at >= floor);
+    return {
+      success: recent.filter((e) => e.outcome === "success").length,
+      failure: recent.filter((e) => e.outcome === "failure").length
+    };
+  }
+
+  /** Adapter metrics if the adapter exposes getMetrics (e.g. CursorAgentModelAdapter). */
+  getAdapterMetrics(): unknown {
+    const adapter = this.options.adapter as { getMetrics?: () => unknown };
+    return adapter.getMetrics?.();
   }
 
   startTurn(request: TurnRequest): { runId: string; promise: Promise<TurnResult> } {
@@ -337,6 +365,15 @@ export class AgentRuntime {
           );
           pluginDiagnosticCount = promptBuild.pluginDiagnosticCount;
           const promptMessages = promptBuild.messages;
+          const lastUserContent =
+            request.messages.filter((m) => m.role === "user").pop()?.content ?? "";
+          const inboundRisk = scoreInboundRisk({
+            senderTrusted: false,
+            recentTriggerCount: 0,
+            text: lastUserContent
+          });
+          const turnProvenance = inboundRisk >= 70 ? ("untrusted" as const) : ("operator" as const);
+
           const adapterStream = this.options.adapter.sendTurn(
             modelSession,
             promptMessages,
@@ -362,7 +399,8 @@ export class AgentRuntime {
               }
               const output = await this.options.toolRouter.execute(call, {
                 auditId: runId,
-                decisionLogs: this.decisionLogs
+                decisionLogs: this.decisionLogs,
+                provenance: turnProvenance
               });
               const safeCall = this.scrubUnknown(call, scrubScopeId) as ToolCall;
               const safeOutput = this.scrubUnknown(output, scrubScopeId);
@@ -429,6 +467,12 @@ export class AgentRuntime {
 
           this.metrics.turnsCompleted += 1;
           this.options.failureLoopGuard?.recordSuccess(sessionId);
+          if (shouldForceMultiPath) {
+            this.multiPathResolutionEvents.push({ at: Date.now(), outcome: "success" });
+            if (this.multiPathResolutionEvents.length > AgentRuntime.MULTI_PATH_RESOLUTION_MAX) {
+              this.multiPathResolutionEvents.shift();
+            }
+          }
           this.options.reasoningResetController?.noteTaskResolved(sessionId);
           const hasRecentTestsPassingAfterTurn = await this.resolveRecentTestSignal();
           const postConfidence = this.options.confidenceModel?.score({
@@ -494,6 +538,12 @@ export class AgentRuntime {
           });
           this.metrics.turnsFailed += 1;
           this.options.failureLoopGuard?.recordFailure(sessionId, error);
+          if (shouldForceMultiPath) {
+            this.multiPathResolutionEvents.push({ at: Date.now(), outcome: "failure" });
+            if (this.multiPathResolutionEvents.length > AgentRuntime.MULTI_PATH_RESOLUTION_MAX) {
+              this.multiPathResolutionEvents.shift();
+            }
+          }
           await this.options.observationStore?.append({
             sessionId,
             source: "runtime",
@@ -539,6 +589,7 @@ export class AgentRuntime {
       };
       events.push(event);
       this.options.onEvent?.(event);
+      this.options.lifecycleStream?.push(event);
     };
     emit("queued");
 

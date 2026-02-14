@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { buildGateway } from "../src/gateway.js";
 import type { ChannelHub } from "../src/channels.js";
+import { InMemoryLifecycleStream } from "../src/lifecycle-stream/in-memory-stream.js";
 import { MemoryStore } from "../src/memory.js";
 import { CursorAgentModelAdapter } from "../src/model-adapter.js";
 import { RunStore } from "../src/run-store.js";
@@ -56,6 +57,8 @@ async function createGateway(options: {
   }) => Promise<unknown>;
   onExplainFunction?: (args: { modulePath: string; symbol: string }) => Promise<unknown>;
   onActivity?: () => void;
+  withLifecycleStream?: boolean;
+  onBeforeSend?: (channelId: string, text: string) => Promise<boolean>;
 } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "cursorclaw-gw-"));
   cleanupPaths.push(dir);
@@ -89,11 +92,13 @@ async function createGateway(options: {
   });
   toolRouter.register(createExecTool({ allowedBins: ["echo"], approvalGate: gate }));
 
+  const lifecycleStream = options.withLifecycleStream ? new InMemoryLifecycleStream() : undefined;
   const runtime = new AgentRuntime({
     config,
     adapter,
     toolRouter,
     memory,
+    ...(lifecycleStream ? { lifecycleStream } : {}),
     snapshotDir: join(dir, "snapshots")
   });
   const cronService = new CronService({
@@ -126,6 +131,8 @@ async function createGateway(options: {
     ...(options.onTraceIngest ? { onTraceIngest: options.onTraceIngest } : {}),
     ...(options.onExplainFunction ? { onExplainFunction: options.onExplainFunction } : {}),
     ...(options.onActivity ? { onActivity: options.onActivity } : {}),
+    ...(lifecycleStream ? { lifecycleStream } : {}),
+    ...(options.onBeforeSend ? { onBeforeSend: options.onBeforeSend } : {}),
     auth,
     rateLimiter,
     policyLogs,
@@ -143,10 +150,34 @@ describe("gateway integration", () => {
     });
     expect(status.statusCode).toBe(200);
     expect(status.json().runtimeMetrics).toBeDefined();
+    expect(status.json().adapterMetrics).toBeDefined();
+    expect(status.json().reliability).toBeDefined();
+    expect(status.json().reliability.multiPathResolutionsLast24h).toEqual({ success: 0, failure: 0 });
     expect(status.json().incident).toMatchObject({
       proactiveSendsDisabled: false,
       toolIsolationEnabled: false
     });
+    await app.close();
+  });
+
+  it("GET /stream requires auth", async () => {
+    const app = await createGateway({ withLifecycleStream: true });
+    const res = await app.inject({
+      method: "GET",
+      url: "/stream"
+    });
+    expect(res.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("GET /stream returns 503 when lifecycle stream not configured", async () => {
+    const app = await createGateway(); // no withLifecycleStream
+    const res = await app.inject({
+      method: "GET",
+      url: "/stream",
+      headers: { authorization: "Bearer test-token" }
+    });
+    expect(res.statusCode).toBe(503);
     await app.close();
   });
 
@@ -223,6 +254,41 @@ describe("gateway integration", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().result.provider).toBe("mock-channel");
     expect(sentPayloads.length).toBe(1);
+    await app.close();
+  });
+
+  it("skips chat.send delivery when onBeforeSend returns false", async () => {
+    const sentPayloads: unknown[] = [];
+    const channelHub = {
+      async send(message: unknown) {
+        sentPayloads.push(message);
+        return { delivered: true, channelId: "c1", provider: "mock", text: "" };
+      },
+      register() {
+        return undefined;
+      },
+      listAdapters() {
+        return ["mock"];
+      }
+    } as unknown as ChannelHub;
+    const app = await createGateway({
+      channelHub,
+      onBeforeSend: async () => false
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: { authorization: "Bearer test-token" },
+      payload: {
+        version: "2.0",
+        method: "chat.send",
+        params: { channelId: "c1", text: "blocked" }
+      }
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().result.delivered).toBe(false);
+    expect(res.json().result.detail).toBe("onBeforeSend returned false");
+    expect(sentPayloads.length).toBe(0);
     await app.close();
   });
 

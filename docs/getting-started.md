@@ -215,6 +215,11 @@ This enables tool registration for:
 }
 ```
 
+### Exec tool and security
+
+- **Strict profile (default):** Only a fixed set of binaries (`echo`, `pwd`, `ls`, `cat`, `node`) are allowed. Safe for production.
+- **Developer profile:** All bins in `tools.exec.allowBins` are allowed; they run with the same privileges as the CursorClaw process. Use only on loopback or in dev mode. See [Configuration Reference — Security: Exec allowlist](./configuration-reference.md#security-exec-allowlist).
+
 ### Reflection background jobs
 
 ```json

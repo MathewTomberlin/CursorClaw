@@ -129,12 +129,21 @@ export interface RpcResponse {
   };
 }
 
+/** Minimal context passed to tool.execute; full type in tools.ts. */
+export interface ToolExecuteContext {
+  auditId: string;
+  decisionLogs: PolicyDecisionLog[];
+  provenance?: "system" | "operator" | "untrusted";
+}
+
 export interface ToolDefinition {
   name: string;
   description: string;
   schema: object;
   riskLevel: "low" | "high";
-  execute: (args: unknown) => Promise<unknown>;
+  execute: (args: unknown, context?: ToolExecuteContext) => Promise<unknown>;
+  /** Optional: checksum or attestation for tool definition. Future versions may verify against allowlist. */
+  toolDefinitionChecksum?: string;
 }
 
 export interface HeartbeatConfig {

@@ -87,6 +87,19 @@ All output events must match:
 }
 ```
 
+## Version
+
+The CLI may send an optional protocol version as the first event:
+
+```json
+{
+  "type": "protocol",
+  "data": { "version": "1.0" }
+}
+```
+
+The adapter accepts output with or without a version. If `version` is present and not in the supported list (e.g. `["1.0"]`), the adapter treats it as a protocol error: it logs and fails closed, or attempts fallback model if configured. When no version is sent, behavior is unchanged (backward compatible).
+
 ## Guardrails
 
 - Unknown tool names are rejected before execution.

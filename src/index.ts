@@ -10,6 +10,7 @@ import {
 import { AutonomyStateStore } from "./autonomy-state.js";
 import { buildGateway } from "./gateway.js";
 import { DecisionJournal } from "./decision-journal.js";
+import { InMemoryLifecycleStream } from "./lifecycle-stream/in-memory-stream.js";
 import { ContextIndexService } from "./context/context-index-service.js";
 import { LocalEmbeddingIndex } from "./context/embedding-index.js";
 import { SemanticContextRetriever } from "./context/retriever.js";
@@ -95,6 +96,27 @@ async function main(): Promise<void> {
   validateStartupConfig(config, {
     allowInsecureDefaults: devMode
   });
+  if (
+    !devMode &&
+    config.tools.exec.profile === "developer"
+  ) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[CursorClaw] tools.exec.profile is 'developer': exec runs with process privileges. Use only in trusted environments."
+    );
+  }
+  if (config.gateway.bind !== "loopback") {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[CursorClaw] gateway.bind is not 'loopback': gateway is reachable from other hosts. Ensure auth and network are locked down."
+    );
+  }
+  if (!devMode && config.memory.includeSecretsInPrompt) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[CursorClaw] memory.includeSecretsInPrompt is true: secret-bearing memory may be sent to the model. Use only in controlled environments."
+    );
+  }
   const incidentCommander = new IncidentCommander();
   const decisionJournal = new DecisionJournal({
     path: join(workspaceDir, "CLAW_HISTORY.log"),
@@ -221,7 +243,16 @@ async function main(): Promise<void> {
     isToolIsolationEnabled: () => incidentCommander.isToolIsolationEnabled(),
     decisionJournal
   });
-  toolRouter.register(createExecTool({ allowedBins: allowedExecBins, approvalGate }));
+  toolRouter.register(
+    createExecTool({
+      allowedBins: allowedExecBins,
+      approvalGate,
+      ...(config.tools.exec.maxBufferBytes != null && { maxBufferBytes: config.tools.exec.maxBufferBytes }),
+      ...(config.tools.exec.maxChildProcessesPerTurn != null && {
+        maxChildProcessesPerTurn: config.tools.exec.maxChildProcessesPerTurn
+      })
+    })
+  );
   toolRouter.register(createWebFetchTool({ approvalGate }));
   if (config.mcp.enabled) {
     toolRouter.register(createMcpListResourcesTool({ registry: mcpRegistry }));
@@ -240,6 +271,7 @@ async function main(): Promise<void> {
   });
   let recentBackgroundTestsPassing = false;
 
+  const lifecycleStream = new InMemoryLifecycleStream();
   const runtime = new AgentRuntime({
     config,
     adapter,
@@ -267,6 +299,7 @@ async function main(): Promise<void> {
         }
       : {}),
     privacyScrubber,
+    lifecycleStream,
     snapshotDir: join(workspaceDir, "tmp", "snapshots")
   });
 
@@ -426,6 +459,7 @@ async function main(): Promise<void> {
     behavior,
     approvalWorkflow,
     capabilityStore,
+    lifecycleStream,
     onActivity: () => {
       idleScheduler.noteActivity();
       ensureReflectionJobQueued?.();
@@ -608,12 +642,25 @@ async function main(): Promise<void> {
   orchestratorRef = orchestrator;
   orchestrator.start();
 
+  const metricsIntervalSeconds = config.metrics.intervalSeconds ?? 60;
+  const metricsExportHandle =
+    config.metrics.export === "log"
+      ? setInterval(() => {
+          const adapterMetrics = runtime.getAdapterMetrics();
+          // eslint-disable-next-line no-console
+          console.log(JSON.stringify({ ts: new Date().toISOString(), adapterMetrics }));
+        }, metricsIntervalSeconds * 1000)
+      : null;
+
   let shuttingDown = false;
   const shutdown = async (): Promise<void> => {
     if (shuttingDown) {
       return;
     }
     shuttingDown = true;
+    if (metricsExportHandle !== null) {
+      clearInterval(metricsExportHandle);
+    }
     await orchestrator.stop();
     idleScheduler.stop();
     await gateway.close();

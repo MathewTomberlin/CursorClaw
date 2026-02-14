@@ -20,6 +20,10 @@ export interface SessionConfig {
   queueSoftLimit: number;
   queueHardLimit: number;
   queueDropStrategy: "drop-oldest" | "defer-new";
+  /** Queue backend: "memory" (default) or "file" for durable queue across restarts. */
+  queueBackend?: "memory" | "file";
+  /** When queueBackend is "file", path to the queue file or directory. Default tmp/queue. */
+  queueFilePath?: string;
   turnTimeoutMs: number;
   snapshotEveryEvents: number;
   maxMessagesPerTurn: number;
@@ -47,6 +51,12 @@ export interface ToolsConfig {
     ask: "always" | "on-miss" | "never";
     profile: "strict" | "developer";
     allowBins: string[];
+    /** Reserved for future use: run exec as this OS user. Not enforced today. */
+    runAsUser?: string;
+    /** Max stdout/stderr buffer per exec (bytes). Default 64 KiB. */
+    maxBufferBytes?: number;
+    /** Max concurrent exec invocations system-wide. Default 100. No OS-level CPU/memory cap. */
+    maxChildProcessesPerTurn?: number;
   };
 }
 
@@ -113,6 +123,13 @@ export interface ReflectionConfig {
   flakyTestCommand: string;
 }
 
+export interface MetricsConfig {
+  /** "none" = no export; "log" = periodic JSON line to stdout (operational monitoring only). */
+  export: "none" | "log";
+  /** When export is "log", interval in seconds between log lines. Default 60. */
+  intervalSeconds?: number;
+}
+
 export interface CursorClawConfig {
   gateway: GatewayConfig;
   session: SessionConfig;
@@ -125,6 +142,7 @@ export interface CursorClawConfig {
   contextCompression: ContextCompressionConfig;
   networkTrace: NetworkTraceConfig;
   reflection: ReflectionConfig;
+  metrics: MetricsConfig;
   reliability: ReliabilityConfig;
   tools: ToolsConfig;
   models: Record<string, ModelProviderConfig>;
@@ -157,6 +175,7 @@ export const DEFAULT_CONFIG: CursorClawConfig = {
     queueSoftLimit: 16,
     queueHardLimit: 64,
     queueDropStrategy: "drop-oldest",
+    queueBackend: "memory",
     turnTimeoutMs: 60_000,
     snapshotEveryEvents: 12,
     maxMessagesPerTurn: 64,
@@ -230,6 +249,10 @@ export const DEFAULT_CONFIG: CursorClawConfig = {
     flakyRuns: 3,
     flakyTestCommand: "npm test"
   },
+  metrics: {
+    export: "none",
+    intervalSeconds: 60
+  },
   reliability: {
     failureEscalationThreshold: 2,
     reasoningResetIterations: 3,
@@ -246,7 +269,9 @@ export const DEFAULT_CONFIG: CursorClawConfig = {
       security: "allowlist",
       ask: "on-miss",
       profile: "strict",
-      allowBins: ["echo", "pwd", "ls", "cat", "node"]
+      allowBins: ["echo", "pwd", "ls", "cat", "node"],
+      maxBufferBytes: 64 * 1024,
+      maxChildProcessesPerTurn: 100
     }
   },
   models: {

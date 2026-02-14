@@ -1,25 +1,26 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
 import { Ajv, type ValidateFunction } from "ajv";
 
+import type { ExecSandbox } from "./exec/types.js";
+import { HostExecSandbox } from "./exec/host-sandbox.js";
 import type { DecisionJournal } from "./decision-journal.js";
 import { McpRegistry } from "./mcp.js";
+import { isDestructiveCommand } from "./security/destructive-denylist.js";
 import { ApprovalWorkflow } from "./security/approval-workflow.js";
 import {
   CapabilityStore,
   type Capability,
   requiredCapabilitiesForApproval
 } from "./security/capabilities.js";
+import { fetchWithPinnedDns } from "./network/ssrf-pin.js";
 import { redactSecrets, resolveSafeFetchTarget, wrapUntrustedContent } from "./security.js";
 import type {
   DecisionReasonCode,
   PolicyDecisionLog,
   ToolCall,
-  ToolDefinition
+  ToolDefinition,
+  ToolExecuteContext
 } from "./types.js";
 
-const execFileAsync = promisify(execFile);
 const WEB_FETCH_MAX_REDIRECTS = 5;
 const WEB_FETCH_MAX_BODY_BYTES = 20_000;
 const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
@@ -42,15 +43,8 @@ export function classifyCommandIntent(command: string): ExecIntent {
   return "read-only";
 }
 
-export function isDestructiveCommand(command: string): boolean {
-  const normalized = command.trim().toLowerCase();
-  return (
-    /\brm\s+-rf\b/.test(normalized) ||
-    /\bdd\s+if=/.test(normalized) ||
-    /\bmkfs\b/.test(normalized) ||
-    />\s*\/dev\//.test(normalized)
-  );
-}
+export { isDestructiveCommand } from "./security/destructive-denylist.js";
+export type { ExecSandbox } from "./exec/types.js";
 
 export interface ApprovalGate {
   approve(args: {
@@ -58,6 +52,7 @@ export interface ApprovalGate {
     intent: ExecIntent | "high-risk-tool";
     plan: string;
     args: unknown;
+    provenance?: Provenance;
   }): Promise<boolean>;
   getLastDenial?(): {
     reason: string;
@@ -162,6 +157,7 @@ export class CapabilityApprovalGate implements ApprovalGate {
     intent: ExecIntent | "high-risk-tool";
     plan: string;
     args: unknown;
+    provenance?: Provenance;
   }): Promise<boolean> {
     if (this.options.devMode) {
       this.lastDenial = null;
@@ -176,15 +172,22 @@ export class CapabilityApprovalGate implements ApprovalGate {
       this.lastDenial = null;
       return true;
     }
+    const scope =
+      args.provenance === "untrusted"
+        ? `untrusted:${args.tool}:${args.intent}`
+        : `${args.tool}:${args.intent}`;
     const allowed = this.options.capabilityStore.consumeRequired(
       requiredCapabilities,
-      `${args.tool}:${args.intent}`
+      scope
     );
     if (allowed) {
       this.lastDenial = null;
       return true;
     }
-    const request = this.options.approvalWorkflow.request(args);
+    const request = this.options.approvalWorkflow.request({
+      ...args,
+      ...(args.provenance !== undefined && { provenance: args.provenance })
+    });
     this.lastDenial = {
       reason: "missing capability grant",
       requestId: request.id,
@@ -206,10 +209,7 @@ export class CapabilityApprovalGate implements ApprovalGate {
   }
 }
 
-export interface ToolExecutionContext {
-  auditId: string;
-  decisionLogs: PolicyDecisionLog[];
-}
+export type Provenance = "system" | "operator" | "untrusted";
 
 export interface ToolRouterOptions {
   approvalGate: ApprovalGate;
@@ -234,7 +234,7 @@ export class ToolRouter {
     return [...this.tools.values()];
   }
 
-  async execute(call: ToolCall, context: ToolExecutionContext): Promise<unknown> {
+  async execute(call: ToolCall, context: ToolExecuteContext): Promise<unknown> {
     const tool = this.tools.get(call.name);
     if (!tool) {
       this.logDecision(context, "deny", "TOOL_UNKNOWN", `unknown tool: ${call.name}`);
@@ -255,7 +255,8 @@ export class ToolRouter {
         tool: call.name,
         intent: "high-risk-tool",
         plan: "High-risk tool invocation proposed by model",
-        args: call.args
+        args: call.args,
+        ...(context.provenance !== undefined && { provenance: context.provenance })
       });
       if (!approved) {
         const denial = this.options.approvalGate.getLastDenial?.();
@@ -268,7 +269,7 @@ export class ToolRouter {
     }
 
     try {
-      const result = await tool.execute(call.args);
+      const result = await tool.execute(call.args, context);
       this.logDecision(context, "allow", "ALLOWED", `allow:${call.name}`);
       return result;
     } catch (error) {
@@ -294,7 +295,7 @@ export class ToolRouter {
   }
 
   private logDecision(
-    context: ToolExecutionContext,
+    context: ToolExecuteContext,
     decision: "allow" | "deny",
     reasonCode: DecisionReasonCode,
     detail: string
@@ -327,7 +328,16 @@ export interface ExecToolArgs {
 export function createExecTool(args: {
   allowedBins: string[];
   approvalGate: ApprovalGate;
+  maxBufferBytes?: number;
+  maxChildProcessesPerTurn?: number;
+  sandbox?: ExecSandbox;
 }): ToolDefinition {
+  const maxBuffer = args.maxBufferBytes ?? 64 * 1024;
+  const concurrencyCap = args.maxChildProcessesPerTurn ?? 100;
+  const sandbox: ExecSandbox =
+    args.sandbox ?? new HostExecSandbox();
+  let concurrentExecs = 0;
+
   return {
     name: "exec",
     description: "Execute a command with strict policy controls",
@@ -341,67 +351,77 @@ export function createExecTool(args: {
       additionalProperties: false
     },
     riskLevel: "high",
-    execute: async (rawArgs: unknown) => {
-      const parsed = rawArgs as ExecToolArgs;
-      const intent = classifyCommandIntent(parsed.command);
-      if (isDestructiveCommand(parsed.command)) {
-        if (!(args.approvalGate.supportsDestructiveApproval?.() ?? false)) {
-          throw new Error("destructive command denied by default policy");
-        }
-        const approved = await args.approvalGate.approve({
-          tool: "exec",
-          intent: "privilege-impacting",
-          plan: "destructive command signature matched",
-          args: parsed
-        });
-        if (!approved) {
-          const denial = args.approvalGate.getLastDenial?.();
-          const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
-          throw new Error(`destructive command requires explicit approval${suffix}`);
-        }
+    execute: async (rawArgs: unknown, ctx?: ToolExecuteContext) => {
+      if (concurrentExecs >= concurrencyCap) {
+        throw new Error(`max concurrent execs reached (${concurrencyCap})`);
       }
+      concurrentExecs += 1;
+      try {
+        const parsed = rawArgs as ExecToolArgs;
+        const intent = classifyCommandIntent(parsed.command);
+        const provenance = ctx?.provenance;
+        if (isDestructiveCommand(parsed.command)) {
+          if (!(args.approvalGate.supportsDestructiveApproval?.() ?? false)) {
+            throw new Error("destructive command denied by default policy");
+          }
+          const approved = await args.approvalGate.approve({
+            tool: "exec",
+            intent: "privilege-impacting",
+            plan: "destructive command signature matched",
+            args: parsed,
+            ...(provenance !== undefined && { provenance })
+          });
+          if (!approved) {
+            const denial = args.approvalGate.getLastDenial?.();
+            const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
+            throw new Error(`destructive command requires explicit approval${suffix}`);
+          }
+        }
 
-      const [bin, ...binArgs] = parsed.command.split(/\s+/).filter(Boolean);
-      if (!bin) {
-        throw new Error("empty command");
-      }
-      if (!args.allowedBins.includes(bin)) {
-        const approved = await args.approvalGate.approve({
-          tool: "exec",
-          intent,
-          plan: `bin "${bin}" not in allowlist`,
-          args: parsed
-        });
-        if (!approved) {
-          const denial = args.approvalGate.getLastDenial?.();
-          const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
-          throw new Error(`bin "${bin}" denied by allowlist policy${suffix}`);
+        const [bin, ...binArgs] = parsed.command.split(/\s+/).filter(Boolean);
+        if (!bin) {
+          throw new Error("empty command");
         }
-      }
-      if (intent !== "read-only") {
-        const approved = await args.approvalGate.approve({
-          tool: "exec",
-          intent,
-          plan: `non-read command intent: ${intent}`,
-          args: parsed
-        });
-        if (!approved) {
-          const denial = args.approvalGate.getLastDenial?.();
-          const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
-          throw new Error(`command intent "${intent}" requires approval${suffix}`);
+        if (!args.allowedBins.includes(bin)) {
+          const approved = await args.approvalGate.approve({
+            tool: "exec",
+            intent,
+            plan: `bin "${bin}" not in allowlist`,
+            args: parsed,
+            ...(provenance !== undefined && { provenance })
+          });
+          if (!approved) {
+            const denial = args.approvalGate.getLastDenial?.();
+            const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
+            throw new Error(`bin "${bin}" denied by allowlist policy${suffix}`);
+          }
         }
+        if (intent !== "read-only") {
+          const approved = await args.approvalGate.approve({
+            tool: "exec",
+            intent,
+            plan: `non-read command intent: ${intent}`,
+            args: parsed,
+            ...(provenance !== undefined && { provenance })
+          });
+          if (!approved) {
+            const denial = args.approvalGate.getLastDenial?.();
+            const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
+            throw new Error(`command intent "${intent}" requires approval${suffix}`);
+          }
+        }
+        const result = await sandbox.run(bin, binArgs, {
+          maxBufferBytes: maxBuffer,
+          timeoutMs: 15_000,
+          ...(parsed.cwd !== undefined && parsed.cwd !== "" && { cwd: parsed.cwd })
+        });
+        return {
+          stdout: result.stdout,
+          stderr: result.stderr
+        };
+      } finally {
+        concurrentExecs -= 1;
       }
-      const { stdout, stderr } = await execFileAsync(bin, binArgs, {
-        cwd: parsed.cwd,
-        shell: false,
-        timeout: 15_000,
-        windowsHide: true,
-        maxBuffer: 64 * 1024
-      });
-      return {
-        stdout,
-        stderr
-      };
     }
   };
 }
@@ -427,13 +447,14 @@ export function createWebFetchTool(args: {
       additionalProperties: false
     },
     riskLevel: "low",
-    execute: async (rawArgs: unknown) => {
+    execute: async (rawArgs: unknown, ctx?: ToolExecuteContext) => {
       const parsed = rawArgs as WebFetchArgs;
       const approved = await args.approvalGate.approve({
         tool: "web_fetch",
         intent: "network-impacting",
         plan: "network fetch of external content",
-        args: parsed
+        args: parsed,
+        ...(ctx?.provenance !== undefined && { provenance: ctx.provenance })
       });
       if (!approved) {
         const denial = args.approvalGate.getLastDenial?.();
@@ -442,7 +463,7 @@ export function createWebFetchTool(args: {
       }
       const signal = AbortSignal.timeout(10_000);
       const dnsPins = new Map<string, string>();
-      const pinDnsTarget = (target: { url: URL; resolvedAddresses: string[] }): URL => {
+      const pinDnsTarget = (target: { url: URL; resolvedAddresses: string[] }): typeof target => {
         const host = target.url.hostname.toLowerCase();
         const resolvedKey = target.resolvedAddresses
           .map((address) => address.toLowerCase())
@@ -453,15 +474,12 @@ export function createWebFetchTool(args: {
           throw new Error(`DNS rebinding detected for host: ${host}`);
         }
         dnsPins.set(host, resolvedKey);
-        return target.url;
+        return target;
       };
-      let currentUrl = pinDnsTarget(await resolveSafeFetchTarget(parsed.url));
+      let target = pinDnsTarget(await resolveSafeFetchTarget(parsed.url));
       for (let redirectCount = 0; redirectCount <= WEB_FETCH_MAX_REDIRECTS; redirectCount += 1) {
-        const response = await fetch(currentUrl, {
-          method: "GET",
-          redirect: "manual",
-          signal
-        });
+        const pathWithQuery = target.url.pathname + target.url.search;
+        const response = await fetchWithPinnedDns(target, pathWithQuery, { signal, timeoutMs: 10_000 });
         if (!REDIRECT_STATUS_CODES.has(response.status)) {
           const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
           if (contentType && !ALLOWED_CONTENT_TYPE_PATTERN.test(contentType)) {
@@ -491,11 +509,11 @@ export function createWebFetchTool(args: {
         }
         let redirectedUrl: URL;
         try {
-          redirectedUrl = new URL(location, currentUrl);
+          redirectedUrl = new URL(location, target.url);
         } catch {
           throw new Error("redirect response contained invalid location");
         }
-        currentUrl = pinDnsTarget(await resolveSafeFetchTarget(redirectedUrl));
+        target = pinDnsTarget(await resolveSafeFetchTarget(redirectedUrl));
       }
       throw new Error("web_fetch did not reach a terminal response");
     }
@@ -569,7 +587,7 @@ export function createMcpCallTool(args: {
       additionalProperties: false
     },
     riskLevel: "high",
-    execute: async (rawArgs: unknown) => {
+    execute: async (rawArgs: unknown, ctx?: ToolExecuteContext) => {
       const parsed = rawArgs as {
         server: string;
         tool: string;
@@ -579,7 +597,8 @@ export function createMcpCallTool(args: {
         tool: "mcp_call_tool",
         intent: "network-impacting",
         plan: `invoke MCP tool ${parsed.server}:${parsed.tool}`,
-        args: parsed
+        args: parsed,
+        ...(ctx?.provenance !== undefined && { provenance: ctx.provenance })
       });
       if (!approved) {
         const denial = args.approvalGate.getLastDenial?.();

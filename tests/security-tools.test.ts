@@ -10,6 +10,8 @@ import {
   scoreInboundRisk,
   wrapUntrustedContent
 } from "../src/security.js";
+import { DESTRUCTIVE_PATTERNS } from "../src/security/destructive-denylist.js";
+import { fetchWithPinnedDns } from "../src/network/ssrf-pin.js";
 import {
   AlwaysAllowApprovalGate,
   AlwaysDenyApprovalGate,
@@ -20,7 +22,11 @@ import {
   createWebFetchTool,
   isDestructiveCommand
 } from "../src/tools.js";
-import type { ToolExecutionContext } from "../src/tools.js";
+import type { PolicyDecisionLog, ToolExecuteContext } from "../src/types.js";
+
+vi.mock("../src/network/ssrf-pin.js", () => ({
+  fetchWithPinnedDns: vi.fn()
+}));
 
 afterEach(() => {
   setDnsLookupForTests(null);
@@ -173,7 +179,7 @@ describe("security and tool policy", () => {
         approvalGate: allowGate
       })
     );
-    const context: ToolExecutionContext = {
+    const context: ToolExecuteContext = {
       auditId: "audit-exec-deny",
       decisionLogs: []
     };
@@ -196,7 +202,7 @@ describe("security and tool policy", () => {
       reasonCode: "TOOL_EXEC_DENIED"
     });
     expect(context.decisionLogs[0]?.detail).toContain("deny:exec:");
-    expect(context.decisionLogs.some((entry) => entry.reasonCode === "ALLOWED")).toBe(false);
+    expect(context.decisionLogs.some((entry: PolicyDecisionLog) => entry.reasonCode === "ALLOWED")).toBe(false);
   });
 
   it("enforces strict approval gate for non-read exec intents", async () => {
@@ -257,22 +263,17 @@ describe("security and tool policy", () => {
   });
 
   it("revalidates redirect destinations before every fetch hop", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response("", {
-          status: 302,
-          headers: {
-            location: "https://8.8.8.8/final"
-          }
-        })
-      )
-      .mockResolvedValueOnce(
-        new Response("safe body", {
-          status: 200
-        })
-      );
-    vi.stubGlobal("fetch", fetchMock);
+    const pinnedFetchMock = vi.mocked(fetchWithPinnedDns)
+      .mockResolvedValueOnce({
+        status: 302,
+        headers: { get: (n: string) => (n.toLowerCase() === "location" ? "https://8.8.8.8/final" : null) },
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0))
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        headers: { get: () => "text/plain" },
+        arrayBuffer: () => Promise.resolve(new TextEncoder().encode("safe body").buffer)
+      });
 
     const tool = createWebFetchTool();
     const result = (await tool.execute({
@@ -284,23 +285,16 @@ describe("security and tool policy", () => {
 
     expect(result.status).toBe(200);
     expect(result.body).toContain("safe body");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
-    expect(fetchMock.mock.calls[1]?.[0]?.toString()).toBe("https://8.8.8.8/final");
+    expect(pinnedFetchMock).toHaveBeenCalledTimes(2);
+    expect(pinnedFetchMock.mock.calls[1]?.[1]).toContain("/final");
   });
 
   it("blocks private redirect destinations to prevent SSRF bypass", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response("", {
-          status: 302,
-          headers: {
-            location: "http://127.0.0.1/private"
-          }
-        })
-      );
-    vi.stubGlobal("fetch", fetchMock);
+    vi.mocked(fetchWithPinnedDns).mockResolvedValueOnce({
+      status: 302,
+      headers: { get: (n: string) => (n.toLowerCase() === "location" ? "http://127.0.0.1/private" : null) },
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(0))
+    });
 
     const tool = createWebFetchTool();
 
@@ -309,11 +303,20 @@ describe("security and tool policy", () => {
         url: "https://1.1.1.1/start"
       })
     ).rejects.toThrow(/SSRF blocked for private address/i);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchWithPinnedDns).toHaveBeenCalledTimes(1);
   });
 
   it("blocks mapped IPv6 loopback forms in SSRF guard", async () => {
     await expect(enforceSafeFetchUrl("http://[::ffff:127.0.0.1]/private")).rejects.toThrow(
+      /SSRF blocked for private address/i
+    );
+  });
+
+  it("blocks octal and hex IPv4 forms in SSRF guard", async () => {
+    const { normalizeAndParseIpv4 } = await import("../src/security.js");
+    expect(normalizeAndParseIpv4("0177.0.0.1")).toBe("127.0.0.1");
+    expect(normalizeAndParseIpv4("0x7f.0x0.0x0.0x1")).toBe("127.0.0.1");
+    await expect(enforceSafeFetchUrl("http://0177.0.0.1/")).rejects.toThrow(
       /SSRF blocked for private address/i
     );
   });
@@ -334,15 +337,11 @@ describe("security and tool policy", () => {
       }
       return [{ address: "1.1.1.1", family: 4 }] as never;
     });
-    const fetchMock = vi.fn().mockResolvedValueOnce(
-      new Response("", {
-        status: 302,
-        headers: {
-          location: "/next"
-        }
-      })
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    vi.mocked(fetchWithPinnedDns).mockResolvedValueOnce({
+      status: 302,
+      headers: { get: (n: string) => (n.toLowerCase() === "location" ? "/next" : null) },
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(0))
+    });
     const tool = createWebFetchTool();
 
     await expect(
@@ -350,18 +349,18 @@ describe("security and tool policy", () => {
         url: "https://example.test/start"
       })
     ).rejects.toThrow(/DNS rebinding detected/i);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchWithPinnedDns).toHaveBeenCalledTimes(1);
   });
 
   it("caches tool validators for repeated executions", async () => {
     const allowGate = new AlwaysAllowApprovalGate();
     const router = new ToolRouter({
       approvalGate: allowGate,
-      allowedExecBins: ["echo"]
+      allowedExecBins: ["node"]
     });
     router.register(
       createExecTool({
-        allowedBins: ["echo"],
+        allowedBins: ["node"],
         approvalGate: allowGate
       })
     );
@@ -369,7 +368,7 @@ describe("security and tool policy", () => {
       {
         name: "exec",
         args: {
-          command: "echo first"
+          command: "node -e console.log('first')"
         }
       },
       {
@@ -381,7 +380,7 @@ describe("security and tool policy", () => {
       {
         name: "exec",
         args: {
-          command: "echo second"
+          command: "node -e console.log('second')"
         }
       },
       {
@@ -407,5 +406,118 @@ describe("security and tool policy", () => {
     const logs = logger.getAll();
     expect(logs.length).toBe(100);
     expect(logs[0]?.auditId).toBe("audit-900");
+  });
+
+  it("exec respects maxBufferBytes and rejects when output exceeds buffer", async () => {
+    const allowGate = new AlwaysAllowApprovalGate();
+    const router = new ToolRouter({
+      approvalGate: allowGate,
+      allowedExecBins: ["node"]
+    });
+    router.register(
+      createExecTool({
+        allowedBins: ["node"],
+        approvalGate: allowGate,
+        maxBufferBytes: 100
+      })
+    );
+    const context = { auditId: "audit-buffer", decisionLogs: [] as PolicyDecisionLog[] };
+    await expect(
+      router.execute(
+        {
+          name: "exec",
+          args: {
+            command: "node -e console.log('x'.repeat(500))"
+          }
+        },
+        context
+      )
+    ).rejects.toThrow(/maxBuffer|ENOBUFS|stdout|buffer|spawn/i);
+  });
+
+  it("exec rejects when maxChildProcessesPerTurn concurrent invocations are active", async () => {
+    const allowGate = new AlwaysAllowApprovalGate();
+    const router = new ToolRouter({
+      approvalGate: allowGate,
+      allowedExecBins: ["node"]
+    });
+    router.register(
+      createExecTool({
+        allowedBins: ["node"],
+        approvalGate: allowGate,
+        maxChildProcessesPerTurn: 1
+      })
+    );
+    const context = { auditId: "audit-concurrent", decisionLogs: [] as PolicyDecisionLog[] };
+    const slowExec = router.execute(
+      {
+        name: "exec",
+        args: { command: "node -e setTimeout(function(){},400)" }
+      },
+      context
+    );
+    const fastExec = router.execute(
+      {
+        name: "exec",
+        args: { command: "node -e console.log(1)" }
+      },
+      context
+    );
+    await expect(fastExec).rejects.toThrow(/max concurrent execs reached/i);
+    await slowExec;
+  });
+
+  it("denylist blocks all destructive patterns and allows safe commands", () => {
+    const destructiveExamples = [
+      "rm -rf /tmp/foo",
+      "RM -RF /",
+      "dd if=/dev/zero of=disk.img",
+      "mkfs.ext4 /dev/sda1",
+      "echo foo > /dev/sda",
+      "cat file > /dev/null"
+    ];
+    for (const cmd of destructiveExamples) {
+      expect(isDestructiveCommand(cmd)).toBe(true);
+    }
+    const safeExamples = [
+      "echo hello",
+      "pwd",
+      "ls -la",
+      "cat file.txt",
+      "node -e 1"
+    ];
+    for (const cmd of safeExamples) {
+      expect(isDestructiveCommand(cmd)).toBe(false);
+    }
+    expect(DESTRUCTIVE_PATTERNS.length).toBeGreaterThan(0);
+  });
+
+  it("exec uses provided ExecSandbox when given", async () => {
+    const calls: { command: string; args: string[] }[] = [];
+    const mockSandbox = {
+      run: async (command: string, args: string[], _options: unknown) => {
+        calls.push({ command, args });
+        return { stdout: "from-mock", stderr: "", code: 0 };
+      }
+    };
+    const allowGate = new AlwaysAllowApprovalGate();
+    const router = new ToolRouter({
+      approvalGate: allowGate,
+      allowedExecBins: ["echo"]
+    });
+    router.register(
+      createExecTool({
+        allowedBins: ["echo"],
+        approvalGate: allowGate,
+        sandbox: mockSandbox as import("../src/exec/types.js").ExecSandbox
+      })
+    );
+    const result = (await router.execute(
+      { name: "exec", args: { command: "echo hello" } },
+      { auditId: "audit-sandbox", decisionLogs: [] }
+    )) as { stdout: string };
+    expect(result.stdout).toBe("from-mock");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({ command: "echo", args: ["hello"] });
   });
 });

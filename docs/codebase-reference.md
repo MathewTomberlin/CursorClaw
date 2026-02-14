@@ -65,6 +65,13 @@ Implemented in `src/gateway.ts`.
   - advisor/workspace tools (`advisor.file_change`, `workspace.*`, `trace.ingest`, `advisor.explain_function`)
 - Run persistence and restart continuity are supported via `RunStore`.
 
+### 3.1 Channels and chat.send
+
+- **Current behavior:** When a channel hub is configured, `chat.send` dispatches to the first adapter that supports the `channelId` (e.g. Slack when configured and `channelId` starts with `slack:`; otherwise `LocalEchoChannelAdapter`).
+- **Best-effort:** Delivery is best-effort; CursorClaw does not store or retry delivery beyond the adapter’s own behavior.
+- **Extension:** New adapters (e.g. Discord, webhook) can be added by implementing the `ChannelAdapter` interface (`src/channels.ts`) and registering with the hub.
+- **Optional callback:** The gateway accepts an optional `onBeforeSend?(channelId, text): Promise<boolean>`. If provided, it is called before `channelHub.send`. If it returns `false`, delivery is skipped and the RPC response indicates `delivered: false` with detail `"onBeforeSend returned false"`. This allows operator-defined webhooks or filtering without implementing a full adapter.
+
 ## 4) Security model (defense in depth)
 
 Security logic spans `src/security.ts`, `src/tools.ts`, `src/security/*`, and config defaults.
@@ -86,6 +93,7 @@ Security logic spans `src/security.ts`, `src/tools.ts`, `src/security/*`, and co
 - Approval gates:
   - policy-based (`PolicyApprovalGate`)
   - capability-based (`CapabilityApprovalGate`)
+- Untrusted-derived actions (when the last user message has high inbound risk score) require an explicit capability grant with untrusted scope; see provenance in `ToolExecutionContext` and `requestScopeKey` in the approval workflow.
 
 ### 4.3 Network egress safety
 
@@ -125,9 +133,11 @@ Implemented in `src/reliability/*`, `src/decision-journal.ts`, `src/proactive-su
 - `ReasoningResetController`: iteration threshold and reset cycles
 - `DeepScanService`: bounded recent-file discovery from git history + file hints
 - `ConfidenceModel`: confidence scoring and rationale factors
-- `GitCheckpointManager`: checkpoint/rollback/cleanup around risky mutations
+- `GitCheckpointManager`: checkpoint/rollback/cleanup around risky mutations. Checkpoint is skipped when the worktree is dirty to avoid overwriting user changes; rollback refuses if the worktree is dirty at rollback time.
 - `DecisionJournal`: append-only decision log with rotation and bounded recent context read
 - `ProactiveSuggestionEngine`: path-pattern suggestion generation + per-channel cooldown
+
+**Memory integrity scan:** The orchestrator runs `memory.integrityScan()` every `integrityScanEveryMs`. The scan returns `IntegrityFinding[]` (e.g. potential contradiction between records in the same session/category, or staleness for records older than 120 days). Findings are available for logging or future auto-remediation.
 
 ## 7) Context compression and workspace awareness
 
@@ -328,6 +338,10 @@ Focused unit coverage:
 - `throughput.guardrail.test.ts`: tool router throughput baseline
 - `plugin-contracts.test.ts`: plugin type signature stability
 
+## 14b) Exec sandbox (optional)
+
+The exec tool uses an `ExecSandbox` abstraction (`src/exec/types.ts`). The default `HostExecSandbox` (`src/exec/host-sandbox.ts`) runs commands via `child_process.execFile` with no OS-level sandbox. A future implementation (e.g. `BubblewrapExecSandbox` or a restricted-user wrapper) could be plugged in by passing `sandbox` to `createExecTool` in bootstrap; the same interface would apply.
+
 ## 15) Extension points for contributors
 
 Most practical extension points:
@@ -335,6 +349,7 @@ Most practical extension points:
 1. **Add tool definitions**
    - register new `ToolDefinition` via `ToolRouter.register(...)`
    - set schema/risk and integrate approval policy intentionally
+   - optional `toolDefinitionChecksum` on `ToolDefinition` is reserved for future verification of tool definitions (e.g. from MCP or plugins) against a checksum or allowlist
 2. **Add prompt pipeline plugins**
    - implement collector/analyzer/synthesizer contracts (`src/plugins/types.ts`)
    - register in bootstrap or runtime defaults

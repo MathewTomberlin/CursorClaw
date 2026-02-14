@@ -19,11 +19,14 @@ export interface CapabilityGrant {
   usesRemaining: number;
 }
 
+export type Provenance = "system" | "operator" | "untrusted";
+
 export interface CapabilityApprovalInput {
   tool: string;
   intent: ExecIntent | "high-risk-tool";
   plan: string;
   args: unknown;
+  provenance?: Provenance;
 }
 
 export class CapabilityStore {
