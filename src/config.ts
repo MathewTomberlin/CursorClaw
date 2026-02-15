@@ -190,6 +190,16 @@ export interface SubstrateConfig {
   allowSoulIdentityEvolution?: boolean;
 }
 
+/** Optional. Provider/model resilience: validation store path and policies (use only validated fallbacks, run validation against paid APIs). */
+export interface ProviderModelResilienceConfig {
+  /** Path to JSON file storing per-model validation results. No secrets stored. Default run/provider-model-validation.json. */
+  validationStorePath?: string;
+  /** When true, fallback chain only includes models that have passed the minimum-capability check. Default false. */
+  useOnlyValidatedFallbacks?: boolean;
+  /** When true, allow validation probe to run against paid APIs (e.g. OpenAI). Default false. */
+  runValidationAgainstPaidApis?: boolean;
+}
+
 export interface ContinuityConfig {
   /** When true (default), run BOOT.md once at process startup when the file exists at profile root. */
   bootEnabled?: boolean;
@@ -245,6 +255,8 @@ export interface CursorClawConfig {
   continuity?: ContinuityConfig;
   /** Optional. When set, each agent has an isolated profile directory. When absent, workspaceDir is the single profile root. */
   profiles?: AgentProfileConfig[];
+  /** Optional. Provider/model resilience: validation store and use-only-validated-fallbacks policy. See docs/PMR-provider-model-resilience.md. */
+  providerModelResilience?: ProviderModelResilienceConfig;
 }
 
 export type DeepPartial<T> = {
@@ -438,7 +450,8 @@ export const PATCHABLE_CONFIG_KEYS: (keyof CursorClawConfig)[] = [
   "tools",
   "substrate",
   "continuity",
-  "profiles"
+  "profiles",
+  "providerModelResilience"
 ];
 
 /** Merges a partial config into current, only for allowed top-level keys. Used by config.patch. */
