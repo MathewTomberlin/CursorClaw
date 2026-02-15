@@ -321,6 +321,44 @@ export async function skillsCredentialsList(
   return Array.isArray(names) ? names : [];
 }
 
+/** List credential names (no values) for a provider. Requires admin/local auth. */
+export async function providerCredentialsList(
+  profileId: string,
+  providerId: string
+): Promise<string[]> {
+  const res = await rpcWithProfile<{ names?: string[] }>(
+    "provider.credentials.list",
+    { providerId },
+    profileId
+  );
+  const names = res.result?.names;
+  return Array.isArray(names) ? names : [];
+}
+
+/** Set a provider API key/credential. Value is never logged. Requires admin/local auth. */
+export async function providerCredentialsSet(
+  profileId: string,
+  providerId: string,
+  keyName: string,
+  value: string
+): Promise<void> {
+  await rpcWithProfile("provider.credentials.set", { providerId, keyName, value }, profileId);
+}
+
+/** Delete a provider credential. Requires admin/local auth. */
+export async function providerCredentialsDelete(
+  profileId: string,
+  providerId: string,
+  keyName: string
+): Promise<boolean> {
+  const res = await rpcWithProfile<{ deleted?: boolean }>(
+    "provider.credentials.delete",
+    { providerId, keyName },
+    profileId
+  );
+  return res.result?.deleted === true;
+}
+
 /** Opens SSE to /stream. Note: EventSource cannot send Authorization header; use same-origin or future stream-ticket flow for auth. */
 export function openStream(sessionId?: string): EventSource {
   const base = getBaseUrl();

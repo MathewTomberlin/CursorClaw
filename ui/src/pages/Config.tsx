@@ -1,6 +1,16 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useLocation } from "react-router-dom";
-import { rpc, mapRpcError, profileCreate, profileDelete, configReload, configPatch } from "../api";
+import {
+  rpc,
+  mapRpcError,
+  profileCreate,
+  profileDelete,
+  configReload,
+  configPatch,
+  providerCredentialsList,
+  providerCredentialsSet,
+  providerCredentialsDelete
+} from "../api";
 import { useProfile } from "../contexts/ProfileContext";
 
 interface HeartbeatConfig {
@@ -36,6 +46,17 @@ export default function Config() {
   const [bindAddressPatchBusy, setBindAddressPatchBusy] = useState(false);
   const [bindAddressPatchError, setBindAddressPatchError] = useState<string | null>(null);
 
+  /** Provider API keys: providers that support profile-stored credentials (apiKeyRef). */
+  const PROVIDER_IDS_WITH_CREDENTIALS = ["openai-compatible"];
+  const [providerKeys, setProviderKeys] = useState<Record<string, string[]>>({});
+  const [providerKeysLoading, setProviderKeysLoading] = useState(false);
+  const [providerKeySetBusy, setProviderKeySetBusy] = useState(false);
+  const [providerKeySetError, setProviderKeySetError] = useState<string | null>(null);
+  const [providerKeyAddKeyName, setProviderKeyAddKeyName] = useState("apiKey");
+  const [providerKeyAddValue, setProviderKeyAddValue] = useState("");
+  const [providerKeyAddProviderId, setProviderKeyAddProviderId] = useState("openai-compatible");
+  const [providerKeyDeleteBusy, setProviderKeyDeleteBusy] = useState<string | null>(null);
+
   const fetchConfig = useCallback(async () => {
     setError(null);
     try {
@@ -69,6 +90,66 @@ export default function Config() {
       profilesRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [location.hash]);
+
+  const fetchProviderKeys = useCallback(async () => {
+    const pid = selectedProfileId;
+    if (!pid) {
+      setProviderKeys({});
+      return;
+    }
+    setProviderKeysLoading(true);
+    try {
+      const next: Record<string, string[]> = {};
+      for (const providerId of PROVIDER_IDS_WITH_CREDENTIALS) {
+        try {
+          const names = await providerCredentialsList(pid, providerId);
+          next[providerId] = names;
+        } catch {
+          next[providerId] = [];
+        }
+      }
+      setProviderKeys(next);
+    } finally {
+      setProviderKeysLoading(false);
+    }
+  }, [selectedProfileId]);
+
+  useEffect(() => {
+    fetchProviderKeys();
+  }, [fetchProviderKeys]);
+
+  const handleProviderKeySet = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const keyName = providerKeyAddKeyName.trim();
+    const value = providerKeyAddValue;
+    const providerId = providerKeyAddProviderId;
+    if (!keyName || !value || !selectedProfileId) return;
+    setProviderKeySetBusy(true);
+    setProviderKeySetError(null);
+    try {
+      await providerCredentialsSet(selectedProfileId, providerId, keyName, value);
+      setProviderKeyAddValue("");
+      await fetchProviderKeys();
+    } catch (err) {
+      setProviderKeySetError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setProviderKeySetBusy(false);
+    }
+  };
+
+  const handleProviderKeyDelete = async (providerId: string, keyName: string) => {
+    if (!selectedProfileId) return;
+    const key = `${providerId}:${keyName}`;
+    setProviderKeyDeleteBusy(key);
+    try {
+      await providerCredentialsDelete(selectedProfileId, providerId, keyName);
+      await fetchProviderKeys();
+    } catch {
+      // best-effort; list will refresh on next load
+    } finally {
+      setProviderKeyDeleteBusy(null);
+    }
+  };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -280,6 +361,85 @@ export default function Config() {
               </button>
               {bindAddressPatchError && <span className="error-msg">{bindAddressPatchError}</span>}
             </div>
+          </div>
+        ) : null}
+
+        {!loading && selectedProfileId ? (
+          <div className="config-section" style={{ marginBottom: "1rem" }}>
+            <h4>Provider API keys</h4>
+            <p className="muted">
+              API keys for providers that use <code>apiKeyRef</code> (e.g. OpenAI-compatible). Stored per profile; values are never shown or logged. Use key name <code>apiKey</code> for the default key.
+            </p>
+            {providerKeysLoading ? (
+              <p>Loading…</p>
+            ) : (
+              <>
+                {PROVIDER_IDS_WITH_CREDENTIALS.map((providerId) => (
+                  <div key={providerId} style={{ marginBottom: "1rem" }}>
+                    <strong>{providerId}</strong>
+                    <ul style={{ listStyle: "none", padding: 0, margin: "0.25rem 0" }}>
+                      {(providerKeys[providerId] ?? []).map((name) => (
+                        <li key={name} style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.25rem" }}>
+                          <code>{name}</code>
+                          <span className="muted">••••••••</span>
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            onClick={() => handleProviderKeyDelete(providerId, name)}
+                            disabled={providerKeyDeleteBusy !== null}
+                            aria-label={`Delete ${name}`}
+                          >
+                            {providerKeyDeleteBusy === `${providerId}:${name}` ? "Deleting…" : "Delete"}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+                <form onSubmit={handleProviderKeySet} className="form-inline" style={{ flexWrap: "wrap", gap: "0.5rem", alignItems: "flex-end" }}>
+                  <label>
+                    Provider
+                    <select
+                      value={providerKeyAddProviderId}
+                      onChange={(e) => setProviderKeyAddProviderId(e.target.value)}
+                      disabled={providerKeySetBusy}
+                      style={{ marginLeft: "0.25rem" }}
+                    >
+                      {PROVIDER_IDS_WITH_CREDENTIALS.map((id) => (
+                        <option key={id} value={id}>{id}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Key name
+                    <input
+                      type="text"
+                      value={providerKeyAddKeyName}
+                      onChange={(e) => setProviderKeyAddKeyName(e.target.value)}
+                      placeholder="apiKey"
+                      disabled={providerKeySetBusy}
+                      style={{ width: "6rem", marginLeft: "0.25rem" }}
+                    />
+                  </label>
+                  <label>
+                    Value
+                    <input
+                      type="password"
+                      value={providerKeyAddValue}
+                      onChange={(e) => setProviderKeyAddValue(e.target.value)}
+                      placeholder="sk-…"
+                      disabled={providerKeySetBusy}
+                      autoComplete="off"
+                      style={{ width: "14rem", marginLeft: "0.25rem" }}
+                    />
+                  </label>
+                  <button type="submit" className="btn" disabled={providerKeySetBusy}>
+                    {providerKeySetBusy ? "Saving…" : "Add / Update"}
+                  </button>
+                </form>
+              </>
+            )}
+            {providerKeySetError && <p className="error-msg">{providerKeySetError}</p>}
           </div>
         ) : null}
 

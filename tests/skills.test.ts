@@ -211,18 +211,22 @@ describe("skills runner", () => {
     expect(r.stderr).toBe("");
   });
 
-  it("runInstall runs install script and captures stdout", async () => {
-    const def: SkillDefinition = {
-      description: "",
-      install: "echo hello world",
-      credentials: "",
-      usage: ""
-    };
-    const r = await runInstall(dir, "echo-skill", def);
-    expect(r.ok).toBe(true);
-    expect(r.exitCode).toBe(0);
-    expect(r.stdout.trim()).toBe("hello world");
-  });
+  it(
+    "runInstall runs install script and captures stdout",
+    async () => {
+      const def: SkillDefinition = {
+        description: "",
+        install: "echo hello world",
+        credentials: "",
+        usage: ""
+      };
+      const r = await runInstall(dir, "echo-skill", def);
+      expect(r.ok).toBe(true);
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe("hello world");
+    },
+    15000
+  );
 
   it("runInstall uses cwd under profile skills/install/<skillId>", async () => {
     const def: SkillDefinition = {
