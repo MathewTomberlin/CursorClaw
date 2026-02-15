@@ -9,7 +9,8 @@ import {
   configPatch,
   providerCredentialsList,
   providerCredentialsSet,
-  providerCredentialsDelete
+  providerCredentialsDelete,
+  providerModelsList
 } from "../api";
 import { useProfile } from "../contexts/ProfileContext";
 
@@ -56,6 +57,16 @@ export default function Config() {
   const [providerKeyAddValue, setProviderKeyAddValue] = useState("");
   const [providerKeyAddProviderId, setProviderKeyAddProviderId] = useState("openai-compatible");
   const [providerKeyDeleteBusy, setProviderKeyDeleteBusy] = useState<string | null>(null);
+
+  /** Model selection: refresh from provider and set profile modelId. */
+  const PROVIDER_IDS_WITH_MODEL_LIST = ["cursor-agent-cli", "ollama", "openai-compatible"];
+  const [modelListProviderId, setModelListProviderId] = useState("ollama");
+  const [fetchedModels, setFetchedModels] = useState<Array<{ id: string; name?: string }>>([]);
+  const [modelListLoading, setModelListLoading] = useState(false);
+  const [modelListError, setModelListError] = useState<string | null>(null);
+  const [profileModelIdDraft, setProfileModelIdDraft] = useState<string>("");
+  const [profileModelSaveBusy, setProfileModelSaveBusy] = useState(false);
+  const [profileModelSaveError, setProfileModelSaveError] = useState<string | null>(null);
 
   const fetchConfig = useCallback(async () => {
     setError(null);
@@ -117,6 +128,62 @@ export default function Config() {
   useEffect(() => {
     fetchProviderKeys();
   }, [fetchProviderKeys]);
+
+  /** Sync profile model draft from config when config or selected profile changes. */
+  useEffect(() => {
+    if (!config || typeof config !== "object" || !selectedProfileId) {
+      setProfileModelIdDraft("");
+      return;
+    }
+    const c = config as { profiles?: Array<{ id: string; root: string; modelId?: string }>; defaultModel?: string };
+    const defaultModel = typeof c.defaultModel === "string" ? c.defaultModel : "";
+    const list = c.profiles;
+    if (!list?.length) {
+      setProfileModelIdDraft(defaultModel);
+      return;
+    }
+    const profile = list.find((p) => p.id === selectedProfileId);
+    setProfileModelIdDraft(profile?.modelId ?? defaultModel);
+  }, [config, selectedProfileId]);
+
+  const handleRefreshModels = useCallback(async () => {
+    if (!selectedProfileId) return;
+    setModelListLoading(true);
+    setModelListError(null);
+    setFetchedModels([]);
+    try {
+      const result = await providerModelsList(selectedProfileId, modelListProviderId);
+      if (result.error) {
+        setModelListError(result.error.message || result.error.code || "Failed to list models");
+        return;
+      }
+      setFetchedModels(result.models ?? []);
+    } catch (e) {
+      setModelListError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setModelListLoading(false);
+    }
+  }, [selectedProfileId, modelListProviderId]);
+
+  const handleSaveProfileModel = useCallback(async () => {
+    if (!config || typeof config !== "object" || !selectedProfileId) return;
+    const c = config as { profiles?: Array<{ id: string; root: string; modelId?: string }> };
+    const list = c.profiles;
+    if (!list?.length) return;
+    setProfileModelSaveBusy(true);
+    setProfileModelSaveError(null);
+    try {
+      const updated = list.map((p) =>
+        p.id === selectedProfileId ? { ...p, modelId: profileModelIdDraft.trim() || undefined } : p
+      );
+      await configPatch({ profiles: updated });
+      await fetchConfig();
+    } catch (e) {
+      setProfileModelSaveError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setProfileModelSaveBusy(false);
+    }
+  }, [config, selectedProfileId, profileModelIdDraft, fetchConfig]);
 
   const handleProviderKeySet = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -440,6 +507,65 @@ export default function Config() {
               </>
             )}
             {providerKeySetError && <p className="error-msg">{providerKeySetError}</p>}
+          </div>
+        ) : null}
+
+        {!loading && selectedProfileId ? (
+          <div className="config-section" style={{ marginBottom: "1rem" }}>
+            <h4>Model selection</h4>
+            <p className="muted">
+              Choose which model this profile uses. Use &quot;Refresh from provider&quot; to load models from Ollama or an OpenAI-compatible API; then select one and Save. The value is stored as the profile&apos;s <code>modelId</code> (must exist in config <code>models</code> for that provider).
+            </p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "center" }}>
+              <label>
+                Current model
+                <input
+                  type="text"
+                  value={profileModelIdDraft}
+                  onChange={(e) => setProfileModelIdDraft(e.target.value)}
+                  placeholder="e.g. default or model id"
+                  disabled={profileModelSaveBusy}
+                  style={{ width: "14rem", marginLeft: "0.25rem" }}
+                />
+              </label>
+              <label>
+                Provider
+                <select
+                  value={modelListProviderId}
+                  onChange={(e) => setModelListProviderId(e.target.value)}
+                  disabled={modelListLoading}
+                  style={{ marginLeft: "0.25rem" }}
+                >
+                  {PROVIDER_IDS_WITH_MODEL_LIST.map((id) => (
+                    <option key={id} value={id}>{id}</option>
+                  ))}
+                </select>
+              </label>
+              <button type="button" className="btn" onClick={handleRefreshModels} disabled={modelListLoading}>
+                {modelListLoading ? "Loading…" : "Refresh from provider"}
+              </button>
+              {fetchedModels.length > 0 ? (
+                <label>
+                  Pick from list
+                  <select
+                    value={profileModelIdDraft}
+                    onChange={(e) => setProfileModelIdDraft(e.target.value)}
+                    disabled={profileModelSaveBusy}
+                    style={{ marginLeft: "0.25rem", minWidth: "12rem" }}
+                  >
+                    <option value="">(use default)</option>
+                    {fetchedModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.name ?? m.id}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <button type="button" className="btn" onClick={handleSaveProfileModel} disabled={profileModelSaveBusy}>
+                {profileModelSaveBusy ? "Saving…" : "Save"}
+              </button>
+            </div>
+            {modelListError && <p className="error-msg">{modelListError}</p>}
+            {profileModelSaveError && <p className="error-msg">{profileModelSaveError}</p>}
           </div>
         ) : null}
 

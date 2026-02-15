@@ -208,7 +208,8 @@ const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
   "skills.credentials.list": ["admin", "local"],
   "provider.credentials.set": ["admin", "local"],
   "provider.credentials.delete": ["admin", "local"],
-  "provider.credentials.list": ["admin", "local"]
+  "provider.credentials.list": ["admin", "local"],
+  "provider.models.list": ["admin", "local"]
 };
 
 export function buildGateway(deps: GatewayDependencies): FastifyInstance {
@@ -1187,6 +1188,18 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         const { listProviderCredentialNames } = await import("./security/provider-credentials.js");
         const names = await listProviderCredentialNames(profileCtx.profileRoot, providerId);
         result = { names };
+      } else if (body.method === "provider.models.list") {
+        const providerId = typeof body.params?.providerId === "string" ? body.params.providerId.trim() : "";
+        if (!providerId) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "provider.models.list requires providerId");
+        }
+        const { listProviderModels } = await import("./providers/list-models.js");
+        const listResult = await listProviderModels(
+          providerId,
+          deps.getConfig(),
+          profileCtx.profileRoot ?? undefined
+        );
+        result = listResult.ok ? { models: listResult.models } : { error: listResult.error };
       } else if (body.method === "admin.restart") {
         if (!deps.onRestart) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "restart not configured");

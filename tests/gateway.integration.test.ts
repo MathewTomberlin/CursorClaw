@@ -600,6 +600,121 @@ describe("gateway integration", () => {
 
       await app.close();
     });
+
+    it("provider.models.list returns config models for cursor-agent-cli and structured error for unknown", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "cursorclaw-modelslist-"));
+      cleanupPaths.push(dir);
+      const config = loadConfig({
+        gateway: {
+          auth: { mode: "token", token: "test-token" },
+          protocolVersion: "2.0",
+          bind: "loopback",
+          trustedProxyIps: []
+        },
+        defaultModel: "cursor-auto",
+        models: {
+          "cursor-auto": {
+            provider: "cursor-agent-cli",
+            timeoutMs: 60_000,
+            authProfiles: ["default"],
+            fallbackModels: [],
+            enabled: true
+          },
+          fallback: {
+            provider: "fallback-model",
+            timeoutMs: 10_000,
+            authProfiles: ["default"],
+            fallbackModels: [],
+            enabled: true
+          }
+        }
+      });
+      const cronService = new CronService({
+        maxConcurrentRuns: 2,
+        stateFile: join(dir, "tmp", "cron-state.json")
+      });
+      await cronService.loadState();
+      const approvalsDir = join(dir, "tmp", "approvals");
+      await mkdir(approvalsDir, { recursive: true });
+      const capabilityStore = new CapabilityStore({ stateDir: approvalsDir });
+      await capabilityStore.load();
+      const approvalWorkflow = new ApprovalWorkflow({
+        capabilityStore,
+        defaultGrantTtlMs: 10 * 60_000,
+        defaultGrantUses: 1,
+        stateDir: approvalsDir
+      });
+      await approvalWorkflow.load();
+      const substrateStore = new SubstrateStore();
+      await substrateStore.reload(dir, config.substrate);
+      const profileContextMap = new Map<string, ProfileContext>([
+        [
+          "default",
+          {
+            profileRoot: dir,
+            substrateStore,
+            approvalWorkflow,
+            capabilityStore,
+            cronService
+          }
+        ]
+      ]);
+      const memory = new MemoryStore({ workspaceDir: dir });
+      const adapter = new CursorAgentModelAdapter({ defaultModel: "cursor-auto", models: config.models });
+      const gate = new AlwaysAllowApprovalGate();
+      const toolRouter = new ToolRouter({ approvalGate: gate, allowedExecBins: ["echo"] });
+      toolRouter.register(createExecTool({ allowedBins: ["echo"], approvalGate: gate }));
+      const runtime = new AgentRuntime({
+        config,
+        adapter,
+        toolRouter,
+        memory,
+        snapshotDir: join(dir, "snapshots")
+      });
+      const incidentCommander = new IncidentCommander();
+      const auth = new AuthService({
+        mode: "token",
+        token: "test-token",
+        trustedProxyIps: [],
+        isTokenRevoked: (t: string) => incidentCommander.isTokenRevoked(t)
+      });
+      const rateLimiter = new MethodRateLimiter(10, 60_000, {});
+      const policyLogs = new PolicyDecisionLogger();
+      const app = buildGateway({
+        getConfig: () => config,
+        runtime,
+        cronService,
+        auth,
+        rateLimiter,
+        policyLogs,
+        incidentCommander,
+        defaultProfileId: "default",
+        workspaceDir: dir,
+        workspaceRoot: dir,
+        getProfileContext: (profileId) => profileContextMap.get(profileId)
+      });
+
+      const rpc = (method: string, params?: object) =>
+        app.inject({
+          method: "POST",
+          url: "/rpc",
+          headers: { authorization: "Bearer test-token" },
+          payload: { version: "2.0", method, params }
+        });
+
+      const listRes = await rpc("provider.models.list", { profileId: "default", providerId: "cursor-agent-cli" });
+      expect(listRes.statusCode).toBe(200);
+      expect(listRes.json().result.models).toContainEqual({ id: "cursor-auto", name: "cursor-auto" });
+
+      const unknownRes = await rpc("provider.models.list", { profileId: "default", providerId: "unknown-provider" });
+      expect(unknownRes.statusCode).toBe(200);
+      expect(unknownRes.json().result.error).toEqual({ code: "UNKNOWN_PROVIDER", message: expect.stringContaining("unknown-provider") });
+
+      const badRes = await rpc("provider.models.list", { profileId: "default" });
+      expect(badRes.statusCode).toBe(400);
+
+      await app.close();
+    });
   });
 
   it("dispatches chat.send through channel hub when configured", async () => {

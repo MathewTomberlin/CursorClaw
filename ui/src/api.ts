@@ -359,6 +359,28 @@ export async function providerCredentialsDelete(
   return res.result?.deleted === true;
 }
 
+/** Result of provider.models.list: either models or an error (e.g. network, 401). */
+export interface ProviderModelsListResult {
+  models?: Array<{ id: string; name?: string }>;
+  error?: { code: string; message: string };
+}
+
+/** List models from a provider (e.g. Ollama tags, OpenAI-compatible /models). For discovery only; profile model selection still uses config. Requires admin/local auth. */
+export async function providerModelsList(
+  profileId: string,
+  providerId: string
+): Promise<ProviderModelsListResult> {
+  const res = await rpcWithProfile<{ models?: Array<{ id: string; name?: string }>; error?: { code: string; message: string } }>(
+    "provider.models.list",
+    { providerId },
+    profileId
+  );
+  const out = res.result;
+  if (out == null || typeof out !== "object") return {};
+  if ("error" in out && out.error) return { error: out.error };
+  return { models: Array.isArray(out.models) ? out.models : [] };
+}
+
 /** Opens SSE to /stream. Note: EventSource cannot send Authorization header; use same-origin or future stream-ticket flow for auth. */
 export function openStream(sessionId?: string): EventSource {
   const base = getBaseUrl();

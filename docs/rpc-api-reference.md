@@ -43,7 +43,7 @@ Optional trusted identity header enforcement:
 }
 ```
 
-**Profile-scoped RPCs:** For multi-agent setups, `params` may include an optional `profileId` string. When present, the request is executed in the context of that agent profile (substrate, memory, approvals, etc.). When omitted, the gateway uses the default profile. Single-agent deployments ignore this and use the single profile. Profile-scoped methods include: `heartbeat.poll`, `heartbeat.getFile`, `heartbeat.update`, `memory.*`, `substrate.*`, `skills.list`, `skills.fetchFromUrl`, `skills.analyze`, `skills.install`, `skills.credentials.set`, `skills.credentials.delete`, `skills.credentials.list`, `provider.credentials.set`, `provider.credentials.delete`, `provider.credentials.list`, `approval.*`, `cron.list`/`cron.add`, `workspace.status`/`workspace.semantic_search`, `trace.ingest`, `advisor.file_change`/`advisor.explain_function`, `incident.bundle`, `chat.getThread`, and `thread.set`. `agent.run` accepts `session.profileId` to run the turn in that profile's context.
+**Profile-scoped RPCs:** For multi-agent setups, `params` may include an optional `profileId` string. When present, the request is executed in the context of that agent profile (substrate, memory, approvals, etc.). When omitted, the gateway uses the default profile. Single-agent deployments ignore this and use the single profile. Profile-scoped methods include: `heartbeat.poll`, `heartbeat.getFile`, `heartbeat.update`, `memory.*`, `substrate.*`, `skills.list`, `skills.fetchFromUrl`, `skills.analyze`, `skills.install`, `skills.credentials.set`, `skills.credentials.delete`, `skills.credentials.list`, `provider.credentials.set`, `provider.credentials.delete`, `provider.credentials.list`, `provider.models.list`, `approval.*`, `cron.list`/`cron.add`, `workspace.status`/`workspace.semantic_search`, `trace.ingest`, `advisor.file_change`/`advisor.explain_function`, `incident.bundle`, `chat.getThread`, and `thread.set`. `agent.run` accepts `session.profileId` to run the turn in that profile's context.
 
 ### Success response
 
@@ -153,6 +153,7 @@ Method scope rules (`METHOD_SCOPES`):
 - `provider.credentials.set`: admin, local
 - `provider.credentials.delete`: admin, local
 - `provider.credentials.list`: admin, local
+- `provider.models.list`: admin, local
 
 ---
 
@@ -648,6 +649,16 @@ Lists credential **names** for a provider (no values). Profile-scoped.
 `params`: `providerId: string` (required).
 
 Returns `{ names: string[] }`.
+
+---
+
+### 5.30 `provider.models.list`
+
+Lists models available from a provider (for discovery when configuring profile or model). Profile context is used for openai-compatible API key resolution when `apiKeyRef` is profile-scoped. Supported providers: `ollama` (GET baseURL/api/tags), `openai-compatible` (GET baseURL/models with Bearer), `cursor-agent-cli` (config-only model ids). Never logs API keys.
+
+`params`: `providerId: string` (required). Optional `profileId` for profile context.
+
+Returns either `{ models: { id: string, name?: string }[] }` on success, or `{ error: { code: string, message: string } }` on provider/network error (e.g. `NO_CREDENTIAL`, `UNAUTHORIZED`, `PROVIDER_ERROR`, `NETWORK_ERROR`, `UNKNOWN_PROVIDER`).
 
 ## 6) RPC error codes in practice
 
