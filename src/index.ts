@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, watch } from "node:fs";
 import { join } from "node:path";
 import { safeReadUtf8 } from "./fs-utils.js";
 
@@ -297,9 +297,20 @@ async function main(): Promise<void> {
     failClosedOnError: devMode ? config.privacy.failClosedOnScannerError : true,
     detectors: configuredDetectors.length > 0 ? configuredDetectors : DEFAULT_SECRET_SCANNER_DETECTORS
   });
+  const pmr = config.providerModelResilience;
   const adapter = new CursorAgentModelAdapter({
     models: config.models,
-    defaultModel: config.defaultModel
+    defaultModel: config.defaultModel,
+    ...(pmr?.useOnlyValidatedFallbacks === true && {
+      providerModelResilience: {
+        useOnlyValidatedFallbacks: true,
+        ...(pmr.validationStorePath !== undefined &&
+          pmr.validationStorePath !== "" && {
+            validationStorePath: pmr.validationStorePath
+          })
+      }
+    }),
+    cwd: process.cwd()
   });
   const pluginHost = new PluginHost({
     defaultTimeoutMs: 2_500
@@ -809,6 +820,25 @@ async function main(): Promise<void> {
     host: bindHost,
     port
   });
+
+  // Config file watcher: reload when openclaw.json (or CURSORCLAW_CONFIG_PATH) changes so edits from another device apply without clicking Reload.
+  if (existsSync(configPath)) {
+    let configReloadTimeout: ReturnType<typeof setTimeout> | null = null;
+    watch(configPath, { persistent: false }, () => {
+      if (configReloadTimeout) clearTimeout(configReloadTimeout);
+      configReloadTimeout = setTimeout(() => {
+        configReloadTimeout = null;
+        try {
+          configRef.current = loadConfigFromDisk({ cwd: workspaceDir });
+          // eslint-disable-next-line no-console
+          console.log("[CursorClaw] config reloaded from disk (file change)");
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn("[CursorClaw] config reload from file change failed:", (err as Error).message);
+        }
+      }, 500);
+    });
+  }
 
   // C.1 BOOT.md: run once at process startup when enabled and file exists
   const bootEnabled = configRef.current.continuity?.bootEnabled !== false;

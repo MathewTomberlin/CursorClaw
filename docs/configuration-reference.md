@@ -366,6 +366,8 @@ Provider and model resilience (PMR): validation store and policies. See `docs/PM
 
 To validate a model: `npm run validate-model -- --modelId=<id>` (optional `--config=<path>`). Add `--fullSuite` to run the capability suite (tool call + reasoning); default is tool-call only. Exit code 0 if the probe passed. If the model has `paidApi: true`, validation is skipped unless `runValidationAgainstPaidApis` is `true`.
 
+**Local models (e.g. Ollama, 16GB VRAM):** For minimum hardware and model-size constraints, adding a local provider to the validation suite, and graceful degradation, see **Provider and Model Resilience** `docs/PMR-provider-model-resilience.md` §8 (Phase 4 — Optional local models).
+
 ## 4.16 `autonomyBudget`
 
 Limits how many proactive/autonomy actions run per channel per hour and per day. **Scheduled heartbeats are not limited** (they always run on their interval). Other proactive flows (e.g. queued intents) respect this budget.

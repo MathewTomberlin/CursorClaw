@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 
+import {
+  readValidationStore,
+  resolveValidationStorePath
+} from "./provider-model-resilience/validation-store.js";
 import { redactSecrets } from "./security.js";
 import { getProvider } from "./providers/registry.js";
 import type { ModelProvider } from "./providers/types.js";
@@ -37,9 +41,19 @@ export interface CursorAgentAdapterModelConfig {
   openaiModelId?: string;
 }
 
+/** Minimal PMR config for adapter; full type in config.ts. */
+export interface AdapterProviderModelResilienceConfig {
+  useOnlyValidatedFallbacks?: boolean;
+  validationStorePath?: string;
+}
+
 export interface CursorAgentAdapterConfig {
   models: Record<string, CursorAgentAdapterModelConfig>;
   defaultModel: string;
+  /** Optional. When set, adapter can filter fallback chain to validated-only (PMR Phase 3). */
+  providerModelResilience?: AdapterProviderModelResilienceConfig;
+  /** Process cwd for resolving validation store path. Used when providerModelResilience.useOnlyValidatedFallbacks is true. */
+  cwd?: string;
 }
 
 function isRecoverableAdapterError(error: unknown): boolean {
@@ -106,7 +120,24 @@ export class CursorAgentModelAdapter implements ModelAdapter {
     options: SendTurnOptions
   ): AsyncIterable<AdapterEvent> {
     const tried: string[] = [];
-    const modelChain = [session.model, ...(this.config.models[session.model]?.fallbackModels ?? [])];
+    let modelChain = [session.model, ...(this.config.models[session.model]?.fallbackModels ?? [])];
+
+    if (this.config.providerModelResilience?.useOnlyValidatedFallbacks) {
+      const cwd = this.config.cwd ?? process.cwd();
+      const storePath = resolveValidationStorePath(
+        this.config.providerModelResilience.validationStorePath,
+        cwd
+      );
+      const store = await readValidationStore(storePath);
+      const validated = modelChain.filter((id) => store.results[id]?.passed === true);
+      if (validated.length === 0) {
+        throw new Error(
+          "no validated model available; run 'npm run validate-model' for candidate models or set providerModelResilience.useOnlyValidatedFallbacks to false"
+        );
+      }
+      modelChain = validated;
+    }
+
     let lastError: unknown;
     for (const modelName of modelChain) {
       const modelConfig = this.config.models[modelName];
