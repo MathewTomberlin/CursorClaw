@@ -63,6 +63,8 @@ import {
   CapabilityApprovalGate,
   ToolRouter,
   createExecTool,
+  createGhPrReadTool,
+  createGhPrWriteTool,
   createMcpCallTool,
   createMcpListResourcesTool,
   createMcpReadResourceTool,
@@ -401,6 +403,27 @@ async function main(): Promise<void> {
       return undefined;
     };
     toolRouter.register(createProposeSoulIdentityUpdateTool({ getSubstrateContent }));
+  }
+  if (config.tools.gh?.enabled) {
+    const ghRepoScope = config.tools.gh.repoScope && String(config.tools.gh.repoScope).trim() ? config.tools.gh.repoScope : undefined;
+    toolRouter.register(
+      createGhPrReadTool({
+        approvalGate,
+        workspaceCwd: profileRoot,
+        ...(ghRepoScope != null && { repoScope: ghRepoScope }),
+        ...(config.tools.exec.maxBufferBytes != null && { maxBufferBytes: config.tools.exec.maxBufferBytes })
+      })
+    );
+    if (config.tools.gh.allowWrite) {
+      toolRouter.register(
+        createGhPrWriteTool({
+          approvalGate,
+          workspaceCwd: profileRoot,
+          ...(ghRepoScope != null && { repoScope: ghRepoScope }),
+          ...(config.tools.exec.maxBufferBytes != null && { maxBufferBytes: config.tools.exec.maxBufferBytes })
+        })
+      );
+    }
   }
 
   const confidenceModel = new ConfidenceModel();

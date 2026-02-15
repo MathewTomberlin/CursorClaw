@@ -305,16 +305,17 @@ Notes:
 
 Destructive command detection is signature-based (`src/security/destructive-denylist.ts`). Patterns block recursive force-remove, raw device writes, filesystem format, and redirects to devices. The denylist may need updates for new shells or environments; no attestation of custom tool definitions is enforced.
 
-## 4.14 `tools.gh` (read-only GitHub PRs)
+## 4.14 `tools.gh` (GitHub PR read and optional write)
 
-Optional read-only GitHub integration via the GitHub CLI (`gh`). When enabled, the agent gets a dedicated tool `gh_pr_read` that can run **only** `gh pr list` and `gh pr view` (by number or branch). No PR creation, merge, or other mutating operations.
+Optional GitHub integration via the GitHub CLI (`gh`). When `enabled` is true, the agent gets `gh_pr_read` (list/view PRs only). When `allowWrite` is also true, the agent gets `gh_pr_write` (comment on a PR, create a PR). No merge, workflow dispatch, or other high-impact operations.
 
 Defaults:
 
 ```json
 {
   "enabled": false,
-  "repoScope": null
+  "repoScope": null,
+  "allowWrite": false
 }
 ```
 
@@ -322,15 +323,16 @@ Fields:
 
 - **`enabled`:** When `true`, the `gh_pr_read` tool is registered. Default `false`.
 - **`repoScope` (optional):** When set (e.g. `"owner/repo"`), every `gh` call is made with `--repo owner/repo` so the agent cannot target other repositories.
+- **`allowWrite` (optional):** When `true` (and `enabled` is true), the `gh_pr_write` tool is registered. Default `false`. Write operations (comment on PR, create PR) require **approval** and the **mutating** capability (`process.exec.mutate`); see approval workflow and capability store.
 
 **Authentication:** No token is passed in tool arguments or config. The operator must either:
 
 1. Run `gh auth login` on the host where CursorClaw runs so the process inherits the session, or  
-2. Set `GH_TOKEN` or `GITHUB_TOKEN` in the **environment** of the CursorClaw process (e.g. a fine-grained PAT with minimal scope: read-only for Pull requests and Repository metadata for the repo).
+2. Set `GH_TOKEN` or `GITHUB_TOKEN` in the **environment** of the CursorClaw process (e.g. a fine-grained PAT with minimal scope: Pull requests read/write and Repository metadata for the repo when using write).
 
-**Approval:** `gh_pr_read` is treated as network-impacting; it uses the same capability/approval model as other network read operations (e.g. `process.exec` and `net.fetch`). See the approval workflow and capability store for your profile.
+**Approval:** `gh_pr_read` is treated as network-impacting. `gh_pr_write` is mutating and requires the same capability as other mutating exec operations (e.g. `process.exec.mutate`). See the approval workflow and capability store for your profile.
 
-**Docs:** See `docs/GH.1-read-only-github-integration.md` for the full implementation guide and security notes.
+**Docs:** See `docs/GH.1-read-only-github-integration.md` and `docs/GH.2-github-pr-write.md` for implementation guides and security notes.
 
 ## 4.15 `models` and `defaultModel`
 
