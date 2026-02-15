@@ -63,6 +63,10 @@ export interface ModelProviderConfig {
   maxContextTokens?: number;
   /** Optional drop order when trimming for maxContextTokens. Roles listed first are dropped first (e.g. ['assistant','user','system']). Omit for oldest-first (TU.2). */
   truncationPriority?: ("system" | "user" | "assistant")[];
+  /** When true and over maxContextTokens, replace oldest messages with one rule-based summary before trimming (TU.4). Off by default. */
+  summarizeOldTurns?: boolean;
+  /** Max tokens for the summary of earlier turns when summarizeOldTurns is true. Default 200. */
+  summarizeOldTurnsMaxTokens?: number;
 }
 
 export interface ToolsConfig {

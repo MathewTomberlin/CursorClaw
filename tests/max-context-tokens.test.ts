@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { applyMaxContextTokens, estimateTokens } from "../src/max-context-tokens.js";
+import {
+  applyMaxContextTokens,
+  estimateTokens,
+  summarizePrefix
+} from "../src/max-context-tokens.js";
 
 describe("max-context-tokens (TU.2)", () => {
   it("estimateTokens uses ~4 chars per token", () => {
@@ -104,6 +108,50 @@ describe("max-context-tokens (TU.2)", () => {
       const result = applyMaxContextTokens(messages, 10, ["assistant", "user", "system"]);
       expect(result).toHaveLength(1);
       expect(result[0]!.content).toBe(huge);
+    });
+  });
+
+  describe("TU.4 summarization of old turns", () => {
+    it("summarizePrefix with 0 or 1 message returns last only or (none)", () => {
+      const empty = summarizePrefix([], 200);
+      expect(empty.summaryMessage.role).toBe("system");
+      expect(empty.summaryMessage.content).toContain("Summary of earlier turns:");
+      expect(empty.remainingMessages).toEqual([]);
+
+      const one = [{ role: "user" as const, content: "hi" }];
+      const r = summarizePrefix(one, 200);
+      expect(r.summaryMessage.content).toContain("(none)");
+      expect(r.remainingMessages).toEqual(one);
+    });
+
+    it("summarizePrefix replaces prefix with one system summary and keeps last message", () => {
+      const messages = [
+        { role: "user", content: "What is X?" },
+        { role: "assistant", content: "X is a thing." },
+        { role: "user", content: "last" }
+      ];
+      const { summaryMessage, remainingMessages } = summarizePrefix(messages, 200);
+      expect(summaryMessage.role).toBe("system");
+      expect(summaryMessage.content).toMatch(/^Summary of earlier turns:\n/);
+      expect(summaryMessage.content).toContain("User: What is X?");
+      expect(summaryMessage.content).toContain("Assistant: X is a thing.");
+      expect(remainingMessages).toHaveLength(1);
+      expect(remainingMessages[0]!.content).toBe("last");
+    });
+
+    it("summary length never exceeds maxSummaryTokens (body) plus fixed prefix", () => {
+      const long = "a".repeat(2000);
+      const messages = [
+        { role: "user", content: long },
+        { role: "assistant", content: long },
+        { role: "user", content: "last" }
+      ];
+      const maxSummaryTokens = 50;
+      const { summaryMessage } = summarizePrefix(messages, maxSummaryTokens);
+      const prefixTokens = estimateTokens("Summary of earlier turns:\n");
+      expect(estimateTokens(summaryMessage.content)).toBeLessThanOrEqual(
+        maxSummaryTokens + prefixTokens + 1
+      );
     });
   });
 });
