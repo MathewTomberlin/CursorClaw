@@ -84,6 +84,8 @@ export interface GatewayDependencies {
   capabilityStore?: CapabilityStore;
   /** When set, profile-scoped RPCs use this context for the resolved profileId. Single-profile mode: omit or return one context for "default". */
   getProfileContext?: (profileId: string) => ProfileContext | undefined;
+  /** Resolve profile root for a profile id (e.g. from current config). Used when getProfileContext returns undefined so profiles added via config.patch still get correct thread/store paths. */
+  getProfileRoot?: (profileId: string) => string | undefined;
   /** When set, chat thread is persisted per profile/session so desktop and mobile see the same message list. */
   threadStore?: { getThread: typeof getThread; setThread: typeof setThread; appendMessage: typeof appendMessage };
   onFileChangeSuggestions?: (args: {
@@ -116,6 +118,8 @@ export interface GatewayDependencies {
     symbol: string;
   }) => Promise<unknown>;
   onActivity?: () => void;
+  /** Called after config is written to disk (config.patch / profile.create / profile.delete). Used to avoid file watcher overwriting in-memory with a stale read. */
+  onConfigWritten?: () => void;
   lifecycleStream?: LifecycleStream;
   /** If provided, called before channelHub.send; return false to skip delivery. */
   onBeforeSend?: (channelId: string, text: string) => Promise<boolean>;
@@ -139,12 +143,13 @@ export interface GatewayDependencies {
   markHeartbeatInterrupted?: () => void;
 }
 
-/** Resolve profile context for profile-scoped RPCs. Uses getProfileContext when present, otherwise builds a one-off context from deps (single-profile). */
+/** Resolve profile context for profile-scoped RPCs. Uses getProfileContext when present, otherwise builds a one-off context from deps (single-profile). When getProfileRoot is set, uses it for profileRoot so profiles added via config.patch get correct thread/store paths. */
 function getEffectiveProfileContext(deps: GatewayDependencies, resolvedProfileId: string): ProfileContext {
   const fromGetter = deps.getProfileContext?.(resolvedProfileId);
   if (fromGetter) return fromGetter;
+  const profileRoot = deps.getProfileRoot?.(resolvedProfileId) ?? deps.workspaceDir ?? "";
   return {
-    profileRoot: deps.workspaceDir ?? "",
+    profileRoot,
     ...(deps.substrateStore !== undefined ? { substrateStore: deps.substrateStore } : {}),
     ...(deps.approvalWorkflow !== undefined ? { approvalWorkflow: deps.approvalWorkflow } : {}),
     ...(deps.capabilityStore !== undefined ? { capabilityStore: deps.capabilityStore } : {}),
@@ -425,9 +430,14 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
       return reply.code(400).send(errorResponse(body.id, auditId, "RISK_BLOCKED", "Request risk score too high"));
     }
 
-    // Resolve profile for profile-scoped RPCs. When absent, use default (backward compatible).
+    // Resolve profile for profile-scoped RPCs. Prefer top-level profileId (e.g. chat.getThread), then session.profileId (e.g. agent.run), then default.
+    const sessionParam = body.params?.session as { profileId?: string } | undefined;
     const resolvedProfileId =
-      body.params?.profileId != null ? String(body.params.profileId) : (deps.defaultProfileId ?? "default");
+      body.params?.profileId != null
+        ? String(body.params.profileId)
+        : sessionParam?.profileId != null
+          ? String(sessionParam.profileId)
+          : (deps.defaultProfileId ?? "default");
     const profileCtx = getEffectiveProfileContext(deps, resolvedProfileId);
 
     try {
@@ -795,6 +805,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         }
         deps.setConfig(updated);
         await writeConfigToDisk(updated, { cwd: deps.workspaceRoot });
+        deps.onConfigWritten?.();
         result = { ok: true };
       } else if (body.method === "profile.list") {
         const config = deps.getConfig();
@@ -836,6 +847,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         (configCreate as CursorClawConfig).profiles = newProfiles;
         await mkdir(profileRootPath, { recursive: true });
         const configPath = await writeConfigToDisk(configCreate, { cwd: deps.workspaceRoot });
+        deps.onConfigWritten?.();
         result = { profile: { id, root }, configPath };
       } else if (body.method === "profile.delete") {
         if (!deps.workspaceRoot) {
@@ -862,6 +874,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         const newProfiles = list.filter((p) => p.id !== id);
         (configDelete as CursorClawConfig).profiles = newProfiles;
         await writeConfigToDisk(configDelete, { cwd: deps.workspaceRoot });
+        deps.onConfigWritten?.();
         if (removeDirectory) {
           try {
             const dirPath = resolveProfileRoot(deps.workspaceRoot, { ...configDelete, profiles: [removed] }, id);

@@ -453,7 +453,7 @@ function merge<T extends object>(base: T, override?: DeepPartial<T>): T {
   return out as T;
 }
 
-/** Top-level config keys safe to patch via config.patch (excludes gateway, defaultModel, models). */
+/** Top-level config keys safe to patch via config.patch (excludes gateway auth; bind/bindAddress handled separately). */
 export const PATCHABLE_CONFIG_KEYS: (keyof CursorClawConfig)[] = [
   "heartbeat",
   "autonomyBudget",
@@ -470,7 +470,9 @@ export const PATCHABLE_CONFIG_KEYS: (keyof CursorClawConfig)[] = [
   "substrate",
   "continuity",
   "profiles",
-  "providerModelResilience"
+  "providerModelResilience",
+  "models",
+  "defaultModel"
 ];
 
 /** Merges a partial config into current, only for allowed top-level keys. Used by config.patch. */

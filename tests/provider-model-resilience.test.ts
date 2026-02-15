@@ -16,6 +16,8 @@ import {
 import { runProbe } from "../src/provider-model-resilience/probe.js";
 import { CursorAgentModelAdapter } from "../src/model-adapter.js";
 import type { ToolDefinition } from "../src/types.js";
+import { registerProvider, clearProviderCache } from "../src/providers/registry.js";
+import { FallbackModelProvider } from "../src/providers/fallback.js";
 
 describe("provider-model-resilience validation store", () => {
   it("resolveValidationStorePath uses default when config path absent", () => {
@@ -373,5 +375,165 @@ describe("useOnlyValidatedFallbacks policy (PMR Phase 3)", () => {
     } finally {
       await rm(dir, { recursive: true }).catch(() => {});
     }
+  });
+
+  describe("allowOneUnvalidatedAttempt", () => {
+    it("uses unfiltered chain and logs warning when empty store and allowOneUnvalidatedAttempt true", async () => {
+      clearProviderCache();
+      registerProvider("fallback-model", () => new FallbackModelProvider());
+      const dir = await mkdtemp(join(tmpdir(), "cursorclaw-pmr-allow-one-"));
+      const storePath = join(dir, "store.json");
+      try {
+        await writeValidationStore(storePath, {
+          lastUpdated: "",
+          results: { primary: { passed: false, lastRun: "", checks: {}, error: "not validated" } }
+        });
+        const adapter = new CursorAgentModelAdapter({
+          defaultModel: "primary",
+          models: {
+            primary: {
+              provider: "fallback-model",
+              timeoutMs: 5_000,
+              authProfiles: ["default"],
+              fallbackModels: [],
+              enabled: true
+            }
+          },
+          providerModelResilience: {
+            useOnlyValidatedFallbacks: true,
+            allowOneUnvalidatedAttempt: true,
+            validationStorePath: storePath
+          },
+          cwd: dir
+        });
+        const session = await adapter.createSession({
+          sessionId: "s1",
+          channelId: "c1",
+          channelKind: "dm"
+        });
+        const events: string[] = [];
+        for await (const event of adapter.sendTurn(
+          session,
+          [{ role: "user", content: "hi" }],
+          [simpleTool],
+          { turnId: "t-allow-one" }
+        )) {
+          events.push(event.type);
+        }
+        expect(events).toContain("done");
+        const logs = adapter.getRedactedLogs();
+        expect(logs.some((l) => l.includes("allowing one unvalidated attempt"))).toBe(true);
+      } finally {
+        await rm(dir, { recursive: true }).catch(() => {});
+        clearProviderCache();
+        registerProvider("fallback-model", () => new FallbackModelProvider());
+      }
+    });
+
+    it("throws all model attempts failed when allowOneUnvalidatedAttempt true but provider fails", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "cursorclaw-pmr-allow-one-fail-"));
+      const storePath = join(dir, "store.json");
+      try {
+        await writeValidationStore(storePath, {
+          lastUpdated: "",
+          results: { primary: { passed: false, lastRun: "", checks: {}, error: "not validated" } }
+        });
+        clearProviderCache();
+        registerProvider("fallback-model", () => ({
+          sendTurn: async function* () {
+            throw new Error("timeout");
+          },
+          cancel: async () => {}
+        }));
+        try {
+          const adapter = new CursorAgentModelAdapter({
+            defaultModel: "primary",
+            models: {
+              primary: {
+                provider: "fallback-model",
+                timeoutMs: 5_000,
+                authProfiles: ["default"],
+                fallbackModels: [],
+                enabled: true
+              }
+            },
+            providerModelResilience: {
+              useOnlyValidatedFallbacks: true,
+              allowOneUnvalidatedAttempt: true,
+              validationStorePath: storePath
+            },
+            cwd: dir
+          });
+          const session = await adapter.createSession({
+            sessionId: "s1",
+            channelId: "c1",
+            channelKind: "dm"
+          });
+          const collect = async (): Promise<void> => {
+            for await (const _event of adapter.sendTurn(
+              session,
+              [{ role: "user", content: "hi" }],
+              [simpleTool],
+              { turnId: "t-allow-one-fail" }
+            )) {
+              // no-op
+            }
+          };
+          await expect(collect()).rejects.toThrow(/all model attempts failed/);
+        } finally {
+          clearProviderCache();
+          registerProvider("fallback-model", () => new FallbackModelProvider());
+        }
+      } finally {
+        await rm(dir, { recursive: true }).catch(() => {});
+      }
+    });
+
+    it("throws no validated model available when allowOneUnvalidatedAttempt false and empty validated chain", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "cursorclaw-pmr-allow-one-false-"));
+      const storePath = join(dir, "store.json");
+      try {
+        await writeValidationStore(storePath, {
+          lastUpdated: "",
+          results: { primary: { passed: false, lastRun: "", checks: {}, error: "timeout" } }
+        });
+        const adapter = new CursorAgentModelAdapter({
+          defaultModel: "primary",
+          models: {
+            primary: {
+              provider: "fallback-model",
+              timeoutMs: 5_000,
+              authProfiles: ["default"],
+              fallbackModels: [],
+              enabled: true
+            }
+          },
+          providerModelResilience: {
+            useOnlyValidatedFallbacks: true,
+            allowOneUnvalidatedAttempt: false,
+            validationStorePath: storePath
+          },
+          cwd: dir
+        });
+        const session = await adapter.createSession({
+          sessionId: "s1",
+          channelId: "c1",
+          channelKind: "dm"
+        });
+        const collect = async (): Promise<void> => {
+          for await (const _event of adapter.sendTurn(
+            session,
+            [{ role: "user", content: "hi" }],
+            [simpleTool],
+            { turnId: "t-allow-one-false" }
+          )) {
+            // no-op
+          }
+        };
+        await expect(collect()).rejects.toThrow(/no validated model available/);
+      } finally {
+        await rm(dir, { recursive: true }).catch(() => {});
+      }
+    });
   });
 });
