@@ -16,9 +16,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RESTART_EXIT_CODE = 42;
 const cwd = path.resolve(__dirname, "..");
 
-function run() {
+function run(command, args) {
   return new Promise((resolve) => {
-    const child = spawn("npm", ["start"], {
+    const child = spawn(command, args, {
       cwd,
       stdio: "inherit",
       shell: true
@@ -32,9 +32,15 @@ function run() {
 
 (async () => {
   for (;;) {
-    const { code, signal } = await run();
+    const { code, signal } = await run("npm", ["start"]);
     if (code === RESTART_EXIT_CODE) {
-      console.log("\n[CursorClaw] Restarting in same terminal...\n");
+      console.log("\n[CursorClaw] Building and restarting in same terminal...\n");
+      const { code: buildCode } = await run("npm", ["run", "build"]);
+      if (buildCode !== 0) {
+        console.error("\n[CursorClaw] Build failed; not restarting. Fix errors and run again.\n");
+        process.exitCode = buildCode;
+        break;
+      }
       continue;
     }
     process.exitCode = code != null ? code : 1;

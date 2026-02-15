@@ -323,7 +323,7 @@ export class CursorAgentModelAdapter implements ModelAdapter {
     if (!candidate.type) {
       throw new Error("malformed frame missing type");
     }
-    const supportedEventTypes = ["assistant_delta", "tool_call", "usage", "error", "done", "protocol", "system", "user", "thinking", "assistant", "result"];
+    const supportedEventTypes = ["assistant_delta", "tool_call", "usage", "error", "done", "protocol", "system", "user", "thinking", "assistant", "result", "interaction_query"];
     if (!supportedEventTypes.includes(candidate.type)) {
       throw new Error(`unknown adapter event type: ${candidate.type}`);
     }
@@ -335,7 +335,7 @@ export class CursorAgentModelAdapter implements ModelAdapter {
       }
       return null;
     }
-    if (["system", "user", "thinking"].includes(candidate.type)) {
+    if (["system", "user", "thinking", "interaction_query"].includes(candidate.type)) {
       return null;
     }
     if (candidate.type === "assistant") {

@@ -86,7 +86,7 @@ export interface GatewayDependencies {
   onBeforeSend?: (channelId: string, text: string) => Promise<boolean>;
   /** If set, GET / serves index.html from this path; otherwise GET / serves a simple "UI not built" page. */
   uiDistPath?: string;
-  /** When admin.restart is called, run build (if needed) and schedule process exit after restart spawn. */
+  /** When admin.restart is called, exit with RESTART_EXIT_CODE so the start:watch wrapper runs build then start. */
   onRestart?: () => Promise<{ buildRan?: boolean } | void>;
 }
 

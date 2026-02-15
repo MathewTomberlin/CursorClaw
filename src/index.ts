@@ -1,4 +1,3 @@
-import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
@@ -472,13 +471,7 @@ async function main(): Promise<void> {
     lifecycleStream,
     ...(existsSync(uiDist) ? { uiDistPath: uiDist } : {}),
     onRestart: async () => {
-      try {
-        execSync("npm run build", { cwd: workspaceDir, encoding: "utf8", stdio: "inherit" });
-      } catch (err) {
-        // Build failed: do not exit so the process keeps running and the user can fix errors.
-        throw err instanceof Error ? err : new Error(String(err));
-      }
-      // Exit with RESTART_EXIT_CODE so run-with-restart wrapper (npm run start:watch) re-runs in the same terminal.
+      // Exit with RESTART_EXIT_CODE so run-with-restart wrapper runs build then start in the same terminal.
       process.exit(RESTART_EXIT_CODE);
       return { buildRan: true };
     },
