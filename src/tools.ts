@@ -747,7 +747,7 @@ export function createRememberThisTool(args: {
   return {
     name: "remember_this",
     description:
-      "Store something in long-term memory so it can be recalled later. Use when the user says 'remember this', 'remember that', or asks you to keep a fact, preference, or decision. Only available in the main web session.",
+      "Store something in long-term memory so it can be recalled later. Use when the user says 'remember this', 'remember that', or asks you to keep a fact, preference, or decision. Use category 'learned' when storing a lesson inferred from feedback or a repeated pattern. Only available in the main web session.",
     schema: {
       type: "object",
       properties: {
@@ -758,7 +758,7 @@ export function createRememberThisTool(args: {
         },
         category: {
           type: "string",
-          description: "Optional category (default: note). E.g. note, user-preference, decision",
+          description: "Optional category (default: note). E.g. note, user-preference, decision, learned",
           default: "note"
         },
         sensitivity: {

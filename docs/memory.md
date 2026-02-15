@@ -7,7 +7,7 @@ How persistent memory and session-start context work.
 - **MEMORY.md** (workspace root): Primary long-term memory file. Append-only list of `MemoryRecord` lines (JSON per line, prefixed with `- `). Created on first use if missing.
 - **memory/YYYY-MM-DD.md**: Daily logs in the same line format. One file per calendar day; created when a record is appended that day.
 
-Records have: `id`, `sessionId`, `category`, `text`, `provenance` (sourceChannel, confidence, timestamp, sensitivity). Categories include `turn-summary`, `compaction`, `note`, `heartbeat`, etc.
+Records have: `id`, `sessionId`, `category`, `text`, `provenance` (sourceChannel, confidence, timestamp, sensitivity). Categories include `turn-summary`, `compaction`, `note`, `heartbeat`, `learned`, etc.
 
 ## 2. MemoryStore (runtime)
 
@@ -49,7 +49,7 @@ See config reference for `continuity.memoryEmbeddingsEnabled` and `continuity.me
 Relationship and preference context is **not** stored in a dedicated structured store. It lives in:
 
 - **USER.md** (substrate): Who the human is, what to call them, timezone, pronouns, notes. Manually edited; loaded every turn in the main session.
-- **MEMORY.md and memory/YYYY-MM-DD.md**: Turn summaries, notes, and any agent- or user-initiated “remember this” style content. For example, “Operator prefers X” in a turn summary or a memory record with category `note` or `user-preference` (if such categories are used) persists for future sessions.
+- **MEMORY.md and memory/YYYY-MM-DD.md**: Turn summaries, notes, and any agent- or user-initiated “remember this” style content. For example, “Operator prefers X” in a turn summary or a memory record with category `note`, `user-preference`, or `learned` (if such categories are used) persists for future sessions.
 
 The agent learns about the user only via manual USER.md edits and whatever gets appended to memory (e.g. preferences mentioned in turn summaries). There is no automatic dossier-building; scope is limited to what the user or agent explicitly records. **Remember-this flow (RF.2):** The main session has a **remember_this** tool; when the user says "remember this" or "remember that I prefer X", the agent can call it to append a MemoryRecord (stored in MEMORY.md and daily file; recall via recall_memory when embeddings are enabled).
 

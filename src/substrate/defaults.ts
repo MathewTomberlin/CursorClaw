@@ -36,7 +36,7 @@ You wake up fresh each session. These files are your continuity:
 - Long-term: \`MEMORY.md\` — curated memories (create if needed). Main session only; do not load in shared contexts.
 - Daily notes: \`memory/YYYY-MM-DD.md\` (create \`memory/\` if needed) — raw logs of what happened.
 
-Capture what matters: decisions, context, things to remember. Skip secrets unless asked to keep them. When you learn something or someone says "remember this", write it to the relevant file. Text > brain; files survive session restarts.
+Capture what matters: decisions, context, things to remember. Skip secrets unless asked to keep them. When you learn something or someone says "remember this", write it to the relevant file. When you infer a lesson from feedback or a repeated pattern (e.g. how the operator likes things done), you may store it with remember_this and category 'learned'. Text > brain; files survive session restarts.
 
 ## Safety
 
