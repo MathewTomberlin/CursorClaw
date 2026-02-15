@@ -25,6 +25,33 @@ const tmpDir = path.join(cwd, "tmp");
 const buildFailureLogPath = path.join(tmpDir, "last-build-failure.log");
 const buildFailureJsonPath = path.join(tmpDir, "last-build-failure.json");
 
+const runResilienceDaemon = process.env.RESILIENCE_DAEMON !== "0" && process.env.RESILIENCE_DAEMON !== "false";
+let resilienceDaemonChild = null;
+
+function startResilienceDaemon() {
+  if (!runResilienceDaemon || resilienceDaemonChild) return;
+  const daemonScript = path.join(__dirname, "resilience-daemon.js");
+  resilienceDaemonChild = spawn(process.execPath, [daemonScript], {
+    cwd,
+    stdio: "ignore",
+    env: { ...process.env }
+  });
+  resilienceDaemonChild.on("error", (err) => {
+    console.error("[CursorClaw] Resilience daemon failed to start:", err.message);
+  });
+  resilienceDaemonChild.unref();
+  console.log("[CursorClaw] Resilience daemon started (polling for build failures). Set RESILIENCE_DAEMON=0 to disable.\n");
+}
+
+function stopResilienceDaemon() {
+  if (resilienceDaemonChild) {
+    try {
+      resilienceDaemonChild.kill();
+    } catch (_) {}
+    resilienceDaemonChild = null;
+  }
+}
+
 function run(command, args, options = {}) {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
@@ -50,6 +77,17 @@ function run(command, args, options = {}) {
 }
 
 (async () => {
+  startResilienceDaemon();
+  const onExit = () => {
+    stopResilienceDaemon();
+    process.exit(process.exitCode ?? 0);
+  };
+  process.on("SIGINT", () => {
+    process.exitCode = 130;
+    onExit();
+  });
+  process.on("SIGTERM", onExit);
+
   for (;;) {
     const { code, signal } = await run("npm", ["start"]);
     if (code === RESTART_EXIT_CODE) {
@@ -81,12 +119,14 @@ function run(command, args, options = {}) {
           continue;
         }
         process.exitCode = recoveryCode != null ? recoveryCode : buildCode;
+        stopResilienceDaemon();
         break;
       }
       continue;
     }
     process.exitCode = code != null ? code : 1;
     if (signal) process.kill(process.pid, signal);
+    stopResilienceDaemon();
     break;
   }
 })();

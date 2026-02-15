@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
+import { safeReadUtf8 } from "../fs-utils.js";
 import type { MemoryRecord } from "../types.js";
 
 export interface MemoryChunk {
@@ -84,7 +85,8 @@ export class MemoryEmbeddingIndex {
     if (this.loaded) return;
     this.loaded = true;
     try {
-      const raw = await readFile(this.options.stateFile, "utf8");
+      const raw = await safeReadUtf8(this.options.stateFile, { maxChars: 5_000_000 });
+      if (raw == null) return;
       const parsed = JSON.parse(raw) as PersistedMemoryIndex;
       if (!Array.isArray(parsed.chunks)) return;
       for (const chunk of parsed.chunks) {

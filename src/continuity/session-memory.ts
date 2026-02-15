@@ -4,6 +4,8 @@ import { safeReadUtf8 } from "../fs-utils.js";
 
 /** Max total characters for injected session memory (MEMORY.md + daily files). */
 const DEFAULT_CAP_CHARS = 32_000;
+/** Max characters to read per file so huge files don't OOM; output is still capped by DEFAULT_CAP_CHARS. */
+const MAX_READ_PER_FILE = 500_000;
 
 /**
  * Load session-start memory for main session: MEMORY.md plus memory/YYYY-MM-DD.md (today and yesterday).
@@ -22,7 +24,7 @@ export async function loadSessionMemoryContext(
   const parts: string[] = [];
 
   const memoryPath = join(profileRoot, "MEMORY.md");
-  const raw = await safeReadUtf8(memoryPath);
+  const raw = await safeReadUtf8(memoryPath, { maxChars: MAX_READ_PER_FILE });
   if (raw) {
     const trimmed = raw.trim();
     if (trimmed.length > 0) {
@@ -33,7 +35,7 @@ export async function loadSessionMemoryContext(
   for (const label of [today, yesterday]) {
     if (parts.join("").length >= cap) break;
     const dailyPath = join(profileRoot, "memory", `${label}.md`);
-    const dailyRaw = await safeReadUtf8(dailyPath);
+    const dailyRaw = await safeReadUtf8(dailyPath, { maxChars: MAX_READ_PER_FILE });
     if (dailyRaw) {
       const trimmed = dailyRaw.trim();
       if (trimmed.length > 0) {
