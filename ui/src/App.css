@@ -432,8 +432,19 @@ a:hover {
   align-items: center;
 }
 
+.chat-status-trail-label {
+  color: var(--text-muted);
+  font-weight: 500;
+  margin-right: 0.25rem;
+}
+
 .chat-status-event {
   color: var(--text-muted);
+}
+
+.chat-status-event[data-current="true"] {
+  color: var(--text);
+  font-weight: 500;
 }
 
 .chat-status-event:not(:last-child)::after {
@@ -446,6 +457,10 @@ a:hover {
 .chat-status-event--tool {
   color: var(--accent);
   font-weight: 500;
+}
+
+.chat-status-event--tool[data-current="true"] {
+  color: var(--accent);
 }
 
 .chat-input-row {

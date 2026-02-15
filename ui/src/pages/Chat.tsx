@@ -91,12 +91,15 @@ export default function Chat() {
   const statusLabel = lastStreamEvent
     ? formatStreamEventLabel(lastStreamEvent)
     : showWorkingFallback
-      ? "Working…"
+      ? currentRunId
+        ? "Working… (waiting for stream)"
+        : "Working… (starting run)"
       : loading
         ? currentRunId
           ? "Waiting for events…"
           : "Starting run…"
         : "Starting…";
+
 
   const sendToChannel = async () => {
     const text = (channelSendText || input).trim();
@@ -231,7 +234,12 @@ export default function Chat() {
                     {statusLabel}
                   </span>
                   {statusTrail.length > 0 && (
-                    <div className="chat-status-trail" aria-hidden>
+                    <div
+                      className="chat-status-trail"
+                      aria-label={`Agent status: ${statusTrail.join(" → ")}`}
+                      role="status"
+                    >
+                      <span className="chat-status-trail-label">Status:</span>
                       {statusTrail.map((label, i) => (
                         <span
                           key={i}
@@ -240,6 +248,7 @@ export default function Chat() {
                               ? "chat-status-event chat-status-event--tool"
                               : "chat-status-event"
                           }
+                          data-current={i === statusTrail.length - 1 ? "true" : undefined}
                         >
                           {label}
                         </span>
