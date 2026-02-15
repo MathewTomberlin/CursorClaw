@@ -65,7 +65,8 @@ import {
   createMcpCallTool,
   createMcpListResourcesTool,
   createMcpReadResourceTool,
-  createWebFetchTool
+  createWebFetchTool,
+  createWebSearchTool
 } from "./tools.js";
 import { isDevMode, loadConfigFromDisk, validateStartupConfig, resolveConfigPath } from "./config.js";
 import { AutonomyOrchestrator } from "./orchestrator.js";
@@ -262,6 +263,9 @@ async function main(): Promise<void> {
     })
   );
   toolRouter.register(createWebFetchTool({ approvalGate }));
+  toolRouter.register(createWebFetchTool({ approvalGate, toolName: "mcp_web_fetch" }));
+  toolRouter.register(createWebSearchTool({ approvalGate }));
+  toolRouter.register(createWebSearchTool({ approvalGate, toolName: "mcp_web_search" }));
   if (config.mcp.enabled) {
     toolRouter.register(createMcpListResourcesTool({ registry: mcpRegistry }));
     toolRouter.register(createMcpReadResourceTool({ registry: mcpRegistry }));

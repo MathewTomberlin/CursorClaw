@@ -430,13 +430,16 @@ export interface WebFetchArgs {
   url: string;
 }
 
+/** Tool name to register (e.g. "web_fetch" or "mcp_web_fetch" for Cursor-Agent CLI). */
 export function createWebFetchTool(args: {
   approvalGate: ApprovalGate;
+  toolName?: string;
 } = {
   approvalGate: new AlwaysAllowApprovalGate()
 }): ToolDefinition {
+  const toolName = args.toolName ?? "web_fetch";
   return {
-    name: "web_fetch",
+    name: toolName,
     description: "Fetch external web content with SSRF guard and safe wrapping",
     schema: {
       type: "object",
@@ -450,7 +453,7 @@ export function createWebFetchTool(args: {
     execute: async (rawArgs: unknown, ctx?: ToolExecuteContext) => {
       const parsed = rawArgs as WebFetchArgs;
       const approved = await args.approvalGate.approve({
-        tool: "web_fetch",
+        tool: toolName,
         intent: "network-impacting",
         plan: "network fetch of external content",
         args: parsed,
@@ -459,7 +462,7 @@ export function createWebFetchTool(args: {
       if (!approved) {
         const denial = args.approvalGate.getLastDenial?.();
         const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
-        throw new Error(`web_fetch requires approval${suffix}`);
+        throw new Error(`${toolName} requires approval${suffix}`);
       }
       const signal = AbortSignal.timeout(10_000);
       const dnsPins = new Map<string, string>();
@@ -516,6 +519,86 @@ export function createWebFetchTool(args: {
         target = pinDnsTarget(await resolveSafeFetchTarget(redirectedUrl));
       }
       throw new Error("web_fetch did not reach a terminal response");
+    }
+  };
+}
+
+export interface WebSearchArgs {
+  query: string;
+}
+
+const WEB_SEARCH_DUCKDUCKGO_HOST = "api.duckduckgo.com";
+const WEB_SEARCH_TIMEOUT_MS = 10_000;
+const WEB_SEARCH_MAX_ABSTRACT_LEN = 2_000;
+
+export function createWebSearchTool(args: {
+  approvalGate: ApprovalGate;
+  toolName?: string;
+} = {
+  approvalGate: new AlwaysAllowApprovalGate()
+}): ToolDefinition {
+  const toolName = args.toolName ?? "web_search";
+  return {
+    name: toolName,
+    description: "Search the web and return snippets/abstracts (DuckDuckGo Instant Answer API). Use for factual lookups, not full page content.",
+    schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", minLength: 1 }
+      },
+      required: ["query"],
+      additionalProperties: false
+    },
+    riskLevel: "low",
+    execute: async (rawArgs: unknown, ctx?: ToolExecuteContext) => {
+      const parsed = rawArgs as WebSearchArgs;
+      const approved = await args.approvalGate.approve({
+        tool: toolName,
+        intent: "network-impacting",
+        plan: "web search (DuckDuckGo API)",
+        args: parsed,
+        ...(ctx?.provenance !== undefined && { provenance: ctx.provenance })
+      });
+      if (!approved) {
+        const denial = args.approvalGate.getLastDenial?.();
+        const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
+        throw new Error(`${toolName} requires approval${suffix}`);
+      }
+      const target = await resolveSafeFetchTarget(
+        `https://${WEB_SEARCH_DUCKDUCKGO_HOST}/?q=${encodeURIComponent(parsed.query)}&format=json`
+      );
+      if (target.url.hostname.toLowerCase() !== WEB_SEARCH_DUCKDUCKGO_HOST) {
+        throw new Error("web_search: host validation failed");
+      }
+      const pathWithQuery = target.url.pathname + target.url.search;
+      const signal = AbortSignal.timeout(WEB_SEARCH_TIMEOUT_MS);
+      const response = await fetchWithPinnedDns(target, pathWithQuery, {
+        signal,
+        timeoutMs: WEB_SEARCH_TIMEOUT_MS
+      });
+      if (response.status !== 200) {
+        return {
+          error: `search API returned ${response.status}`,
+          results: [],
+          abstract: ""
+        };
+      }
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      const text = new TextDecoder().decode(bytes);
+      let data: { Abstract?: string; RelatedTopics?: Array<{ Text?: string }>; AbstractText?: string };
+      try {
+        data = JSON.parse(text) as typeof data;
+      } catch {
+        return { error: "search API returned invalid JSON", results: [], abstract: "" };
+      }
+      const abstract = (data.AbstractText ?? data.Abstract ?? "").slice(0, WEB_SEARCH_MAX_ABSTRACT_LEN);
+      const results = (data.RelatedTopics ?? [])
+        .filter((t): t is { Text: string } => typeof t?.Text === "string")
+        .map((t) => t.Text.slice(0, 500));
+      return {
+        abstract: wrapUntrustedContent(abstract),
+        results: results.map((r) => wrapUntrustedContent(r))
+      };
     }
   };
 }

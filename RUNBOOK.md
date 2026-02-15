@@ -253,7 +253,7 @@ To use your local **Cursor-Agent CLI** (real model) instead of the fallback, add
 
 3. **Restart CursorClaw** after changing config. Then run an `agent.run` / `agent.wait`; the turn will use the CLI and you should see real model output in `result.assistantText`.
 
-With `promptAsArg`: true the adapter passes the user message as the last CLI argument; the CLI must emit NDJSON on stdout. See [Cursor-Agent Adapter Contract](docs/cursor-agent-adapter.md).
+With `promptAsArg`: true the adapter passes the user message as the last CLI argument; the CLI must emit NDJSON on stdout. The adapter also appends **`--approve-mcps`** and **`--force`** in headless mode so the Cursor CLI can use MCP tools (e.g. web fetch, web search) without interactive approval. See [Cursor-Agent Adapter Contract](docs/cursor-agent-adapter.md).
 
 For a **production-like** setup:
 

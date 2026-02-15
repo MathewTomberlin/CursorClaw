@@ -23,11 +23,31 @@ In `openclaw.json`, set the model with **`promptAsArg: true`** and args like:
 }
 ```
 
-On Windows with `agent.cmd`, use `"command": "agent.cmd"` and the same `args`. The adapter will append the user message as the last argument and will **not** write JSON to stdin.
+On Windows with `agent.cmd`, use `"command": "agent.cmd"` and the same `args`. The adapter will append **`--approve-mcps`** and **`--force`** (headless workaround for MCP approvals), then the user message as the last argument, and will **not** write JSON to stdin.
 
 ### 2. Stdin turn JSON (custom CLIs)
 
 If your CLI reads a single JSON turn from stdin and emits NDJSON on stdout, **do not** set `promptAsArg`. Use args such as `["auto"]` or whatever your CLI expects. The adapter will write one line of turn JSON to stdin.
+
+## Headless workaround (MCP)
+
+When the adapter runs the Cursor CLI with **`promptAsArg: true`** (headless/non-interactive), it appends **`--approve-mcps`** and **`--force`** before the prompt. This is a known workaround so the CLI can use MCP servers (and tools such as web fetch or web search exposed via MCP) without interactive approval. If your CLI version does not support these flags, you may see an error; remove them by using a custom wrapper or a different invocation style.
+
+## Web Fetch / Web Search and Cursor Agent CLI
+
+**Cursor Settings** (e.g. “Web Fetch Tool” and “Web Search Tool” in Cursor IDE settings) do **not** affect the Cursor Agent CLI when it is invoked by CursorClaw. CursorClaw provides its own **Web Fetch** and **Web Search** tools so the pipeline works with both the official CLI and custom CLIs.
+
+### Tool names and forwarding
+
+- **Contract shape (stdin turn JSON):** When the CLI receives turn JSON with a tool list, it may emit `tool_call` with `data.name` and `data.args`. The adapter forwards those when the name is known to CursorClaw.
+- **Nested CLI shape:** When the Cursor CLI (or an MCP-aware CLI) emits a `tool_call` with a nested `tool_call` object (e.g. `tool_call.name`, `tool_call.arguments` or `tool_call.args`), the adapter **normalizes** it: if the nested name is a registered tool, the event is converted to the contract shape and forwarded.
+
+Registered names: **`web_fetch`** / **`mcp_web_fetch`** (args: `{ "url": "https://..." }`), **`web_search`** / **`mcp_web_search`** (args: `{ "query": "search terms" }`). See `createWebFetchTool` and `createWebSearchTool` in `src/tools.ts`.
+
+- With **`promptAsArg: true`** (official Cursor CLI), the adapter does **not** send turn JSON to stdin: it only passes the user message as the last argument. The CLI therefore never receives CursorClaw’s tool list (e.g. `exec`, `web_fetch`, MCP tools).
+- The Cursor CLI uses its own internal tools and event shapes (e.g. `tool_call.shellToolCall`). The adapter **skips** those events and normalizes nested `tool_call` when the name is a registered tool; otherwise only forwards events that match the contract shape (`data.name` + `data.args`) and a tool name known to CursorClaw. The CLI does not emit contract-shaped tool calls for Cursor’s built-in Web Fetch / Web Search, so they are never forwarded to CursorClaw’s runtime.
+
+**Summary:** CursorClaw provides its own tools that the runtime can execute when the model emits a contract-shaped `tool_call`. We already ship **`web_fetch`** (see `createWebFetchTool` in `src/tools.ts`); it is registered with the tool router and used whenever a forwardable `tool_call` has `name: "web_fetch"`. For a **custom CLI** (stdin turn JSON, `promptAsArg: false`), the adapter sends the full tool list (including `web_fetch`) in the turn payload, so that CLI can choose to emit such tool calls and CursorClaw will run them. For the **official Cursor CLI**, the model side is controlled by Cursor and does not emit our contract-shaped tool calls; enabling Web Fetch in Cursor Settings does not change that. So for the official CLI, web fetch/search in this pipeline effectively depend on either Cursor adding support for forwarding custom tools in the CLI stream, or using a different model backend (e.g. a custom CLI) that receives our tool list and emits contract-shaped tool calls. There is no additional CursorClaw config that enables Cursor’s built-in Web Fetch / Web Search for the adapter.
 
 ## Transport
 
@@ -58,7 +78,7 @@ All output events must match:
 }
 ```
 
-The adapter also accepts `protocol` (version handshake), `system`, `user`, `thinking`, and `interaction_query` (Cursor CLI stream annotations); these are ignored and not forwarded. Cursor CLI `assistant` events (with `message.content[].text`) are mapped to `assistant_delta` only when the text is short (≤300 chars); longer events are the redundant final full message and are dropped so the reply is not duplicated (with `--stream-partial-output` the CLI sends deltas then the full message). A final `result` event is treated as end-of-turn and converted to a `done` event so the stream is accepted. Cursor CLI `tool_call` events use a different shape (e.g. `tool_call.shellToolCall`) and are skipped—the CLI runs tools internally; only tool calls in the contract shape (`data.name` + `data.args`) are forwarded to the runtime.
+The adapter also accepts `protocol` (version handshake), `system`, `user`, `thinking`, and `interaction_query` (Cursor CLI stream annotations); these are ignored and not forwarded. Cursor CLI `assistant` events (with `message.content[].text`) are mapped to `assistant_delta` only when the text is short (≤300 chars); longer events are the redundant final full message and are dropped so the reply is not duplicated (with `--stream-partial-output` the CLI sends deltas then the full message). A final `result` event is treated as end-of-turn and converted to a `done` event so the stream is accepted. Cursor CLI `tool_call` events may use a nested shape (e.g. `tool_call.name` / `tool_call.arguments`); when the nested name is a registered CursorClaw tool, the adapter normalizes and forwards them. Contract-shaped tool calls (`data.name` + `data.args`) are also forwarded when the name is known.
 
 ### `assistant_delta`
 

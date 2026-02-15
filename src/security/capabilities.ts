@@ -107,7 +107,10 @@ export function requiredCapabilitiesForApproval(input: CapabilityApprovalInput):
     }
     return ["tool.high-risk"];
   }
-  if (input.tool === "web_fetch") {
+  if (input.tool === "web_fetch" || input.tool === "mcp_web_fetch") {
+    return ["net.fetch"];
+  }
+  if (input.tool === "web_search" || input.tool === "mcp_web_search") {
     return ["net.fetch"];
   }
   if (input.tool !== "exec") {

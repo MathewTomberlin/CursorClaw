@@ -183,7 +183,9 @@ export class CursorAgentModelAdapter implements ModelAdapter {
     const promptAsArg = Boolean(modelConfig.promptAsArg);
     const lastUserContent =
       [...messages].reverse().find((m) => m.role === "user")?.content?.trim() ?? "";
-    const args = promptAsArg ? [...baseArgs, lastUserContent] : baseArgs;
+    const args = promptAsArg
+      ? [...baseArgs, "--approve-mcps", "--force", lastUserContent]
+      : baseArgs;
     const { command, args: resolvedArgs } = this.resolveSpawnCommand(modelConfig.command, args);
     const child = spawn(command, resolvedArgs, {
       env: {
@@ -355,24 +357,33 @@ export class CursorAgentModelAdapter implements ModelAdapter {
       return { type: "done", data: {} };
     }
     if (candidate.type === "tool_call") {
-      if (candidate.tool_call != null) {
-        return null;
+      let payload: { name: string; args: unknown } | null = null;
+      if (candidate.tool_call != null && typeof candidate.tool_call === "object") {
+        const nested = candidate.tool_call as Record<string, unknown>;
+        const name = (nested.name ?? nested.toolName) as string | undefined;
+        const args = (nested.arguments ?? nested.args ?? {}) as unknown;
+        if (typeof name === "string" && name.length > 0 && tools.some((t) => t.name === name)) {
+          payload = { name, args };
+        }
       }
-      const payload = (candidate.data ?? candidate) as { name?: string; args?: unknown };
-      if (
-        payload == null ||
-        typeof payload !== "object" ||
-        typeof payload.name !== "string" ||
-        !payload.name ||
-        !tools.some((t) => t.name === payload.name)
-      ) {
-        return null;
+      if (payload === null) {
+        const raw = (candidate.data ?? candidate) as { name?: string; args?: unknown };
+        if (
+          raw == null ||
+          typeof raw !== "object" ||
+          typeof raw.name !== "string" ||
+          !raw.name ||
+          !tools.some((t) => t.name === raw.name)
+        ) {
+          return null;
+        }
+        payload = { name: raw.name, args: raw.args };
       }
       this.validateToolCall(payload, tools);
       this.pushEventLog(redactSecrets(JSON.stringify(candidate)));
       return {
         type: "tool_call",
-        data: candidate.data ?? { name: payload.name, args: payload.args }
+        data: { name: payload.name, args: payload.args }
       };
     }
     this.pushEventLog(redactSecrets(JSON.stringify(candidate)));

@@ -20,6 +20,7 @@ import {
   classifyCommandIntent,
   createExecTool,
   createWebFetchTool,
+  createWebSearchTool,
   isDestructiveCommand
 } from "../src/tools.js";
 import type { PolicyDecisionLog, ToolExecuteContext } from "../src/types.js";
@@ -350,6 +351,43 @@ describe("security and tool policy", () => {
       })
     ).rejects.toThrow(/DNS rebinding detected/i);
     expect(fetchWithPinnedDns).toHaveBeenCalledTimes(1);
+  });
+
+  it("web_search returns abstract and results from DuckDuckGo API shape", async () => {
+    setDnsLookupForTests(async () => [{ address: "1.2.3.4", family: 4 }] as never);
+    vi.mocked(fetchWithPinnedDns).mockResolvedValueOnce({
+      status: 200,
+      headers: { get: () => "application/json" },
+      arrayBuffer: () =>
+        Promise.resolve(
+          new TextEncoder().encode(
+            JSON.stringify({
+              Abstract: "",
+              AbstractText: "DuckDuckGo is a search engine.",
+              RelatedTopics: [{ Text: "First result" }, { Text: "Second result" }]
+            })
+          ).buffer
+        )
+    });
+
+    const tool = createWebSearchTool();
+    const result = (await tool.execute({ query: "duckduckgo" })) as {
+      abstract: string;
+      results: string[];
+    };
+
+    expect(result.abstract).toContain("DuckDuckGo is a search engine");
+    expect(result.results).toHaveLength(2);
+    expect(result.results[0]).toContain("First result");
+  });
+
+  it("web_search with toolName mcp_web_search registers under that name", () => {
+    const tool = createWebSearchTool({
+      approvalGate: new AlwaysAllowApprovalGate(),
+      toolName: "mcp_web_search"
+    });
+    expect(tool.name).toBe("mcp_web_search");
+    expect(tool.schema).toBeDefined();
   });
 
   it("caches tool validators for repeated executions", async () => {
