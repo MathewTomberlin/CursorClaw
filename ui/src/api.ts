@@ -153,6 +153,12 @@ export interface StatusPayload {
   incident: { proactiveSendsDisabled: boolean; toolIsolationEnabled: boolean };
 }
 
+/** Restart the framework (builds if there are source changes, then restarts). Requires admin/local auth. */
+export async function restartFramework(): Promise<{ buildRan?: boolean }> {
+  const res = await rpc<{ buildRan?: boolean }>("admin.restart");
+  return res.result ?? {};
+}
+
 /** Opens SSE to /stream. Note: EventSource cannot send Authorization header; use same-origin or future stream-ticket flow for auth. */
 export function openStream(sessionId?: string): EventSource {
   const base = getBaseUrl();

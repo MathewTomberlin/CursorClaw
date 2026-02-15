@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
-import { getHealth, getStatus, mapRpcError, type StatusPayload } from "../api";
+import { getHealth, getStatus, mapRpcError, restartFramework, type StatusPayload } from "../api";
 
 export default function Dashboard() {
   const [health, setHealth] = useState<{ ok: boolean; time: string } | null>(null);
   const [status, setStatus] = useState<StatusPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [restarting, setRestarting] = useState(false);
+  const [restartError, setRestartError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -122,6 +124,33 @@ export default function Dashboard() {
                 <span>Tool isolation</span>
                 <strong>{status.incident.toolIsolationEnabled ? "On" : "Off"}</strong>
               </div>
+            </div>
+            <div className="metric" style={{ marginTop: "1rem" }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={restarting}
+                onClick={async () => {
+                  setRestartError(null);
+                  setRestarting(true);
+                  try {
+                    await restartFramework();
+                    setRestartError(null);
+                  } catch (e) {
+                    setRestartError(e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } }));
+                  } finally {
+                    setRestarting(false);
+                  }
+                }}
+              >
+                {restarting ? "Restarting…" : "Restart framework"}
+              </button>
+              {restarting && (
+                <p style={{ fontSize: "0.875rem", color: "var(--text-muted)", marginTop: "0.5rem" }}>
+                  Building if needed, then restarting. This page will disconnect.
+                </p>
+              )}
+              {restartError && <p className="error-msg" style={{ marginTop: "0.5rem" }}>{restartError}</p>}
             </div>
           </>
         )}

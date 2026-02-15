@@ -86,6 +86,8 @@ export interface GatewayDependencies {
   onBeforeSend?: (channelId: string, text: string) => Promise<boolean>;
   /** If set, GET / serves index.html from this path; otherwise GET / serves a simple "UI not built" page. */
   uiDistPath?: string;
+  /** When admin.restart is called, run build (if needed) and schedule process exit after restart spawn. */
+  onRestart?: () => Promise<{ buildRan?: boolean } | void>;
 }
 
 const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
@@ -103,7 +105,8 @@ const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
   "workspace.semantic_search": ["local", "remote", "admin"],
   "trace.ingest": ["local", "remote", "admin"],
   "advisor.explain_function": ["local", "remote", "admin"],
-  "config.get": ["admin", "local"]
+  "config.get": ["admin", "local"],
+  "admin.restart": ["admin", "local"]
 };
 
 export function buildGateway(deps: GatewayDependencies): FastifyInstance {
@@ -560,6 +563,11 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
             }
           }
         };
+      } else if (body.method === "admin.restart") {
+        if (!deps.onRestart) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "restart not configured");
+        }
+        result = await deps.onRestart();
       } else {
         throw new RpcGatewayError(400, "BAD_REQUEST", `unknown method: ${body.method}`);
       }

@@ -1,3 +1,4 @@
+import { execSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
@@ -467,6 +468,31 @@ async function main(): Promise<void> {
     capabilityStore,
     lifecycleStream,
     ...(existsSync(uiDist) ? { uiDistPath: uiDist } : {}),
+    onRestart: async () => {
+      let buildRan = false;
+      try {
+        const out = execSync("git status --porcelain -- src ui package.json ui/package.json tsconfig.json ui/tsconfig.json", {
+          cwd: workspaceDir,
+          encoding: "utf8",
+          maxBuffer: 1024 * 1024
+        });
+        if (out.trim().length > 0) {
+          execSync("npm run build", { cwd: workspaceDir, encoding: "utf8", stdio: "inherit" });
+          buildRan = true;
+        }
+      } catch {
+        // Not a git repo or git failed: skip build and just restart
+      }
+      const child = spawn("npm", ["start"], {
+        cwd: workspaceDir,
+        detached: true,
+        stdio: "ignore",
+        shell: true
+      });
+      child.unref();
+      setTimeout(() => process.exit(0), 2000);
+      return { buildRan };
+    },
     onActivity: () => {
       idleScheduler.noteActivity();
       ensureReflectionJobQueued?.();

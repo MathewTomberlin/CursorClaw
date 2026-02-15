@@ -9,6 +9,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && cd ui && npm install && npm run build",
     "start": "tsx src/index.ts",
+    "commit-memory": "node scripts/commit-memory-branch.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:security": "vitest run tests/security-tools.test.ts",

@@ -4,6 +4,11 @@ coverage/
 *.log
 tmp/
 
+# Agent memory and working files — keep out of main source commits (see scripts/commit-memory-branch.js)
+MEMORY.md
+memory/
+CLAW_HISTORY.log
+
 # Runtime config contains secrets — never commit
 openclaw.json
 .env
