@@ -391,6 +391,8 @@ export class AgentRuntime {
               if (content.length >= assistantText.length && content.startsWith(assistantText)) {
                 assistantText = content;
                 emit("assistant", { content });
+              } else if (content.length >= 15 && assistantText.includes(content)) {
+                // Skip duplicate segment (e.g. Cursor CLI re-sending same chunk)
               } else {
                 assistantText += content;
                 emit("assistant", { content });

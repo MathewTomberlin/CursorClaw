@@ -345,6 +345,9 @@ export class CursorAgentModelAdapter implements ModelAdapter {
           content.map((c) => (c && typeof c.text === "string" ? c.text : "")).join("") :
           "";
       if (!text) return null;
+      // With --stream-partial-output the CLI sends small deltas then a final full message. Only forward
+      // deltas (short chunks); drop the redundant full-message event so the reply is not duplicated.
+      if (text.length > 300) return null;
       this.pushEventLog(redactSecrets(JSON.stringify(candidate)));
       return { type: "assistant_delta", data: { content: text } };
     }
