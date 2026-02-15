@@ -172,7 +172,7 @@ Recommended layout for one profile root `{profileRoot}`:
 **Phase P.4 – OpenAI-compatible / API key**
 
 - [x] **P.4.1** Implement provider that talks to OpenAI-compatible HTTP API; use `apiKeyRef` to resolve key from credential store at request time.
-- [ ] **P.4.2** User can add/update/delete API keys for a profile via secure UX or RPC; keys never logged or included in prompts.
+- [x] **P.4.2** User can add/update/delete API keys for a profile via secure UX or RPC; keys never logged or included in prompts.
   - [x] **P.4.2.1** Profile-scoped provider credential store: under `{profileRoot}/credentials/providers.json` keyed by provider id (e.g. `openai-compatible`); get/set/delete/list (names only for list). Same guardrails as skills credentials (never in prompt/log). Implemented in `src/security/provider-credentials.ts`.
   - [x] **P.4.2.2** Extend `apiKeyRef` format: support `profile:providerId` (resolves to default key `apiKey`) or `profile:providerId.keyName`. Added `resolveApiKeyAsync(apiKeyRef, profileRoot?)` and `isProfileApiKeyRef()`; kept sync `resolveApiKey` for `env:` only.
   - [x] **P.4.2.3** Wire adapter/runtime: pass `profileRoot` in `SendTurnOptions` (runtime resolves from `getProfileRoot(profileId)`); OpenAI-compatible provider uses `resolveApiKeyAsync(apiKeyRef, options.profileRoot)`.
