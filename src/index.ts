@@ -633,18 +633,24 @@ async function main(): Promise<void> {
       });
     },
     onHeartbeatTurn: async (channelId) => {
+      const heartbeatPath = join(workspaceDir, "HEARTBEAT.md");
+      const baseInstruction =
+        config.heartbeat.prompt ?? "If no action needed, reply HEARTBEAT_OK.";
+      let content: string;
+      if (existsSync(heartbeatPath)) {
+        const fileContent = await readFile(heartbeatPath, "utf8");
+        content =
+          `Instructions for this heartbeat (from HEARTBEAT.md):\n\n${fileContent.trim()}\n\n${baseInstruction}`;
+      } else {
+        content = `Read HEARTBEAT.md if present. ${baseInstruction}`;
+      }
       const result = await runtime.runTurn({
         session: {
           sessionId: "heartbeat:main",
           channelId,
           channelKind: "web"
         },
-        messages: [
-          {
-            role: "user",
-            content: "Read HEARTBEAT.md if present. If no action needed, reply HEARTBEAT_OK."
-          }
-        ]
+        messages: [{ role: "user", content }]
       });
       return result.assistantText.trim() === "" ? "HEARTBEAT_OK" : result.assistantText;
     },

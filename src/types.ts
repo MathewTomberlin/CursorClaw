@@ -153,6 +153,8 @@ export interface HeartbeatConfig {
   maxMs: number;
   activeHours?: { startHour: number; endHour: number };
   visibility: "silent" | "visible";
+  /** Optional custom instruction for the heartbeat turn. When HEARTBEAT.md exists, this is appended after its content. */
+  prompt?: string;
 }
 
 export interface AutonomyBudgetConfig {
