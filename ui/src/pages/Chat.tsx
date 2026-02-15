@@ -23,6 +23,8 @@ interface StreamEvent {
 
 function formatStreamEventLabel(ev: StreamEvent): string {
   switch (ev.type) {
+    case "connecting":
+      return "Connecting…";
     case "queued":
       return "Queued";
     case "started":
@@ -188,7 +190,7 @@ export default function Chat() {
   };
 
   const lastStreamEvent = streamEvents.length > 0 ? streamEvents[streamEvents.length - 1] : null;
-  const statusLabel = lastStreamEvent ? formatStreamEventLabel(lastStreamEvent) : "Running…";
+  const statusLabel = lastStreamEvent ? formatStreamEventLabel(lastStreamEvent) : "Starting…";
 
   const sendToChannel = async () => {
     const text = (channelSendText || input).trim();
@@ -360,7 +362,7 @@ export default function Chat() {
               onClick={() => void runTurn()}
               disabled={loading || !input.trim()}
             >
-              {loading ? statusLabel : "Send"}
+              {loading ? "Sending…" : "Send"}
             </button>
           </div>
         </section>
