@@ -2,7 +2,9 @@
 
 **Scope:** Extend the Ollama provider (`src/providers/ollama.ts`) so it can send tools to the Ollama API and parse tool-call responses into adapter `tool_call` events. This enables the PMR `validate-model --fullSuite` tool-call check and runtime tool use when an Ollama model is in the fallback chain.
 
-**Status:** Implementation guide only. Use this doc when implementing on a feature branch. Best-effort per PMR §8; no parity guarantee with Cursor Auto.
+**Status:** Implemented (branch `feature/ollama-tool-call-support`). Best-effort per PMR §8; no parity guarantee with Cursor Auto.
+
+**Implemented:** Request includes OpenAI-style `tools` when `tools.length > 0`. Response parsing reads `message.tool_calls[]` (each `{ function: { name, arguments } }`); `arguments` may be object or JSON string. One `tool_call` event per call; streaming chunks deduplicated by index. No new config; see §3 for version/model requirements.
 
 ---
 
@@ -16,12 +18,12 @@
 
 ### Success criteria
 
-- [ ] With an Ollama model that supports tool use and when tools are provided: the request body includes a `tools` (or equivalent) field in the format required by the Ollama API version in use.
-- [ ] Stream parsing detects tool-call content (exact shape depends on Ollama API: e.g. `message.tool_calls`, `delta.tool_calls`, or tool call in the final `message` when `done`). Emit one `tool_call` event per call with `name` and `args`; args may be accumulated from streamed JSON parts if the API streams per-call deltas.
+- [x] With an Ollama model that supports tool use and when tools are provided: the request body includes a `tools` (or equivalent) field in the format required by the Ollama API version in use.
+- [x] Stream parsing detects tool-call content (exact shape depends on Ollama API: e.g. `message.tool_calls`, `delta.tool_calls`, or tool call in the final `message` when `done`). Emit one `tool_call` event per call with `name` and `args`; args may be accumulated from streamed JSON parts if the API streams per-call deltas.
 - [ ] `npm run validate-model -- --modelId=<ollama-model-id> --fullSuite` passes the **toolCall** check when the model and Ollama version support tool use.
-- [ ] At runtime, when the user sends a turn that triggers tool use, the agent receives `tool_call` events and can execute tools and continue the loop.
-- [ ] When no tools are passed, or the model returns no tool calls, behavior is unchanged (no regression): only text deltas and `done` as today.
-- [ ] No new required config; existing `provider: "ollama"`, `ollamaModelName`, and optional `baseURL` remain sufficient. Optional: document any Ollama version or model requirements (e.g. “tool use supported in Ollama 0.3+” or “model must support tools”) in configuration-reference or this guide.
+- [ ] At runtime, when the user sends a turn that triggers tool use (operator-verified), the agent receives `tool_call` events and can execute tools and continue the loop.
+- [x] When no tools are passed, or the model returns no tool calls, behavior is unchanged (no regression): only text deltas and `done` as today.
+- [x] No new required config; existing `provider: "ollama"`, `ollamaModelName`, and optional `baseURL` remain sufficient. Optional: document any Ollama version or model requirements (e.g. “tool use supported in Ollama 0.3+” or “model must support tools”) in configuration-reference or this guide.
 
 ---
 
@@ -33,7 +35,7 @@
 
 ---
 
-## 3. Ollama API (research required)
+## 3. Ollama API (reference)
 
 Ollama’s API and tool support evolve. Before implementing:
 
@@ -42,6 +44,8 @@ Ollama’s API and tool support evolve. Before implementing:
 3. **Version and model:** Note the minimum Ollama version and any model requirements (e.g. “must use a model that supports tool/function calling”). Document in this guide or in `docs/configuration-reference.md` under the Ollama provider section.
 
 If the deployed Ollama version does not support tools, or uses a different endpoint (e.g. OpenAI-compatible endpoint), the guide can be updated to describe that path (e.g. use `openai-compatible` provider with Ollama’s OpenAI-compatible base URL instead of extending the `ollama` provider). Implementation should still degrade gracefully: no tools in request and no `tool_call` in response → no tool_call events.
+
+**Implemented request/response:** Request sends `tools`: array of `{ type: "function", function: { name, description, parameters } }` (OpenAI-style). Response: stream lines with `message.tool_calls[]`, each `{ function: { name, arguments } }`; `arguments` may be object or JSON string. See [Ollama API](https://github.com/ollama/ollama/blob/main/docs/api.md) "Chat request (Streaming with tools)". Use a [model that supports tool calling](https://ollama.com/search?c=tool).
 
 ---
 
@@ -82,4 +86,4 @@ If the deployed Ollama version does not support tools, or uses a different endpo
 
 ## 6. Completion
 
-When implementation is done: add a brief “Implemented” section at the top of this guide with the branch name and PR number, and update HEARTBEAT.md to move “Ollama tool-call support” from Open to Completed.
+Implemented on branch `feature/ollama-tool-call-support`. When merged: add a brief “Implemented” section at the top of this guide with the branch name and PR number, and update HEARTBEAT.md to move “Ollama tool-call support” from Open to Completed.
