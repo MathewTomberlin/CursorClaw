@@ -41,8 +41,9 @@ export class SubstrateStore {
   }
 
   /**
-   * Create any missing substrate files with default template content.
-   * Call after reload when you want empty slots to be filled with defaults on disk.
+   * Create any missing or empty substrate files with default template content.
+   * Call after reload when you want empty slots to be filled with defaults on disk
+   * (OpenClaw-style lifelike behavior).
    */
   async ensureDefaults(
     workspaceDir: string,
@@ -51,7 +52,8 @@ export class SubstrateStore {
     for (const key of SUBSTRATE_KEYS) {
       const current = (this.content as Record<string, string | undefined>)[key];
       const defaultContent = SUBSTRATE_DEFAULTS[key];
-      if (current == null && defaultContent != null) {
+      const missingOrEmpty = current == null || (typeof current === "string" && current.trim() === "");
+      if (missingOrEmpty && defaultContent != null) {
         await this.writeKey(workspaceDir, config, key, defaultContent);
       }
     }

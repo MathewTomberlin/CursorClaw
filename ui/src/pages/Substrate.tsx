@@ -8,6 +8,7 @@ interface SubstrateKeyInfo {
 }
 
 const KEY_LABELS: Record<string, string> = {
+  agents: "Workspace rules (AGENTS.md)",
   identity: "Identity (IDENTITY.md)",
   soul: "Soul (SOUL.md)",
   birth: "Birth (BIRTH.md)",
@@ -40,7 +41,7 @@ export default function Substrate() {
       const res = await rpc("substrate.get");
       const result = (res.result ?? {}) as Record<string, string | undefined>;
       const next: Record<string, string> = {};
-      for (const k of ["identity", "soul", "birth", "capabilities", "user", "tools"]) {
+      for (const k of ["agents", "identity", "soul", "birth", "capabilities", "user", "tools"]) {
         next[k] = result[k] ?? "";
       }
       setContent(next);
