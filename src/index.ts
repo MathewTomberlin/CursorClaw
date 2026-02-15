@@ -165,6 +165,8 @@ async function main(): Promise<void> {
   });
 
   const pendingProactiveRef = { current: null as string | null };
+  /** Set when a user message cancels in-flight heartbeat; next heartbeat turn gets a resume notice. */
+  const heartbeatInterruptedByUserRef = { current: false };
   const defaultProfileId = getDefaultProfileId(config);
   const profileList = config.profiles;
   let profileContextMap: Map<string, ProfileContext>;
@@ -598,6 +600,9 @@ async function main(): Promise<void> {
     workspaceDir: profileRoot,
     workspaceRoot: workspaceDir,
     ...(defaultCtx.substrateStore !== undefined ? { substrateStore: defaultCtx.substrateStore } : {}),
+    markHeartbeatInterrupted: () => {
+      heartbeatInterruptedByUserRef.current = true;
+    },
     ...(existsSync(uiDist) ? { uiDistPath: uiDist } : {}),
     onRestart: async () => {
       // Exit with RESTART_EXIT_CODE so run-with-restart wrapper runs build then start in the same terminal.
@@ -875,6 +880,12 @@ async function main(): Promise<void> {
           `Instructions for this heartbeat (from HEARTBEAT.md):\n\n${(fileContent ?? "").trim()}\n\n${deliveryNote}\n\n${baseInstruction}`;
       } else {
         content = `Read HEARTBEAT.md if present. ${baseInstruction}`;
+      }
+      if (heartbeatInterruptedByUserRef.current) {
+        heartbeatInterruptedByUserRef.current = false;
+        content =
+          "The previous heartbeat was interrupted by a user message. Continue with ROADMAP.md and HEARTBEAT.md as appropriate.\n\n" +
+          content;
       }
       if (birthPending) {
         content =

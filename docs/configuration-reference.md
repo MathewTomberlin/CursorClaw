@@ -386,7 +386,7 @@ Path defaults (workspace root): `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `BIRTH.md
 
 ### User priority and responsiveness
 
-User messages are prioritized over background work. When a user sends a message (`agent.run` with any session other than `heartbeat:main`), the runtime cancels any in-flight turn for `heartbeat:main`. The user turn runs immediately in its own session queue; the next heartbeat is scheduled as usual, so heartbeat work effectively resumes on the next tick. This gives the agent better user-facing responsiveness while still allowing planned work (e.g. from HEARTBEAT.md or ROADMAP.md) to advance between user interactions.
+User messages are prioritized over background work. When a user sends a message (`agent.run` with any session other than `heartbeat:main`), the runtime cancels any in-flight turn for `heartbeat:main` and marks that the heartbeat was interrupted. The user turn runs immediately in its own session queue. On the next heartbeat tick, the agent receives an explicit resume notice so it can continue from ROADMAP.md and HEARTBEAT.md. This gives the agent better user-facing responsiveness: pause other work mid-process, respond to the user fully, then resume planned work on the next tick.
 
 ### Substrate and heartbeat
 
