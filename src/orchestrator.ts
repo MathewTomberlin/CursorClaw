@@ -150,6 +150,10 @@ export class AutonomyOrchestrator {
     if (!this.running) {
       return;
     }
+    // Scheduled heartbeats always bypass the autonomy budget so they run on the configured
+    // interval (e.g. every 30s). The budget limits other proactive flows (e.g. queued
+    // intents from file-change suggestions), not the heartbeat tick. Do not "fix" by
+    // removing bypassBudget or heartbeats will stop after maxPerHourPerChannel (e.g. 4).
     const result = await this.options.heartbeat.runOnce({
       channelId: this.options.heartbeatChannelId,
       budget: this.options.budget,

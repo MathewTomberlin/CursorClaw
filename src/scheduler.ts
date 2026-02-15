@@ -134,7 +134,7 @@ export class HeartbeatRunner {
     channelId: string;
     budget: AutonomyBudget;
     turn: () => Promise<string>;
-    /** When true, run the turn even if budget would deny (e.g. first heartbeat when BIRTH exists). */
+    /** When true, run the turn even if budget would deny. Orchestrator sets this for every scheduled heartbeat so heartbeats run on interval; budget applies to other proactive channels only. */
     bypassBudget?: boolean;
   }): Promise<"HEARTBEAT_OK" | "SENT"> {
     if (!this.config.enabled) {
