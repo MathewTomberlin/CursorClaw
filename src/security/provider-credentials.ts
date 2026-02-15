@@ -128,5 +128,8 @@ export async function listProviderCredentialNames(
  */
 export async function listProvidersWithCredentials(profileRoot: string): Promise<string[]> {
   const data = await readProvidersFile(profileRoot);
-  return Object.keys(data).filter((id) => Object.keys(data[id]).length > 0);
+  return Object.keys(data).filter((id) => {
+    const creds = data[id];
+    return Object.keys(creds != null ? creds : {}).length > 0;
+  });
 }

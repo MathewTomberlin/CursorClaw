@@ -130,6 +130,17 @@ export class RunStore {
     return changed;
   }
 
+  /** True if any run is currently marked interrupted (e.g. after process restart). */
+  async hasInterruptedRuns(): Promise<boolean> {
+    await this.ensureLoaded();
+    for (const record of this.records.values()) {
+      if (record.status === "interrupted") {
+        return true;
+      }
+    }
+    return false;
+  }
+
   async get(runId: string): Promise<PersistedRunRecord | undefined> {
     await this.ensureLoaded();
     const record = this.records.get(runId);

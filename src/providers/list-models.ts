@@ -66,10 +66,11 @@ export async function listProviderModels(
       }
       const data = (await res.json()) as { models?: Array<{ name?: string }> };
       const list = data?.models ?? [];
-      const models: ProviderModel[] = list.map((m) => ({
-        id: typeof m.name === "string" && m.name ? m.name : String(m.name ?? ""),
-        name: typeof m.name === "string" ? m.name : undefined
-      }));
+      const models: ProviderModel[] = list.map((m) => {
+        const id = typeof m.name === "string" && m.name ? m.name : String(m.name ?? "");
+        const name = typeof m.name === "string" && m.name ? m.name : undefined;
+        return name !== undefined ? { id, name } : { id };
+      });
       return { ok: true, models };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -110,10 +111,11 @@ export async function listProviderModels(
       }
       const data = (await res.json()) as { data?: Array<{ id?: string }> };
       const list = data?.data ?? [];
-      const models: ProviderModel[] = list.map((m) => ({
-        id: typeof m.id === "string" && m.id ? m.id : String(m.id ?? ""),
-        name: typeof m.id === "string" ? m.id : undefined
-      }));
+      const models: ProviderModel[] = list.map((m) => {
+        const id = typeof m.id === "string" && m.id ? m.id : String(m.id ?? "");
+        const name = typeof m.id === "string" && m.id ? m.id : undefined;
+        return name !== undefined ? { id, name } : { id };
+      });
       return { ok: true, models };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

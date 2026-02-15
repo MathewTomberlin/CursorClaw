@@ -2,11 +2,13 @@ import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
 import Fastify, { type FastifyInstance } from "fastify";
+import fastifyCors from "@fastify/cors";
 
 import type { ChannelHub } from "./channels.js";
 import {
   type CursorClawConfig,
   type DeepPartial,
+  type GatewayConfig,
   getDefaultProfileId,
   loadConfigFromDisk,
   mergeConfigPatch,
@@ -14,6 +16,7 @@ import {
   resolveProfileRoot,
   writeConfigToDisk
 } from "./config.js";
+import { safeReadUtf8 } from "./fs-utils.js";
 import type { BehaviorPolicyEngine } from "./responsiveness.js";
 import type { RunStore } from "./run-store.js";
 import type { AgentRuntime, TurnResult } from "./runtime.js";
@@ -219,6 +222,16 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
   });
   const pendingRuns = new Map<string, PendingRun>();
 
+  // CORS so UI from another origin (e.g. Vite dev server, Tailscale) can call /rpc, /status, /stream
+  void app.register(fastifyCors, {
+    origin: true,
+    methods: ["GET", "HEAD", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true,
+    maxAge: 86400,
+    preflightContinue: false
+  });
+
   app.get("/health", async () => {
     return {
       ok: true,
@@ -420,6 +433,10 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         if (deps.threadStore) {
           await deps.threadStore.setThread(profileCtx.profileRoot, session.sessionId, messages);
         }
+        // Interrupt in-flight heartbeat so user turn can run immediately; heartbeat will reschedule.
+        if (session.sessionId !== "heartbeat:main") {
+          deps.runtime.cancelTurnForSession("heartbeat:main");
+        }
         // Runtime compacts via applyUserMessageFreshness; no user-facing message limit.
         const started = deps.runtime.startTurn({ session, messages });
         if (deps.runStore) {
@@ -452,6 +469,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         result = { runId };
       } else if (body.method === "agent.wait") {
         const runId = String(body.params?.runId ?? "");
+        const block = body.params?.block === true;
         const pending = pendingRuns.get(runId);
         if (!pending) {
           const persisted = deps.runStore ? await deps.runStore.get(runId) : undefined;
@@ -477,15 +495,19 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           pendingRuns.delete(runId);
           await deps.runStore?.consume(runId);
           throw new Error(pending.error);
-        }
-        if (pending && pending.result === undefined && pending.error === undefined) {
-          try {
-            const resolved = await pending.promise;
-            result = resolved;
-            await appendAssistantToThread(deps, runId, resolved);
-            await deps.runStore?.consume(runId);
-          } finally {
-            pendingRuns.delete(runId);
+        } else if (pending && pending.result === undefined && pending.error === undefined) {
+          // Run still in progress. Return pending immediately so clients can poll (avoids long-lived connection timeouts / "Failed to fetch").
+          if (!block) {
+            result = { status: "pending", runId };
+          } else {
+            try {
+              const resolved = await pending.promise;
+              result = resolved;
+              await appendAssistantToThread(deps, runId, resolved);
+              await deps.runStore?.consume(runId);
+            } finally {
+              pendingRuns.delete(runId);
+            }
           }
         }
       } else if (body.method === "chat.getThread") {
@@ -743,18 +765,20 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         }
         let updated = mergeConfigPatch(deps.getConfig(), partial as DeepPartial<CursorClawConfig>, PATCHABLE_CONFIG_KEYS);
         // Allow patching only gateway.bindAddress and gateway.bind (for Tailscale); never auth.
-        const gw = partial.gateway;
-        if (gw && typeof gw === "object" && (gw.bindAddress !== undefined || gw.bind !== undefined)) {
-          updated = {
-            ...updated,
-            gateway: {
-              ...updated.gateway,
-              ...(gw.bindAddress !== undefined && { bindAddress: typeof gw.bindAddress === "string" ? gw.bindAddress : undefined }),
-              ...(gw.bind !== undefined && (gw.bind === "loopback" || gw.bind === "0.0.0.0") && { bind: gw.bind })
-            }
+        const gw = partial.gateway as Record<string, unknown> | undefined;
+        const gwBindAddress = gw && typeof gw === "object" ? (gw["bindAddress"] as string | undefined) : undefined;
+        const gwBind = gw && typeof gw === "object" ? (gw["bind"] as string | undefined) : undefined;
+        if (gw && typeof gw === "object" && (gwBindAddress !== undefined || gwBind !== undefined)) {
+          const bindAddressVal = typeof gwBindAddress === "string" && gwBindAddress.trim() ? gwBindAddress.trim() : undefined;
+          const bindVal = gwBind === "loopback" || gwBind === "0.0.0.0" ? (gwBind as "loopback" | "0.0.0.0") : undefined;
+          const gateway: GatewayConfig = {
+            ...(updated.gateway as GatewayConfig),
+            ...(bindAddressVal !== undefined ? { bindAddress: bindAddressVal } : {}),
+            ...(bindVal !== undefined ? { bind: bindVal } : {})
           };
-          if (typeof updated.gateway.bindAddress === "string" && updated.gateway.bindAddress.trim()) {
-            await validateBindAddress(updated.gateway.bindAddress.trim());
+          updated = { ...updated, gateway };
+          if (typeof gateway.bindAddress === "string" && gateway.bindAddress.trim()) {
+            await validateBindAddress(gateway.bindAddress.trim());
           }
         }
         deps.setConfig(updated);
@@ -847,7 +871,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           throw new RpcGatewayError(400, "BAD_REQUEST", "workspace not configured");
         }
         const heartbeatPath = join(profileCtx.profileRoot, "HEARTBEAT.md");
-        const content = await readFile(heartbeatPath, "utf8").catch(() => "");
+        const content = (await safeReadUtf8(heartbeatPath)) ?? "";
         result = { content };
       } else if (body.method === "heartbeat.update") {
         if (!profileCtx.profileRoot) {
@@ -967,7 +991,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         if (!fullPath.startsWith(workspaceResolved) || fullPath === workspaceResolved) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "invalid path");
         }
-        const content = await readFile(fullPath, "utf8").catch(() => "");
+        const content = (await safeReadUtf8(fullPath)) ?? "";
         result = { path: pathParam, content };
       } else if (body.method === "memory.writeFile") {
         if (!profileCtx.profileRoot) {

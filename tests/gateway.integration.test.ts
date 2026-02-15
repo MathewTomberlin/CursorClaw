@@ -828,7 +828,7 @@ describe("gateway integration", () => {
       payload: {
         version: "2.0",
         method: "agent.wait",
-        params: { runId }
+        params: { runId, block: true }
       }
     });
     expect(waitRes.statusCode).toBe(200);
@@ -1378,7 +1378,8 @@ describe("gateway integration", () => {
         version: "2.0",
         method: "agent.wait",
         params: {
-          runId
+          runId,
+          block: true
         }
       }
     });

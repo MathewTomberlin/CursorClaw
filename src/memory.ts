@@ -2,6 +2,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
+import { safeReadUtf8 } from "./fs-utils.js";
 import type { MemoryRecord, SensitivityLabel } from "./types.js";
 
 export interface MemoryStoreOptions {
@@ -71,7 +72,8 @@ export class MemoryStore {
 
   async readAll(): Promise<MemoryRecord[]> {
     await this.init();
-    const content = await readFile(this.primaryFile, "utf8");
+    const content = await safeReadUtf8(this.primaryFile);
+    if (content == null) return [];
     return content
       .split("\n")
       .map(parseLine)

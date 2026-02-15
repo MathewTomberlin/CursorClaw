@@ -202,8 +202,24 @@ export function ChatProvider({ children }: ChatProviderProps) {
         if (!runId) throw new Error("No runId returned");
         setCurrentRunId(runId);
 
-        const waitRes = await rpc<{ assistantText: string; events?: unknown[] }>("agent.wait", { runId });
-        const out = waitRes.result;
+        // Poll agent.wait instead of one long-lived request to avoid browser/proxy timeouts ("Failed to fetch")
+        const POLL_INTERVAL_MS = 2000;
+        const POLL_TIMEOUT_MS = 10 * 60 * 1000; // 10 min
+        const startedAt = Date.now();
+        let out: { status?: string; runId?: string; assistantText?: string; events?: unknown[] } | undefined;
+        for (;;) {
+          const waitRes = await rpc<{ status?: string; runId?: string; assistantText?: string; events?: unknown[] }>(
+            "agent.wait",
+            { runId }
+          );
+          out = waitRes.result;
+          if (out && (out as { status?: string }).status === "pending") {
+            if (Date.now() - startedAt > POLL_TIMEOUT_MS) throw new Error("Turn timed out. Please try again.");
+            await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+            continue;
+          }
+          break;
+        }
         const assistantText = out?.assistantText ?? "";
 
         const assistantMsg: ChatMessage = {

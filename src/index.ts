@@ -2,6 +2,8 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 
+import { safeReadUtf8 } from "./fs-utils.js";
+
 import {
   ChannelHub,
   LocalEchoChannelAdapter,
@@ -745,8 +747,8 @@ async function main(): Promise<void> {
   const bootPath = join(profileRoot, "BOOT.md");
   if (bootEnabled && existsSync(bootPath)) {
     try {
-      const bootContent = await readFile(bootPath, "utf8");
-      const trimmed = bootContent.trim();
+      const bootContent = await safeReadUtf8(bootPath);
+      const trimmed = bootContent?.trim() ?? "";
       if (trimmed.length > 0) {
         const bootInstruction =
           "[BOOT] Process just started. Execute the following once. If you have a welcome or status message for the user, write it in your reply; it will be delivered to the main chat. End your reply with BOOT_DONE.\n\n" +
@@ -783,8 +785,8 @@ async function main(): Promise<void> {
   let heartbeatHasSubstantiveContent = false;
   try {
     if (existsSync(heartbeatPathForStartup)) {
-      const fc = await readFile(heartbeatPathForStartup, "utf8");
-      const trimmed = fc.trim();
+      const fc = await safeReadUtf8(heartbeatPathForStartup);
+      const trimmed = (fc ?? "").trim();
       heartbeatHasSubstantiveContent = trimmed
         .split("\n")
         .some((line) => {
@@ -840,8 +842,8 @@ async function main(): Promise<void> {
         if (!existsSync(heartbeatPath)) {
           return "HEARTBEAT_OK";
         }
-        const fileContent = await readFile(heartbeatPath, "utf8");
-        const trimmed = fileContent.trim();
+        const fileContent = await safeReadUtf8(heartbeatPath);
+        const trimmed = (fileContent ?? "").trim();
         const hasSubstantiveLine = trimmed
           .split(/\n/)
           .some((line) => {
@@ -856,11 +858,11 @@ async function main(): Promise<void> {
         heartbeatConfig.prompt ?? "If no action needed, reply HEARTBEAT_OK.";
       let content: string;
       if (existsSync(heartbeatPath)) {
-        const fileContent = await readFile(heartbeatPath, "utf8");
+        const fileContent = await safeReadUtf8(heartbeatPath);
         const deliveryNote =
           "Anything you write before HEARTBEAT_OK will be delivered to the user as a proactive message in the CursorClaw web Chat. So if HEARTBEAT.md asks for an update or message, write it first, then end with HEARTBEAT_OK.";
         content =
-          `Instructions for this heartbeat (from HEARTBEAT.md):\n\n${fileContent.trim()}\n\n${deliveryNote}\n\n${baseInstruction}`;
+          `Instructions for this heartbeat (from HEARTBEAT.md):\n\n${(fileContent ?? "").trim()}\n\n${deliveryNote}\n\n${baseInstruction}`;
       } else {
         content = `Read HEARTBEAT.md if present. ${baseInstruction}`;
       }

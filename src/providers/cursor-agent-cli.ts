@@ -13,6 +13,25 @@ import type {
 } from "../types.js";
 import type { ModelProvider } from "./types.js";
 
+/** Max prompt length to pass as CLI arg (Windows CreateProcess / cmd.exe limit ~8191). */
+const MAX_PROMPT_ARG_LENGTH = 4000;
+
+/** Thrown when CLI fails with command-line-too-long so caller can retry with stdin. */
+export class CommandLineTooLongError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CommandLineTooLongError";
+  }
+}
+
+function isCommandLineTooLongStderr(stderr: string): boolean {
+  return (
+    /command line is too long|argument list too long|command line too long|the command line is too long/i.test(stderr) ||
+    /error 0x80070057|error 87|invalid parameter/i.test(stderr) ||
+    /spawn.* E2BIG/i.test(stderr)
+  );
+}
+
 function isCursorAgentConfig(
   c: ModelProviderConfig
 ): c is ModelProviderConfig & { provider: "cursor-agent-cli"; command: string } {
@@ -48,13 +67,64 @@ export class CursorAgentCliProvider implements ModelProvider {
     if (!isCursorAgentConfig(modelConfig)) {
       throw new Error(`cursor-agent-cli provider requires provider "cursor-agent-cli" and command`);
     }
-    const timeoutMs = options.timeoutMs ?? modelConfig.timeoutMs;
-    const baseArgs = modelConfig.args ?? [];
     const promptAsArg = Boolean(modelConfig.promptAsArg);
     const lastUserContent =
       [...messages].reverse().find((m) => m.role === "user")?.content?.trim() ?? "";
+    const promptViaStdinDefault =
+      promptAsArg && lastUserContent.length > MAX_PROMPT_ARG_LENGTH;
+
+    try {
+      yield* this.runOneAttempt(
+        session,
+        modelConfig,
+        messages,
+        tools,
+        options,
+        lastUserContent,
+        promptAsArg,
+        promptViaStdinDefault
+      );
+    } catch (e) {
+      if (
+        e instanceof CommandLineTooLongError &&
+        promptAsArg &&
+        !promptViaStdinDefault
+      ) {
+        yield* this.runOneAttempt(
+          session,
+          modelConfig,
+          messages,
+          tools,
+          options,
+          lastUserContent,
+          promptAsArg,
+          true
+        );
+      } else {
+        throw e;
+      }
+    }
+  }
+
+  private async *runOneAttempt(
+    session: ModelSessionHandle,
+    modelConfig: ModelProviderConfig & { provider: "cursor-agent-cli"; command: string },
+    messages: Array<{ role: string; content: string }>,
+    tools: ToolDefinition[],
+    options: SendTurnOptions,
+    lastUserContent: string,
+    promptAsArg: boolean,
+    promptViaStdin: boolean
+  ): AsyncIterable<AdapterEvent> {
+    const timeoutMs = options.timeoutMs ?? modelConfig.timeoutMs;
+    const baseArgs = modelConfig.args ?? [];
     const args = promptAsArg
-      ? [...baseArgs, "--approve-mcps", "--force", lastUserContent]
+      ? [
+          ...baseArgs,
+          "--approve-mcps",
+          "--force",
+          ...(promptViaStdin ? [] : [lastUserContent])
+        ]
       : baseArgs;
     const { command, args: resolvedArgs } = this.resolveSpawnCommand(modelConfig.command, args);
     const authProfile = session.authProfile ?? modelConfig.authProfiles[0] ?? "default";
@@ -69,7 +139,13 @@ export class CursorAgentCliProvider implements ModelProvider {
     this.processes.set(options.turnId, child);
 
     if (promptAsArg) {
-      child.stdin.end();
+      if (promptViaStdin) {
+        child.stdin.write(lastUserContent, "utf8", () => {
+          child.stdin.end();
+        });
+      } else {
+        child.stdin.end();
+      }
     } else {
       const payload = {
         type: "turn",
@@ -152,6 +228,15 @@ export class CursorAgentCliProvider implements ModelProvider {
         ? " Run the CLI manually and pipe one line of turn JSON to stdin to see what it prints (see docs/cursor-agent-adapter.md for the turn format)."
         : "";
     if (code !== 0 && !sawDone) {
+      if (
+        promptAsArg &&
+        !promptViaStdin &&
+        isCommandLineTooLongStderr(stderrText)
+      ) {
+        throw new CommandLineTooLongError(
+          `Cursor-Agent CLI failed with command-line-too-long (code ${code}). Stderr: ${stderrText}. Retry with prompt via stdin.`
+        );
+      }
       this.metrics.crashCount += 1;
       throw new Error(
         `Cursor-Agent CLI exited with code ${code} before sending a done event. ` +
@@ -250,7 +335,7 @@ export class CursorAgentCliProvider implements ModelProvider {
         ? content.map((c) => (c && typeof c.text === "string" ? c.text : "")).join("")
         : "";
       if (!text) return null;
-      if (text.length > 300) return null;
+      // Forward full assistant content; runtime dedupes if we already got it via assistant_delta.
       this.pushEventLog(redactSecrets(JSON.stringify(candidate)));
       return { type: "assistant_delta", data: { content: text } };
     }

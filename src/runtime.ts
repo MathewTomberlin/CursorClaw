@@ -203,6 +203,8 @@ export class AgentRuntime {
   private static readonly MULTI_PATH_RESOLUTION_MAX = 100;
   /** Session IDs that have had at least one turn (used to inject BIRTH only on first turn per session). */
   private readonly sessionsWithTurn = new Set<string>();
+  /** Current runId per session so heartbeat can be cancelled when user sends a message. */
+  private readonly currentRunIdBySession = new Map<string, string>();
 
   constructor(private readonly options: AgentRuntimeOptions) {
     const queueBackend = options.queueBackend ?? new InMemoryQueueBackend();
@@ -252,6 +254,17 @@ export class AgentRuntime {
     return adapter.getMetrics?.();
   }
 
+  /**
+   * Cancel the in-flight turn for a session (e.g. heartbeat:main) so user turns can run first.
+   * No-op if that session has no running turn. Used when agent.run is received for a user session.
+   */
+  cancelTurnForSession(sessionId: string): void {
+    const runId = this.currentRunIdBySession.get(sessionId);
+    if (runId) {
+      void this.options.adapter.cancel(runId).catch(() => {});
+    }
+  }
+
   startTurn(request: TurnRequest): { runId: string; promise: Promise<TurnResult> } {
     const runId = randomUUID();
     const promise = this.scheduleTurn(runId, request);
@@ -269,6 +282,7 @@ export class AgentRuntime {
       request,
       execute: async () => {
         const sessionId = request.session.sessionId;
+        this.currentRunIdBySession.set(sessionId, runId);
         const scrubScopeId = `${sessionId}:${runId}`;
         const shouldForceMultiPath =
           this.options.failureLoopGuard?.requiresStepBack(sessionId) ?? false;
@@ -404,7 +418,9 @@ export class AgentRuntime {
             if (event.type === "assistant_delta") {
               const rawContent = String((event.data as { content?: string })?.content ?? "");
               const content = this.scrubText(rawContent, scrubScopeId);
-              if (content.length >= assistantText.length && content.startsWith(assistantText)) {
+              if (content === assistantText) {
+                // Exact duplicate (e.g. CLI sent deltas then full message); skip emit
+              } else if (content.length >= assistantText.length && content.startsWith(assistantText)) {
                 assistantText = content;
                 emit("assistant", { content });
               } else if (content.length >= 15 && assistantText.includes(content)) {
@@ -420,14 +436,14 @@ export class AgentRuntime {
               if (!checkpointHandle && this.shouldCreateCheckpoint(call)) {
                 checkpointHandle = await this.options.gitCheckpointManager?.createCheckpoint(runId) ?? null;
               }
+              const profileRootForTool = this.options.getProfileRoot?.(request.session.profileId ?? getDefaultProfileId(this.options.config));
               const toolContext: ToolExecuteContext = {
                 auditId: runId,
                 decisionLogs: this.decisionLogs,
-                provenance: turnProvenance
+                provenance: turnProvenance,
+                ...(profileRootForTool !== undefined && profileRootForTool !== "" ? { profileRoot: profileRootForTool } : {}),
+                ...(request.session.channelKind !== undefined ? { channelKind: request.session.channelKind } : {})
               };
-              const profileRootForTool = this.options.getProfileRoot?.(request.session.profileId ?? getDefaultProfileId(this.options.config));
-              if (profileRootForTool !== undefined) toolContext.profileRoot = profileRootForTool;
-              if (request.session.channelKind !== undefined) toolContext.channelKind = request.session.channelKind;
               const output = await this.options.toolRouter.execute(call, toolContext);
               const safeCall = this.scrubUnknown(call, scrubScopeId) as ToolCall;
               const safeOutput = this.scrubUnknown(output, scrubScopeId);
@@ -599,6 +615,7 @@ export class AgentRuntime {
           await this.snapshot(runId, sessionId, events);
           throw error;
         } finally {
+          this.currentRunIdBySession.delete(sessionId);
           this.options.privacyScrubber?.clearScope(scrubScopeId);
         }
       },

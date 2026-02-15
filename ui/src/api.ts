@@ -85,21 +85,43 @@ export function mapRpcError(res: { status?: number; error?: RpcError }): string 
   return `Request failed${status}.`;
 }
 
+/** Turn network/fetch failures into a user-friendly message (e.g. "Failed to fetch" → connection hint). */
+function normalizeFetchError(base: string, err: unknown): Error {
+  const msg = err instanceof Error ? err.message : String(err);
+  const isNetworkFailure =
+    msg === "Failed to fetch" ||
+    msg === "Load failed" ||
+    msg === "NetworkError when attempting to fetch resource." ||
+    (err instanceof TypeError && msg.toLowerCase().includes("fetch"));
+  if (isNetworkFailure) {
+    const hint = base
+      ? `Check that CursorClaw is running (e.g. \`npm run start\`) and reachable at ${base}.`
+      : "Set the gateway URL (e.g. the host's Tailscale URL like http://100.x.x.x:8787) and ensure the server is bound to 0.0.0.0 or that address.";
+    return new Error(`Cannot reach the gateway. ${hint}`);
+  }
+  return err instanceof Error ? err : new Error(msg);
+}
+
 export async function rpc<T = unknown>(method: string, params?: Record<string, unknown>): Promise<RpcResponse<T>> {
   const base = getBaseUrl();
   const token = getToken();
-  const res = await fetch(`${base}/rpc`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
-    },
-    body: JSON.stringify({
-      version: "2.0",
-      method,
-      ...(params !== undefined ? { params } : {})
-    })
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${base}/rpc`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({
+        version: "2.0",
+        method,
+        ...(params !== undefined ? { params } : {})
+      })
+    });
+  } catch (err) {
+    throw normalizeFetchError(base, err);
+  }
   let data: RpcResponse<T>;
   try {
     data = (await res.json()) as RpcResponse<T>;
@@ -136,7 +158,12 @@ export async function rpcWithProfile<T = unknown>(
 
 export async function getHealth(): Promise<{ ok: boolean; time: string }> {
   const base = getBaseUrl();
-  const res = await fetch(`${base}/health`);
+  let res: Response;
+  try {
+    res = await fetch(`${base}/health`);
+  } catch (err) {
+    throw normalizeFetchError(base, err);
+  }
   if (!res.ok) throw new Error("Health check failed.");
   return res.json();
 }
@@ -144,9 +171,14 @@ export async function getHealth(): Promise<{ ok: boolean; time: string }> {
 export async function getStatus(): Promise<StatusPayload> {
   const base = getBaseUrl();
   const token = getToken();
-  const res = await fetch(`${base}/status`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {}
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${base}/status`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    });
+  } catch (err) {
+    throw normalizeFetchError(base, err);
+  }
   if (!res.ok) throw new Error("Status check failed.");
   return res.json();
 }

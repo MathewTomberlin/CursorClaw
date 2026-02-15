@@ -188,18 +188,18 @@ Waits for a run started by `agent.run`.
 `params`:
 
 - `runId: string` (required)
+- `block?: boolean` (optional, default `false`). When `true`, the request blocks until the run completes (same as previous behavior). When `false`, if the run is still in progress the server returns immediately with `{ status: "pending", runId }` so the client can poll and avoid long-lived connection timeouts ("Failed to fetch").
 
-Returns full `TurnResult` when complete, including:
+Returns:
 
-- `runId`
-- `assistantText`
-- `events`
-- optional confidence fields (`confidenceScore`, `confidenceRationale`, `requiresHumanHint`)
+- If run is still in progress and `block` is not `true`: `{ status: "pending", runId }`.
+- When complete: full `TurnResult` including `assistantText`, `events`, and optional confidence fields.
 
 Important behavior:
 
 - Completed/failed run entries are consumed after retrieval.
 - A second `agent.wait` on same run usually returns `NOT_FOUND`.
+- The UI polls `agent.wait` without `block` to avoid browser/proxy timeouts on long turns.
 
 ---
 
