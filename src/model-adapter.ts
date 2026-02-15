@@ -27,6 +27,10 @@ export interface CursorAgentAdapterModelConfig {
   authProfiles: string[];
   fallbackModels: string[];
   enabled: boolean;
+  /** Ollama provider: model name (e.g. llama3.2). */
+  ollamaModelName?: string;
+  /** Ollama / OpenAI-compatible: base URL (e.g. http://localhost:11434). */
+  baseURL?: string;
 }
 
 export interface CursorAgentAdapterConfig {
