@@ -26,9 +26,9 @@
 
 **Phase 2 — Validation and “fuzz” (safe, cheap)**
 
-- [ ] **Minimum-capability suite** is defined: (1) tool call in response, (2) simple reasoning (e.g. 2+2), (3) optional: code-snippet or plan step. All run with minimal tokens (short prompts, low max_tokens) to keep cost near zero for API models.
-- [ ] Validation can be run on a schedule or on-demand; results update the validation store. Failed models are not removed from config but are **deprioritized** or skipped in the fallback chain when a “use only validated” policy is enabled.
-- [ ] **Cost/safety:** No validation against paid APIs without explicit operator opt-in (e.g. `providerModelResilience.runValidationAgainstPaidApis: true`); or validation only for models with a “free tier” or local. Rate limits and max spend (if applicable) documented.
+- [x] **Minimum-capability suite** is defined: (1) tool call in response, (2) simple reasoning (e.g. 2+2). Run with `npm run validate-model -- --modelId=<id> --fullSuite`. Optional code-snippet or plan step can be added later. Short prompts keep cost low.
+- [x] Validation runs on-demand; results update the validation store (per-check: toolCall, reasoning). Failed models are not removed from config but are **deprioritized** or skipped in the fallback chain when a “use only validated” policy is enabled.
+- [x] **Cost/safety:** No validation against paid APIs without explicit operator opt-in (e.g. `providerModelResilience.runValidationAgainstPaidApis: true`); or validation only for models with a “free tier” or local. Rate limits and max spend (if applicable) documented.
 
 **Phase 3 — Switching policy and mid-stream use**
 

@@ -199,4 +199,68 @@ describe("provider-model-resilience probe", () => {
     expect(outcome.passed).toBe(false);
     expect(outcome.error).toContain("not in config");
   });
+
+  it("runProbe with fullSuite passes when tool_call + done then reasoning (4) + done", async () => {
+    const turn1: AdapterEvent[] = [
+      { type: "tool_call", data: { name: "echo", args: {} } },
+      { type: "done" }
+    ];
+    const turn2: AdapterEvent[] = [
+      { type: "assistant_delta", data: { content: "4" } },
+      { type: "done" }
+    ];
+    let callCount = 0;
+    const adapter: ModelAdapter = {
+      createSession: async (_ctx, opts) => ({
+        id: "s1",
+        model: opts?.modelId ?? "default",
+        authProfile: "default"
+      }),
+      sendTurn: async function* (_session, _messages, _tools) {
+        const events = callCount === 0 ? turn1 : turn2;
+        callCount++;
+        for (const e of events) {
+          yield e;
+        }
+      },
+      cancel: async () => {},
+      close: async () => {}
+    };
+    const config = minimalConfig("test");
+    const outcome = await runProbe("test", config, { adapter, fullSuite: true });
+    expect(outcome.passed).toBe(true);
+    expect(outcome.checks.toolCall).toBe(true);
+    expect(outcome.checks.reasoning).toBe(true);
+    expect(outcome.error).toBeNull();
+  });
+
+  it("runProbe with fullSuite fails when reasoning response lacks 4", async () => {
+    const turn1: AdapterEvent[] = [
+      { type: "tool_call", data: { name: "echo", args: {} } },
+      { type: "done" }
+    ];
+    const turn2: AdapterEvent[] = [
+      { type: "assistant_delta", data: { content: "five" } },
+      { type: "done" }
+    ];
+    let callCount = 0;
+    const adapter: ModelAdapter = {
+      createSession: async () => ({ id: "s1", model: "test", authProfile: "default" }),
+      sendTurn: async function* () {
+        const events = callCount === 0 ? turn1 : turn2;
+        callCount++;
+        for (const e of events) {
+          yield e;
+        }
+      },
+      cancel: async () => {},
+      close: async () => {}
+    };
+    const config = minimalConfig("test");
+    const outcome = await runProbe("test", config, { adapter, fullSuite: true });
+    expect(outcome.passed).toBe(false);
+    expect(outcome.checks.toolCall).toBe(true);
+    expect(outcome.checks.reasoning).toBe(false);
+    expect(outcome.error).toContain("reasoning");
+  });
 });
