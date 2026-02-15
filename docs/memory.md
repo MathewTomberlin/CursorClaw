@@ -35,9 +35,9 @@ So the agent “sees” MEMORY.md and recent daily logs at session start without
 
 The gateway exposes RPCs to read/write memory files so the UI can show and edit them. Allowed paths: `MEMORY.md` and `memory/YYYY-MM-DD.md`. Other paths are rejected.
 
-## 5. Optional vector recall
+## 5. Optional vector recall (PM.4)
 
-When **continuity.memoryEmbeddingsEnabled** is true:
+This design satisfies **PM.4** (optional vector recall). When **continuity.memoryEmbeddingsEnabled** is true:
 
 - A **memory embedding index** is kept under the profile at `tmp/memory-embeddings.json` (hash-based vectors over record text; max records set by `continuity.memoryEmbeddingsMaxRecords`, default 3000).
 - The **recall_memory** tool is available in the main session only: the agent can query by natural language and receive top-k relevant memory entries by similarity. Records are synced into the index on each recall; no separate background sync.

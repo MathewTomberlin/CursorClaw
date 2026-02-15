@@ -30,6 +30,21 @@ export interface StreamEvent {
 
 const STORAGE_KEY_PREFIX = "cursorclaw_chat_";
 
+/** Collapse consecutive assistant messages with identical trimmed content so the reply is only shown once. */
+function dedupeConsecutiveAssistantReplies(messages: ChatMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const m of messages) {
+    if (m.role !== "assistant") {
+      out.push(m);
+      continue;
+    }
+    const prev = out[out.length - 1];
+    if (prev?.role === "assistant" && (prev.content ?? "").trim() === (m.content ?? "").trim()) continue;
+    out.push(m);
+  }
+  return out;
+}
+
 function loadThread(sessionId: string): ChatMessage[] {
   try {
     const raw = sessionStorage.getItem(STORAGE_KEY_PREFIX + sessionId);
@@ -98,6 +113,8 @@ export function ChatProvider({ children }: ChatProviderProps) {
   const streamRef = useRef<EventSource | null>(null);
   /** Only sync to server after we've loaded from server for this session/profile (avoids overwriting server with sessionStorage on first paint). */
   const serverLoadDoneRef = useRef(false);
+  /** Prevents duplicate assistant messages from double-submit or racing agent.wait responses. */
+  const runTurnInProgressRef = useRef(false);
 
   // Load thread from server when session or profile changes (shared message list for desktop and mobile)
   useEffect(() => {
@@ -107,7 +124,10 @@ export function ChatProvider({ children }: ChatProviderProps) {
     let cancelled = false;
     getThread(sid, selectedProfileId)
       .then(({ messages: serverMessages }) => {
-        if (!cancelled && Array.isArray(serverMessages)) setMessages(serverMessages);
+        if (!cancelled && Array.isArray(serverMessages)) {
+          const deduped = dedupeConsecutiveAssistantReplies(serverMessages);
+          setMessages(deduped);
+        }
         if (!cancelled) serverLoadDoneRef.current = true;
       })
       .catch(() => {
@@ -175,6 +195,8 @@ export function ChatProvider({ children }: ChatProviderProps) {
         setError("Session ID, channel ID, and message are required.");
         return;
       }
+      if (runTurnInProgressRef.current) return;
+      runTurnInProgressRef.current = true;
       setError(null);
       setCurrentRunId(null);
       setLoading(true);
@@ -228,7 +250,13 @@ export function ChatProvider({ children }: ChatProviderProps) {
           content: assistantText,
           at: new Date().toISOString()
         };
-        setMessages((prev) => [...prev, assistantMsg]);
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.role === "assistant" && (last.content ?? "").trim() === (assistantText ?? "").trim()) {
+            return prev;
+          }
+          return [...prev, assistantMsg];
+        });
       } catch (e) {
         setError(
           e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } })
@@ -238,6 +266,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
         setLoading(false);
         setLoadingStartedAt(null);
         setCurrentRunId(null);
+        runTurnInProgressRef.current = false;
       }
     },
     [sessionId, channelId, channelKind, messages, selectedProfileId]
