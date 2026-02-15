@@ -14,6 +14,8 @@ import {
   type ProviderModelValidationStore
 } from "../src/provider-model-resilience/validation-store.js";
 import { runProbe } from "../src/provider-model-resilience/probe.js";
+import { CursorAgentModelAdapter } from "../src/model-adapter.js";
+import type { ToolDefinition } from "../src/types.js";
 
 describe("provider-model-resilience validation store", () => {
   it("resolveValidationStorePath uses default when config path absent", () => {
@@ -198,5 +200,178 @@ describe("provider-model-resilience probe", () => {
     const outcome = await runProbe("missing", config);
     expect(outcome.passed).toBe(false);
     expect(outcome.error).toContain("not in config");
+  });
+
+  it("runProbe with fullSuite passes when tool_call + done then reasoning (4) + done", async () => {
+    const turn1: AdapterEvent[] = [
+      { type: "tool_call", data: { name: "echo", args: {} } },
+      { type: "done" }
+    ];
+    const turn2: AdapterEvent[] = [
+      { type: "assistant_delta", data: { content: "4" } },
+      { type: "done" }
+    ];
+    let callCount = 0;
+    const adapter: ModelAdapter = {
+      createSession: async (_ctx, opts) => ({
+        id: "s1",
+        model: opts?.modelId ?? "default",
+        authProfile: "default"
+      }),
+      sendTurn: async function* (_session, _messages, _tools) {
+        const events = callCount === 0 ? turn1 : turn2;
+        callCount++;
+        for (const e of events) {
+          yield e;
+        }
+      },
+      cancel: async () => {},
+      close: async () => {}
+    };
+    const config = minimalConfig("test");
+    const outcome = await runProbe("test", config, { adapter, fullSuite: true });
+    expect(outcome.passed).toBe(true);
+    expect(outcome.checks.toolCall).toBe(true);
+    expect(outcome.checks.reasoning).toBe(true);
+    expect(outcome.error).toBeNull();
+  });
+
+  it("runProbe with fullSuite fails when reasoning response lacks 4", async () => {
+    const turn1: AdapterEvent[] = [
+      { type: "tool_call", data: { name: "echo", args: {} } },
+      { type: "done" }
+    ];
+    const turn2: AdapterEvent[] = [
+      { type: "assistant_delta", data: { content: "five" } },
+      { type: "done" }
+    ];
+    let callCount = 0;
+    const adapter: ModelAdapter = {
+      createSession: async () => ({ id: "s1", model: "test", authProfile: "default" }),
+      sendTurn: async function* () {
+        const events = callCount === 0 ? turn1 : turn2;
+        callCount++;
+        for (const e of events) {
+          yield e;
+        }
+      },
+      cancel: async () => {},
+      close: async () => {}
+    };
+    const config = minimalConfig("test");
+    const outcome = await runProbe("test", config, { adapter, fullSuite: true });
+    expect(outcome.passed).toBe(false);
+    expect(outcome.checks.toolCall).toBe(true);
+    expect(outcome.checks.reasoning).toBe(false);
+    expect(outcome.error).toContain("reasoning");
+  });
+});
+
+const simpleTool: ToolDefinition = {
+  name: "echo_tool",
+  description: "echo",
+  schema: { type: "object", properties: {}, additionalProperties: false },
+  riskLevel: "low",
+  execute: async (args) => args
+};
+
+describe("useOnlyValidatedFallbacks policy (PMR Phase 3)", () => {
+  it("filters fallback chain to validated models only", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cursorclaw-pmr-policy-"));
+    const storePath = join(dir, "store.json");
+    try {
+      await writeValidationStore(storePath, {
+        lastUpdated: "",
+        results: {
+          primary: { passed: false, lastRun: "", checks: {}, error: "timeout" },
+          "fallback-b": { passed: true, lastRun: "", checks: { toolCall: true }, error: null }
+        }
+      });
+      const adapter = new CursorAgentModelAdapter({
+        defaultModel: "primary",
+        models: {
+          primary: {
+            provider: "fallback-model",
+            timeoutMs: 5_000,
+            authProfiles: ["default"],
+            fallbackModels: ["fallback-b"],
+            enabled: true
+          },
+          "fallback-b": {
+            provider: "fallback-model",
+            timeoutMs: 5_000,
+            authProfiles: ["default"],
+            fallbackModels: [],
+            enabled: true
+          }
+        },
+        providerModelResilience: { useOnlyValidatedFallbacks: true, validationStorePath: storePath },
+        cwd: dir
+      });
+      const session = await adapter.createSession({
+        sessionId: "s1",
+        channelId: "c1",
+        channelKind: "dm"
+      });
+      const events: string[] = [];
+      for await (const event of adapter.sendTurn(
+        session,
+        [{ role: "user", content: "hi" }],
+        [simpleTool],
+        { turnId: "t1" }
+      )) {
+        events.push(event.type);
+      }
+      expect(events).toContain("done");
+      expect(session.model).toBe("fallback-b");
+    } finally {
+      await rm(dir, { recursive: true }).catch(() => {});
+    }
+  });
+
+  it("throws clear error when no validated model available", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cursorclaw-pmr-policy-"));
+    const storePath = join(dir, "store.json");
+    try {
+      await writeValidationStore(storePath, {
+        lastUpdated: "",
+        results: {
+          primary: { passed: false, lastRun: "", checks: {}, error: "timeout" }
+        }
+      });
+      const adapter = new CursorAgentModelAdapter({
+        defaultModel: "primary",
+        models: {
+          primary: {
+            provider: "fallback-model",
+            timeoutMs: 5_000,
+            authProfiles: ["default"],
+            fallbackModels: [],
+            enabled: true
+          }
+        },
+        providerModelResilience: { useOnlyValidatedFallbacks: true, validationStorePath: storePath },
+        cwd: dir
+      });
+      const session = await adapter.createSession({
+        sessionId: "s1",
+        channelId: "c1",
+        channelKind: "dm"
+      });
+      const collect = async (): Promise<void> => {
+        for await (const _event of adapter.sendTurn(
+          session,
+          [{ role: "user", content: "hi" }],
+          [simpleTool],
+          { turnId: "t2" }
+        )) {
+          // no-op
+        }
+      };
+      await expect(collect()).rejects.toThrow(/no validated model available/);
+      await expect(collect()).rejects.toThrow(/useOnlyValidatedFallbacks to false/);
+    } finally {
+      await rm(dir, { recursive: true }).catch(() => {});
+    }
   });
 });

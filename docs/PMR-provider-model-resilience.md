@@ -26,19 +26,19 @@
 
 **Phase 2 — Validation and “fuzz” (safe, cheap)**
 
-- [ ] **Minimum-capability suite** is defined: (1) tool call in response, (2) simple reasoning (e.g. 2+2), (3) optional: code-snippet or plan step. All run with minimal tokens (short prompts, low max_tokens) to keep cost near zero for API models.
-- [ ] Validation can be run on a schedule or on-demand; results update the validation store. Failed models are not removed from config but are **deprioritized** or skipped in the fallback chain when a “use only validated” policy is enabled.
-- [ ] **Cost/safety:** No validation against paid APIs without explicit operator opt-in (e.g. `providerModelResilience.runValidationAgainstPaidApis: true`); or validation only for models with a “free tier” or local. Rate limits and max spend (if applicable) documented.
+- [x] **Minimum-capability suite** is defined: (1) tool call in response, (2) simple reasoning (e.g. 2+2). Run with `npm run validate-model -- --modelId=<id> --fullSuite`. Optional code-snippet or plan step can be added later. Short prompts keep cost low.
+- [x] Validation runs on-demand; results update the validation store (per-check: toolCall, reasoning). Failed models are not removed from config but are **deprioritized** or skipped in the fallback chain when a “use only validated” policy is enabled.
+- [x] **Cost/safety:** No validation against paid APIs without explicit operator opt-in (e.g. `providerModelResilience.runValidationAgainstPaidApis: true`); or validation only for models with a “free tier” or local. Rate limits and max spend (if applicable) documented.
 
 **Phase 3 — Switching policy and mid-stream use**
 
-- [ ] Config or policy flag (e.g. `providerModelResilience.useOnlyValidatedFallbacks: boolean`) ensures that when falling back, only models that have **passed** the minimum-capability check in the store are tried (and in a defined order, e.g. by last success time or explicit priority).
-- [ ] If all validated fallbacks are exhausted, behavior is configurable: either fail with a clear error (“no validated model available”) or allow one attempt at an unvalidated model with a log warning.
-- [ ] Docs: operator knows how to run validation, how to add new providers/models, and how to interpret the validation store.
+- [x] Config or policy flag (e.g. `providerModelResilience.useOnlyValidatedFallbacks: boolean`) ensures that when falling back, only models that have **passed** the minimum-capability check in the store are tried (and in a defined order, e.g. by last success time or explicit priority).
+- [x] If all validated fallbacks are exhausted, fail with a clear error (“no validated model available”) ; optional "allow one unvalidated attempt" can be added later if needed.
+- [x] Docs: operator knows how to run validation, how to add new providers/models, and how to interpret the validation store (see configuration-reference §4.15.1).
 
 **Phase 4 — Optional and stretch**
 
-- [ ] **Local models (e.g. 16GB VRAM):** Document minimum hardware and model size constraints; optional support for a “local” provider (e.g. Ollama or similar) in the validation suite. No requirement for parity with Cursor Auto; “best effort” and graceful degradation.
+- [x] **Local models (e.g. 16GB VRAM):** Document minimum hardware and model size constraints; optional support for a “local” provider (e.g. Ollama or similar) in the validation suite. No requirement for parity with Cursor Auto; “best effort” and graceful degradation. See §8 below.
 - [ ] **Autonomous API key acquisition:** Out of scope for initial implementation; if introduced later, must be behind a strict capability gate, audit log, and operator approval; no keys in prompts or logs.
 
 ---
@@ -160,3 +160,27 @@ The existing adapter contract (see `docs/cursor-agent-adapter.md`) already impli
 - `docs/configuration-reference.md` — §4.15 `models` and `defaultModel`.
 - `docs/cursor-agent-adapter.md` — Turn contract, tool_call and event shapes.
 - `docs/GH-CLI-SECURE-IMPLEMENTATION.md` — Secrets, capabilities, intent.
+
+---
+
+## 8. Phase 4 — Optional local models (e.g. 16GB VRAM)
+
+This section documents how to use **local** inference (e.g. Ollama, LM Studio, or similar) as an optional fallback. Support is **best effort**; there is no guarantee of parity with Cursor Auto or other hosted providers. The validation suite can optionally include a local provider so that validated fallbacks may include local models.
+
+### 8.1 Minimum hardware and model size constraints
+
+- **VRAM:** For GPU-based local inference, **16GB VRAM** is a practical minimum for models that can do tool use and reasoning (e.g. 7B–13B parameter models with quantization). Smaller GPUs (8GB) may run smaller or heavily quantized models with reduced quality; 24GB+ allows larger models (e.g. 34B at Q4) or higher precision.
+- **RAM:** If running on CPU or with CPU offload, **32GB system RAM** is recommended for 7B–13B models; larger models need more. Swap can help but will slow inference.
+- **OS:** Typical setups are Linux or Windows with CUDA (NVIDIA) or ROCm (AMD), or macOS with Metal. Ollama and similar run on all three; check provider docs for exact support.
+- **Model size vs capability:** Smaller local models (7B, 8B) often support tool use and short reasoning; quality and long-context behavior vary. Use `npm run validate-model -- --modelId=<local-model-id> --fullSuite` to confirm a local model passes the minimum-capability checks before relying on it in the fallback chain.
+
+### 8.2 Optional local provider in the validation suite
+
+- **Adding a local model:** Configure the local provider (e.g. Ollama) and add a model entry in `config.models` with the same shape as other providers (provider type, model id, endpoint if needed). Ensure the adapter or provider layer can route requests to the local endpoint (implementation-dependent).
+- **Validation:** Run the same probe/suite against the local model id: `npm run validate-model -- --modelId=<id> --fullSuite`. Results are written to the validation store; if the model passes, it can be used when `useOnlyValidatedFallbacks` is true.
+- **Cost/safety:** Local inference typically has no per-token API cost; `runValidationAgainstPaidApis` does not apply. Rate limits are hardware-bound; no extra guardrails required for local-only validation.
+
+### 8.3 Graceful degradation
+
+- **No parity guarantee:** Local models may be slower, have shorter effective context, or differ in tool-call format. The adapter should treat local providers like any other fallback: try in order, respect validation state, and surface clear errors if no validated model is available.
+- **Best effort:** If the project adds explicit support for a "local" provider (e.g. Ollama), it should be optional: absence of the local daemon or failure to reach it should not crash the app; the fallback chain simply skips or fails over to the next candidate.

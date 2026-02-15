@@ -354,6 +354,7 @@ Model object fields:
 - `truncationPriority?: ("system"|"user"|"assistant")[]` — Optional. When set with `maxContextTokens`, roles listed first are dropped first when over the cap (e.g. `["assistant","user","system"]` drops assistant messages first, then user, then system). Omit for oldest-first behavior.
 - `summarizeOldTurns?: boolean` — Optional (TU.4). When `true` and the prompt is over `maxContextTokens`, the runtime replaces the oldest messages (all but the last) with a single rule-based summary before applying the cap. Off by default; no change to truncation when disabled.
 - `summarizeOldTurnsMaxTokens?: number` — Optional. Max tokens for the summary of earlier turns when `summarizeOldTurns` is true. Default 200.
+- `paidApi?: boolean` — Optional (PMR Phase 2). When `true`, this model uses a paid API; `npm run validate-model` will refuse to run unless `providerModelResilience.runValidationAgainstPaidApis` is `true`. Use to avoid accidental validation spend.
 
 ## 4.15.1 `providerModelResilience` (optional)
 
@@ -363,7 +364,9 @@ Provider and model resilience (PMR): validation store and policies. See `docs/PM
 - **useOnlyValidatedFallbacks** — When `true`, the fallback chain only includes models that have passed the minimum-capability probe (Phase 3). Default `false`.
 - **runValidationAgainstPaidApis** — When `true`, allow the validation probe to run against paid APIs (Phase 2 cost guardrail). Default `false`.
 
-To validate a model: `npm run validate-model -- --modelId=<id>` (optional `--config=<path>`). Exit code 0 if the probe passed.
+To validate a model: `npm run validate-model -- --modelId=<id>` (optional `--config=<path>`). Add `--fullSuite` to run the capability suite (tool call + reasoning); default is tool-call only. Exit code 0 if the probe passed. If the model has `paidApi: true`, validation is skipped unless `runValidationAgainstPaidApis` is `true`.
+
+**Local models (e.g. Ollama, 16GB VRAM):** For minimum hardware and model-size constraints, adding a local provider to the validation suite, and graceful degradation, see **Provider and Model Resilience** `docs/PMR-provider-model-resilience.md` §8 (Phase 4 — Optional local models).
 
 ## 4.16 `autonomyBudget`
 

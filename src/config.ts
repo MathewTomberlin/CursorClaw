@@ -67,6 +67,8 @@ export interface ModelProviderConfig {
   summarizeOldTurns?: boolean;
   /** Max tokens for the summary of earlier turns when summarizeOldTurns is true. Default 200. */
   summarizeOldTurnsMaxTokens?: number;
+  /** When true, this model uses a paid API; validation probe will skip unless providerModelResilience.runValidationAgainstPaidApis is true (PMR Phase 2). */
+  paidApi?: boolean;
 }
 
 export interface ToolsGhConfig {

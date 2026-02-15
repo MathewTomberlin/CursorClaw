@@ -68,6 +68,17 @@ export default function Config() {
   const [profileModelSaveBusy, setProfileModelSaveBusy] = useState(false);
   const [profileModelSaveError, setProfileModelSaveError] = useState<string | null>(null);
 
+  /** Raw JSON patch: edit any patchable section as JSON and save (writes to disk + applies). */
+  const PATCHABLE_KEYS = [
+    "heartbeat", "autonomyBudget", "memory", "reflection", "session", "compaction",
+    "workspaces", "contextCompression", "networkTrace", "metrics", "reliability",
+    "tools", "substrate", "continuity", "profiles", "providerModelResilience",
+    "gateway"
+  ] as const;
+  const [rawJsonDraft, setRawJsonDraft] = useState<string>("");
+  const [rawJsonSaveBusy, setRawJsonSaveBusy] = useState(false);
+  const [rawJsonSaveError, setRawJsonSaveError] = useState<string | null>(null);
+
   const fetchConfig = useCallback(async () => {
     setError(null);
     try {
@@ -88,6 +99,21 @@ export default function Config() {
       setLoading(false);
     }
   }, []);
+
+  /** Build patchable subset of config for raw JSON edit (only keys that config.patch accepts). */
+  const buildPatchableSubset = useCallback((c: Record<string, unknown>) => {
+    const out: Record<string, unknown> = {};
+    for (const key of PATCHABLE_KEYS) {
+      if (c[key] !== undefined) out[key] = c[key];
+    }
+    return out;
+  }, []);
+
+  useEffect(() => {
+    if (config != null && typeof config === "object") {
+      setRawJsonDraft(JSON.stringify(buildPatchableSubset(config as Record<string, unknown>), null, 2));
+    }
+  }, [config, buildPatchableSubset]);
 
   useEffect(() => {
     (async () => {
@@ -308,6 +334,24 @@ export default function Config() {
     }
   };
 
+  const handleRawJsonSave = async () => {
+    setRawJsonSaveBusy(true);
+    setRawJsonSaveError(null);
+    try {
+      const parsed = JSON.parse(rawJsonDraft) as Record<string, unknown>;
+      if (typeof parsed !== "object" || parsed === null) {
+        setRawJsonSaveError("JSON must be an object");
+        return;
+      }
+      await configPatch(parsed);
+      await fetchConfig();
+    } catch (e) {
+      setRawJsonSaveError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRawJsonSaveBusy(false);
+    }
+  };
+
   return (
     <div className="card">
       <h2>Config</h2>
@@ -396,7 +440,7 @@ export default function Config() {
       <div className="config-section" style={{ marginTop: "1.5rem" }}>
         <h3>Config</h3>
         <p className="muted">
-          Reload from disk to apply file changes without restart. Edit heartbeat below and Save to apply in memory and on disk. Secrets (token/password) are redacted in the raw view.
+          Edit below or use &quot;Edit as JSON&quot; to change config; Save writes to disk and applies without restart. If you edit <code>openclaw.json</code> elsewhere (e.g. from another device), the server auto-reloads when the file changes, or click &quot;Reload from disk&quot;. Secrets (token/password) are redacted in the raw view.
         </p>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1rem" }}>
           <button type="button" className="btn" onClick={handleReload} disabled={reloadBusy}>
@@ -619,6 +663,27 @@ export default function Config() {
             </div>
           </div>
         ) : null}
+
+        <div className="config-section" style={{ marginBottom: "1rem" }}>
+          <h4>Edit as JSON</h4>
+          <p className="muted">
+            Edit any patchable section as JSON and Save to write to disk and apply immediately (no restart). Useful from phone or for bulk edits. Only these keys are applied: {PATCHABLE_KEYS.join(", ")}. For <code>gateway</code> only <code>bind</code> and <code>bindAddress</code> are applied.
+          </p>
+          <textarea
+            value={rawJsonDraft}
+            onChange={(e) => setRawJsonDraft(e.target.value)}
+            disabled={rawJsonSaveBusy}
+            rows={14}
+            style={{ width: "100%", fontFamily: "monospace", fontSize: "0.85rem", padding: "0.5rem", boxSizing: "border-box" }}
+            spellCheck={false}
+          />
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center", marginTop: "0.5rem" }}>
+            <button type="button" className="btn" onClick={handleRawJsonSave} disabled={rawJsonSaveBusy}>
+              {rawJsonSaveBusy ? "Saving…" : "Save JSON"}
+            </button>
+            {rawJsonSaveError && <span className="error-msg">{rawJsonSaveError}</span>}
+          </div>
+        </div>
 
         <h4>Raw config (read-only)</h4>
         {loading && <p>Loading…</p>}
