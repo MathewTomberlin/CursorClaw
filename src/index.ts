@@ -64,6 +64,7 @@ import {
   ToolRouter,
   createExecTool,
   createGhPrReadTool,
+  createGhPrWriteRateLimiter,
   createGhPrWriteTool,
   createMcpCallTool,
   createMcpListResourcesTool,
@@ -426,12 +427,21 @@ async function main(): Promise<void> {
       })
     );
     if (config.tools.gh.allowWrite) {
+      const ghWriteLimiter =
+        config.tools.gh.maxWritesPerMinute != null || config.tools.gh.maxWritesPerRun != null
+          ? createGhPrWriteRateLimiter({
+              ...(config.tools.gh.maxWritesPerMinute != null && { maxWritesPerMinute: config.tools.gh.maxWritesPerMinute }),
+              ...(config.tools.gh.maxWritesPerRun != null && { maxWritesPerRun: config.tools.gh.maxWritesPerRun })
+            })
+          : null;
       toolRouter.register(
         createGhPrWriteTool({
           approvalGate,
           workspaceCwd: profileRoot,
           ...(ghRepoScope != null && { repoScope: ghRepoScope }),
-          ...(config.tools.exec.maxBufferBytes != null && { maxBufferBytes: config.tools.exec.maxBufferBytes })
+          ...(config.tools.exec.maxBufferBytes != null && { maxBufferBytes: config.tools.exec.maxBufferBytes }),
+          rateLimiter: ghWriteLimiter,
+          respectRetryAfter: config.tools.gh.respectRetryAfter === true
         })
       );
     }

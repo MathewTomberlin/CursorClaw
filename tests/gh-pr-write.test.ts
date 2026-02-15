@@ -4,6 +4,7 @@ import type { ExecSandbox } from "../src/exec/types.js";
 import {
   AlwaysAllowApprovalGate,
   AlwaysDenyApprovalGate,
+  createGhPrWriteRateLimiter,
   createGhPrWriteTool
 } from "../src/tools.js";
 
@@ -15,6 +16,12 @@ function mockSandbox(capture: { command: string; args: string[]; cwd?: string })
       if (options.cwd !== undefined) capture.cwd = options.cwd;
       return { stdout: "mock stdout", stderr: "", code: 0 };
     }
+  };
+}
+
+function mockSandboxWithCode(stderr: string, code: number): ExecSandbox {
+  return {
+    run: async () => ({ stdout: "", stderr, code })
   };
 }
 
@@ -166,5 +173,75 @@ describe("gh_pr_write tool", () => {
       type: "string",
       enum: ["comment", "create"]
     });
+  });
+
+  it("throws when rate limiter per-run limit is reached", async () => {
+    const limiter = createGhPrWriteRateLimiter({ maxWritesPerRun: 1 })!;
+    const tool = createGhPrWriteTool({
+      approvalGate: new AlwaysAllowApprovalGate(),
+      workspaceCwd: "/w",
+      sandbox: mockSandbox({ command: "", args: [] }),
+      rateLimiter: limiter
+    });
+    await tool.execute({ action: "comment", number: 1, body: "first" });
+    await expect(tool.execute({ action: "comment", number: 2, body: "second" })).rejects.toThrow(
+      "gh_pr_write rate limit exceeded"
+    );
+    expect(() => limiter.checkLimit()).toThrow("max 1 per run");
+  });
+
+  it("allows writes when under per-run limit", async () => {
+    const limiter = createGhPrWriteRateLimiter({ maxWritesPerRun: 3 })!;
+    const capture = { command: "" as string, args: [] as string[] };
+    const tool = createGhPrWriteTool({
+      approvalGate: new AlwaysAllowApprovalGate(),
+      workspaceCwd: "/w",
+      sandbox: mockSandbox(capture),
+      rateLimiter: limiter
+    });
+    await tool.execute({ action: "comment", number: 1, body: "a" });
+    await tool.execute({ action: "comment", number: 2, body: "b" });
+    await tool.execute({ action: "comment", number: 3, body: "c" });
+    expect(capture.args).toEqual(["pr", "comment", "3", "--body", "c"]);
+    await expect(tool.execute({ action: "comment", number: 4, body: "d" })).rejects.toThrow(
+      "rate limit exceeded"
+    );
+  });
+
+  it("throws clear error when gh returns 403 rate limit", async () => {
+    const tool = createGhPrWriteTool({
+      approvalGate: new AlwaysAllowApprovalGate(),
+      workspaceCwd: "/w",
+      sandbox: mockSandboxWithCode("API rate limit exceeded (403)", 1)
+    });
+    await expect(tool.execute({ action: "comment", number: 1, body: "x" })).rejects.toThrow(
+      "rate limit"
+    );
+    await expect(tool.execute({ action: "comment", number: 1, body: "x" })).rejects.toThrow("403");
+  });
+});
+
+describe("createGhPrWriteRateLimiter", () => {
+  it("returns null when no options", () => {
+    expect(createGhPrWriteRateLimiter({})).toBeNull();
+  });
+
+  it("per-run: allows up to max then throws", () => {
+    const limiter = createGhPrWriteRateLimiter({ maxWritesPerRun: 2 })!;
+    limiter.checkLimit();
+    limiter.recordSuccess();
+    limiter.checkLimit();
+    limiter.recordSuccess();
+    expect(() => limiter.checkLimit()).toThrow("gh_pr_write rate limit exceeded");
+    expect(() => limiter.checkLimit()).toThrow("max 2 per run");
+  });
+
+  it("per-minute: allows up to max within window", () => {
+    const limiter = createGhPrWriteRateLimiter({ maxWritesPerMinute: 2 })!;
+    limiter.checkLimit();
+    limiter.recordSuccess();
+    limiter.checkLimit();
+    limiter.recordSuccess();
+    expect(() => limiter.checkLimit()).toThrow("max 2 per minute");
   });
 });

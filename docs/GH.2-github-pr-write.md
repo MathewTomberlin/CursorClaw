@@ -110,6 +110,35 @@ Recommendation: Option A (dedicated `gh_pr_write` or similar) for a clear audit 
 
 ---
 
+## 5.1 GitHub API rate limits (operator note)
+
+GitHub’s REST/GraphQL APIs and the `gh` CLI are subject to [GitHub rate limits](https://docs.github.com/en/rest/rate-limit/rate-limit-for-the-rest-api): **5,000 requests/hour** for authenticated requests (higher with GitHub Apps). The `gh pr comment` and `gh pr create` operations each consume API calls. Operators should be aware that:
+
+- **Bursts:** Many PR comments or creates in a short period can hit the limit; the API returns `403` with a `Retry-After` header.
+- **Mitigation:** Optional soft limits and backoff are available when configured (see §5.2): set `tools.gh.maxWritesPerMinute`, `tools.gh.maxWritesPerRun`, and/or `tools.gh.respectRetryAfter` in the configuration reference (§4.14). When a rate limit is hit, the tool surfaces a clear error including "rate limit" and optional retry-after; with `respectRetryAfter: true` it retries once after the suggested delay.
+- **Best practice:** Use the tool for moderate, human-approved actions; avoid automated loops that post repeatedly.
+
+---
+
+## 5.2 Implementation guide: optional soft limit and backoff (implemented)
+
+**Goal:** Optional operator-configurable safeguards to reduce risk of hitting GitHub rate limits when using `gh_pr_write` frequently. Implemented on branch `feature/gh2-soft-limit-backoff`: config keys `maxWritesPerMinute`, `maxWritesPerRun`, `respectRetryAfter` under `tools.gh`; in-process rate limiter; clear error on limit or 403; optional single retry after delay when `respectRetryAfter` is true.
+
+**Success criteria:**
+
+- **Soft limit (optional):** If config enabled (e.g. `tools.gh.maxWritesPerMinute` or `maxWritesPerRun`), the `gh_pr_write` tool (or a small wrapper/rate limiter) rejects or delays further write calls until the window resets. Clear error to the agent when limit is reached.
+- **Backoff on 403:** When a write fails with HTTP 403 and response indicates rate limit (e.g. `Retry-After` header or known error body), optionally retry once after the suggested delay, or surface a clear error that includes "rate limit" and optional retry-after so the agent can back off. No requirement to implement automatic retry; documenting and surfacing the error is acceptable.
+- **Config:** New keys under `tools.gh` (or under a dedicated `tools.gh.rateLimit` object): e.g. `maxWritesPerMinute?: number`, `maxWritesPerRun?: number`, `respectRetryAfter?: boolean`. All optional; when absent, behavior unchanged (no soft limit, no automatic backoff).
+- **Tests:** Unit tests for the rate limiter (sliding or fixed window) and for error surfacing when limit hit or 403 received.
+- **Docs:** Configuration reference updated; GH.2 §5.1 operator note updated to state that optional soft limit/backoff is available when configured.
+
+**Guardrails:**
+
+- Do not add soft limit or backoff by default; opt-in only so existing deployments are unchanged.
+- Do not expose tokens or new security surface; rate limiting is in-process only.
+
+---
+
 ## 6. References
 
 - `docs/GH.1-read-only-github-integration.md` — Read-only PR (list, view); auth and repo scope.
