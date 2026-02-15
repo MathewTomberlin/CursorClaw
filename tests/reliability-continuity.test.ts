@@ -83,6 +83,73 @@ describe("reliability and continuity components", () => {
     expect(lines.some((line) => line.includes("post-corruption-entry"))).toBe(true);
   });
 
+  it("readEntriesForReplay respects mode count (same as readRecent)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cursorclaw-journal-replay-"));
+    tempDirs.push(dir);
+    const journal = new DecisionJournal({
+      path: join(dir, "CLAW_HISTORY.log"),
+      maxBytes: 1024 * 1024
+    });
+    await journal.append({ type: "d", summary: "a" });
+    await journal.append({ type: "d", summary: "b" });
+    await journal.append({ type: "d", summary: "c" });
+    const lines = await journal.readEntriesForReplay({ limit: 2, mode: "count" });
+    expect(lines.length).toBe(2);
+    expect(lines[0]).toContain("b");
+    expect(lines[1]).toContain("c");
+  });
+
+  it("readEntriesForReplay mode sinceHours returns only entries within window", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cursorclaw-journal-sinceHours-"));
+    tempDirs.push(dir);
+    const path = join(dir, "CLAW_HISTORY.log");
+    const now = new Date();
+    const old = new Date(now.getTime() - 25 * 60 * 60 * 1000);
+    await writeFile(
+      path,
+      [
+        JSON.stringify({ at: old.toISOString(), type: "old", summary: "old" }),
+        JSON.stringify({ at: now.toISOString(), type: "new", summary: "new" })
+      ].join("\n") + "\n",
+      "utf8"
+    );
+    const journal = new DecisionJournal({ path, maxBytes: 1024 * 1024 });
+    const lines = await journal.readEntriesForReplay({
+      limit: 10,
+      mode: "sinceHours",
+      sinceHours: 24,
+      maxEntries: 100
+    });
+    expect(lines.length).toBe(1);
+    expect(lines[0]).toContain("new");
+  });
+
+  it("readEntriesForReplay mode sinceLastSession returns entries after sessionStartMs", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cursorclaw-journal-sinceSession-"));
+    tempDirs.push(dir);
+    const path = join(dir, "CLAW_HISTORY.log");
+    const sessionStart = Date.now() - 10_000;
+    const before = sessionStart - 5_000;
+    const after = sessionStart + 5_000;
+    await writeFile(
+      path,
+      [
+        JSON.stringify({ at: new Date(before).toISOString(), type: "before", summary: "before" }),
+        JSON.stringify({ at: new Date(after).toISOString(), type: "after", summary: "after" })
+      ].join("\n") + "\n",
+      "utf8"
+    );
+    const journal = new DecisionJournal({ path, maxBytes: 1024 * 1024 });
+    const lines = await journal.readEntriesForReplay({
+      limit: 10,
+      mode: "sinceLastSession",
+      sessionStartMs: sessionStart,
+      maxEntries: 100
+    });
+    expect(lines.length).toBe(1);
+    expect(lines[0]).toContain("after");
+  });
+
   it("generates proactive suggestions from changed file paths", () => {
     const engine = new ProactiveSuggestionEngine();
     const suggestions = engine.suggest({

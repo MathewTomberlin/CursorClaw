@@ -362,6 +362,7 @@ Provider and model resilience (PMR): validation store and policies. See `docs/PM
 
 - **validationStorePath** — Path to the JSON file storing per-model validation results (no secrets). Default `run/provider-model-validation.json` (relative to process cwd when running the validate-model script).
 - **useOnlyValidatedFallbacks** — When `true`, the fallback chain only includes models that have passed the minimum-capability probe (Phase 3). Default `false`.
+- **allowOneUnvalidatedAttempt** — When `true` and `useOnlyValidatedFallbacks` is true, if no validated model exists the adapter allows one attempt using the unfiltered chain and logs a warning; if that attempt fails, it throws as usual ("all model attempts failed"). Use for fresh installs or new models before running `npm run validate-model`. Default `false`.
 - **runValidationAgainstPaidApis** — When `true`, allow the validation probe to run against paid APIs (Phase 2 cost guardrail). Default `false`.
 
 To validate a model: `npm run validate-model -- --modelId=<id>` (optional `--config=<path>`). Add `--fullSuite` to run the capability suite (tool call + reasoning); default is tool-call only. Exit code 0 if the probe passed. If the model has `paidApi: true`, validation is skipped unless `runValidationAgainstPaidApis` is `true`.
@@ -471,6 +472,9 @@ Defaults:
 - **memoryMaxRecords:** Optional. When set, MEMORY.md is trimmed after each append to at most this many records (oldest dropped). Primary file only; daily files unchanged. Default off.
 - **memoryMaxChars:** Optional. When set, MEMORY.md is trimmed after each append so total size does not exceed this (oldest records dropped). Default off.
 - **memoryArchivePath:** Optional. When rolling window is enabled (memoryMaxRecords or memoryMaxChars set), trimmed lines are appended to this path under the profile (e.g. `memory/MEMORY-archive.md`). Omit to drop without archiving.
+- **decisionJournalReplayCount:** Number of recent decision journal entries to replay into the system prompt (default 5, clamped 1–100). Used when **decisionJournalReplayMode** is `"count"`. See docs/continuity.md.
+- **decisionJournalReplayMode:** How to select which decision journal entries to replay: `"count"` (default) = last N entries; `"sinceLastSession"` = entries since process start; `"sinceHours"` = entries within the last N hours (use **decisionJournalReplaySinceHours**).
+- **decisionJournalReplaySinceHours:** When decisionJournalReplayMode is `"sinceHours"`, replay entries from the last N hours (default 24). Capped at 168 (1 week).
 
 ## Token and context limits
 

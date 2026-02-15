@@ -16,7 +16,13 @@ When **BOOT.md** exists at the profile root and `continuity.bootEnabled` is not 
 
 ## 4. Decision journal
 
-The decision journal is persisted to file. Recent entries are replayed in the system prompt with the instruction to maintain rationale continuity unless new runtime evidence contradicts prior decisions. The number of recent entries replayed is configurable via **`continuity.decisionJournalReplayCount`** (default 5, clamped 1–100). "Since last session" or time-based replay is optional future work.
+The decision journal is persisted to file. Recent entries are replayed in the system prompt with the instruction to maintain rationale continuity unless new runtime evidence contradicts prior decisions. Replay selection is configurable:
+
+- **`continuity.decisionJournalReplayCount`** (default 5, clamped 1–100): when using count-based replay, how many recent entries to include.
+- **`continuity.decisionJournalReplayMode`** (default `"count"`): `"count"` = last N entries; `"sinceLastSession"` = entries since process start; `"sinceHours"` = entries within the last N hours.
+- **`continuity.decisionJournalReplaySinceHours`** (default 24, max 168): when mode is `"sinceHours"`, the time window in hours.
+
+See the configuration reference § 4.18 for defaults.
 
 ## 5. Run/session continuity after restart
 
@@ -29,4 +35,4 @@ RunStore persists run state. On process restart, runs that were in progress are 
 - **RunStore and failure-loop guard:** Track runs and repetition to avoid repeated failures; no automatic write to SOUL.md or IDENTITY.md from these.
 - **No automatic identity evolution:** SOUL.md and IDENTITY.md are **not** updated automatically from agent experience. There is no structured “learned lessons” store beyond memory records (e.g. category `learned` or `correction` would be a future optional addition). Any evolution of identity or soul is done by the user or by explicit, guarded tooling (e.g. append-only SOUL_EVOLUTION.md) if implemented later with strict guardrails.
 
-Future optional work in this area: learned-lessons memory (append MemoryRecord with category `learned`/`correction` from reflection or user correction); configurable decision journal replay count or “since last session”; optional SOUL/IDENTITY evolution with approval and append-only rules.
+Future optional work in this area: learned-lessons memory (append MemoryRecord with category `learned`/`correction` from reflection or user correction); optional SOUL/IDENTITY evolution with approval and append-only rules.
