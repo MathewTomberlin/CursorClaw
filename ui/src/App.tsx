@@ -11,6 +11,7 @@ import Incidents from "./pages/Incidents";
 import Config from "./pages/Config";
 import Substrate from "./pages/Substrate";
 import Trace from "./pages/Trace";
+import Memory from "./pages/Memory";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   if (!isAuthenticated()) {
@@ -45,6 +46,9 @@ function Shell() {
           <NavLink to="/workspace" className={({ isActive }) => (isActive ? "active" : "")}>
             Workspace
           </NavLink>
+          <NavLink to="/memory" className={({ isActive }) => (isActive ? "active" : "")}>
+            Memory
+          </NavLink>
           <NavLink to="/incidents" className={({ isActive }) => (isActive ? "active" : "")}>
             Incidents
           </NavLink>
@@ -65,6 +69,7 @@ function Shell() {
             <Route path="/approvals" element={<Approvals />} />
             <Route path="/cron" element={<Cron />} />
             <Route path="/workspace" element={<Workspace />} />
+            <Route path="/memory" element={<Memory />} />
             <Route path="/incidents" element={<Incidents />} />
             <Route path="/config" element={<Config />} />
             <Route path="/substrate" element={<Substrate />} />

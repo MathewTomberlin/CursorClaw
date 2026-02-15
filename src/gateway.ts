@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, readFile, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 
 import Fastify, { type FastifyInstance } from "fastify";
 
@@ -116,7 +116,10 @@ const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
   "substrate.list": ["admin", "local"],
   "substrate.get": ["admin", "local"],
   "substrate.update": ["admin", "local"],
-  "substrate.reload": ["admin", "local"]
+  "substrate.reload": ["admin", "local"],
+  "memory.listLogs": ["admin", "local"],
+  "memory.getFile": ["admin", "local"],
+  "memory.writeFile": ["admin", "local"]
 };
 
 export function buildGateway(deps: GatewayDependencies): FastifyInstance {
@@ -659,6 +662,60 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         }
         await deps.substrateStore.reload(deps.workspaceDir, deps.config.substrate);
         await deps.substrateStore.ensureDefaults(deps.workspaceDir, deps.config.substrate);
+        result = { ok: true };
+      } else if (body.method === "memory.listLogs") {
+        if (!deps.workspaceDir) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "workspace not configured");
+        }
+        const memoryDir = join(deps.workspaceDir, "memory");
+        const entries = await readdir(memoryDir, { withFileTypes: true }).catch(() => []);
+        const files = entries
+          .filter((e) => e.isFile() && e.name.endsWith(".md") && /^\d{4}-\d{2}-\d{2}\.md$/.test(e.name))
+          .map((e) => ({ name: e.name, path: `memory/${e.name}` }))
+          .sort((a, b) => b.name.localeCompare(a.name));
+        result = { files };
+      } else if (body.method === "memory.getFile") {
+        if (!deps.workspaceDir) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "workspace not configured");
+        }
+        const pathParam = String(body.params?.path ?? "").trim();
+        if (!pathParam) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "path is required");
+        }
+        const allowed = pathParam === "MEMORY.md" || /^memory\/\d{4}-\d{2}-\d{2}\.md$/.test(pathParam);
+        if (!allowed) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "path must be MEMORY.md or memory/YYYY-MM-DD.md");
+        }
+        const fullPath = resolve(deps.workspaceDir, pathParam);
+        const workspaceResolved = resolve(deps.workspaceDir);
+        if (!fullPath.startsWith(workspaceResolved) || fullPath === workspaceResolved) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "invalid path");
+        }
+        const content = await readFile(fullPath, "utf8").catch(() => "");
+        result = { path: pathParam, content };
+      } else if (body.method === "memory.writeFile") {
+        if (!deps.workspaceDir) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "workspace not configured");
+        }
+        const pathParam = String(body.params?.path ?? "").trim();
+        const content = typeof body.params?.content === "string" ? body.params.content : String(body.params?.content ?? "");
+        if (!pathParam) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "path is required");
+        }
+        const allowed = pathParam === "MEMORY.md" || /^memory\/\d{4}-\d{2}-\d{2}\.md$/.test(pathParam);
+        if (!allowed) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "path must be MEMORY.md or memory/YYYY-MM-DD.md");
+        }
+        const fullPath = resolve(deps.workspaceDir, pathParam);
+        const workspaceResolved = resolve(deps.workspaceDir);
+        if (!fullPath.startsWith(workspaceResolved) || fullPath === workspaceResolved) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "invalid path");
+        }
+        const { mkdir } = await import("node:fs/promises");
+        if (pathParam.startsWith("memory/")) {
+          await mkdir(join(deps.workspaceDir, "memory"), { recursive: true });
+        }
+        await writeFile(fullPath, content, "utf8");
         result = { ok: true };
       } else if (body.method === "admin.restart") {
         if (!deps.onRestart) {
