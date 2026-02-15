@@ -32,6 +32,10 @@ export default function Config() {
   const [heartbeatPatchBusy, setHeartbeatPatchBusy] = useState(false);
   const [heartbeatPatchError, setHeartbeatPatchError] = useState<string | null>(null);
 
+  const [bindAddressDraft, setBindAddressDraft] = useState<string>("");
+  const [bindAddressPatchBusy, setBindAddressPatchBusy] = useState(false);
+  const [bindAddressPatchError, setBindAddressPatchError] = useState<string | null>(null);
+
   const fetchConfig = useCallback(async () => {
     setError(null);
     try {
@@ -41,6 +45,10 @@ export default function Config() {
       if (c?.heartbeat && typeof c.heartbeat === "object") {
         const h = c.heartbeat as HeartbeatConfig;
         setHeartbeatDraft({ enabled: h.enabled, everyMs: h.everyMs, minMs: h.minMs, maxMs: h.maxMs });
+      }
+      const gw = c?.gateway as { bind?: string; bindAddress?: string } | undefined;
+      if (gw && typeof gw === "object") {
+        setBindAddressDraft(typeof gw.bindAddress === "string" ? gw.bindAddress : "");
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } }));
@@ -134,6 +142,21 @@ export default function Config() {
       setHeartbeatPatchError(e instanceof Error ? e.message : String(e));
     } finally {
       setHeartbeatPatchBusy(false);
+    }
+  };
+
+  const handleBindAddressSave = async () => {
+    setBindAddressPatchBusy(true);
+    setBindAddressPatchError(null);
+    try {
+      await configPatch({
+        gateway: { bindAddress: bindAddressDraft.trim() }
+      });
+      await fetchConfig();
+    } catch (e) {
+      setBindAddressPatchError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBindAddressPatchBusy(false);
     }
   };
 
@@ -233,6 +256,32 @@ export default function Config() {
           </button>
           {reloadError && <span className="error-msg">{reloadError}</span>}
         </div>
+
+        {!loading ? (
+          <div className="config-section" style={{ marginBottom: "1rem" }}>
+            <h4>Gateway bind address (Tailscale)</h4>
+            <p className="muted">
+              Optional. Set to this host&apos;s Tailscale IP (e.g. <code>100.x.x.x</code>) so the server listens only on Tailnet. Use <code>tailscale ip -4</code> on the server. Restart required for changes to take effect; from another Tailscale device you can use Dashboard → Restart.
+            </p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
+              <label>
+                Bind address
+                <input
+                  type="text"
+                  value={bindAddressDraft}
+                  onChange={(e) => setBindAddressDraft(e.target.value)}
+                  placeholder="e.g. 100.64.1.1 or leave empty"
+                  disabled={bindAddressPatchBusy}
+                  style={{ width: "14rem", marginLeft: "0.25rem" }}
+                />
+              </label>
+              <button type="button" className="btn" onClick={handleBindAddressSave} disabled={bindAddressPatchBusy}>
+                {bindAddressPatchBusy ? "Saving…" : "Save"}
+              </button>
+              {bindAddressPatchError && <span className="error-msg">{bindAddressPatchError}</span>}
+            </div>
+          </div>
+        ) : null}
 
         {!loading && heartbeatDraft != null ? (
           <div className="config-section" style={{ marginBottom: "1rem" }}>

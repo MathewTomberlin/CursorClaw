@@ -68,6 +68,7 @@ Defaults:
 Fields:
 
 - `bind`: `"loopback"` or `"0.0.0.0"`
+- `bindAddress`: optional. When set, the gateway listens on this address instead of the host implied by `bind`. Use for Tailscale: set to the host’s Tailscale IP (e.g. `100.x.x.x`) so only Tailnet traffic is accepted. Allowed: loopback (127.x, ::1), link-local (169.254.x), private (10.x, 172.16–31.x, 192.168.x), Tailscale CGNAT (100.64.0.0/10). You can set it in the Dashboard (Config → Gateway bind address) or via `config.patch` with `{ gateway: { bindAddress: "100.x.x.x" } }`; restart is required for the change to take effect. From another Tailscale device you can open the Dashboard and use Restart (requests from Tailscale IPs are treated as local). Invalid or unsafe values are rejected at startup or when patching with a clear error.
 - `bodyLimitBytes`: max HTTP body size
 - `auth.mode`: `"token" | "password" | "none"`
 - `auth.token`, `auth.password`

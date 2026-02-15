@@ -23,10 +23,12 @@ import type { CapabilityStore } from "./security/capabilities.js";
 import {
   AuthService,
   IncidentCommander,
+  isPrivateIp,
   MethodRateLimiter,
   PolicyDecisionLogger,
   createAuditId,
-  scoreInboundRisk
+  scoreInboundRisk,
+  validateBindAddress
 } from "./security.js";
 import type { LifecycleStream } from "./lifecycle-stream/types.js";
 import type { SubstrateStore } from "./substrate/index.js";
@@ -168,6 +170,7 @@ const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
   "agent.wait": ["local", "remote", "admin"],
   "chat.send": ["local", "remote", "admin"],
   "chat.getThread": ["local", "remote", "admin"],
+  "thread.set": ["local", "remote", "admin"],
   "cron.add": ["admin", "local"],
   "cron.list": ["admin", "local"],
   "incident.bundle": ["admin"],
@@ -199,7 +202,10 @@ const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
   "skills.fetchFromUrl": ["admin", "local"],
   "skills.list": ["admin", "local"],
   "skills.analyze": ["admin", "local"],
-  "skills.install": ["admin", "local"]
+  "skills.install": ["admin", "local"],
+  "skills.credentials.set": ["admin", "local"],
+  "skills.credentials.delete": ["admin", "local"],
+  "skills.credentials.list": ["admin", "local"]
 };
 
 export function buildGateway(deps: GatewayDependencies): FastifyInstance {
@@ -231,7 +237,10 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
 
   app.get("/stream", async (request, reply) => {
     const auth = deps.auth.authorize({
-      isLocal: request.ip === "127.0.0.1" || request.ip === "::1",
+      isLocal:
+        request.ip === "127.0.0.1" ||
+        request.ip === "::1" ||
+        (request.ip != null && isPrivateIp(request.ip)),
       remoteIp: request.ip,
       headers: mapHeaders(request.headers)
     });
@@ -332,7 +341,10 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
     }
 
     const auth = deps.auth.authorize({
-      isLocal: request.ip === "127.0.0.1" || request.ip === "::1",
+      isLocal:
+        request.ip === "127.0.0.1" ||
+        request.ip === "::1" ||
+        (request.ip != null && isPrivateIp(request.ip)),
       remoteIp: request.ip,
       headers: mapHeaders(request.headers)
     });
@@ -481,6 +493,22 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           ? await deps.threadStore.getThread(profileCtx.profileRoot, sessionId)
           : [];
         result = { messages };
+      } else if (body.method === "thread.set") {
+        const sessionId = String(body.params?.sessionId ?? "").trim();
+        if (!sessionId) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "sessionId is required");
+        }
+        const raw = body.params?.messages;
+        const messages = Array.isArray(raw)
+          ? (raw as Array<{ role?: string; content?: string }>).map((m) => ({
+              role: String(m?.role ?? "user"),
+              content: String(m?.content ?? "")
+            }))
+          : [];
+        if (deps.threadStore) {
+          await deps.threadStore.setThread(profileCtx.profileRoot, sessionId, messages);
+        }
+        result = { ok: true };
       } else if (body.method === "cron.add") {
         const type = String(body.params?.type ?? "every") as "at" | "every" | "cron";
         const expression = String(body.params?.expression ?? "30m");
@@ -709,7 +737,22 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         if (!partial || typeof partial !== "object") {
           throw new RpcGatewayError(400, "BAD_REQUEST", "params must be an object");
         }
-        const updated = mergeConfigPatch(deps.getConfig(), partial as DeepPartial<CursorClawConfig>, PATCHABLE_CONFIG_KEYS);
+        let updated = mergeConfigPatch(deps.getConfig(), partial as DeepPartial<CursorClawConfig>, PATCHABLE_CONFIG_KEYS);
+        // Allow patching only gateway.bindAddress and gateway.bind (for Tailscale); never auth.
+        const gw = partial.gateway;
+        if (gw && typeof gw === "object" && (gw.bindAddress !== undefined || gw.bind !== undefined)) {
+          updated = {
+            ...updated,
+            gateway: {
+              ...updated.gateway,
+              ...(gw.bindAddress !== undefined && { bindAddress: typeof gw.bindAddress === "string" ? gw.bindAddress : undefined }),
+              ...(gw.bind !== undefined && (gw.bind === "loopback" || gw.bind === "0.0.0.0") && { bind: gw.bind })
+            }
+          };
+          if (typeof updated.gateway.bindAddress === "string" && updated.gateway.bindAddress.trim()) {
+            await validateBindAddress(updated.gateway.bindAddress.trim());
+          }
+        }
         deps.setConfig(updated);
         await writeConfigToDisk(updated, { cwd: deps.workspaceRoot });
         result = { ok: true };

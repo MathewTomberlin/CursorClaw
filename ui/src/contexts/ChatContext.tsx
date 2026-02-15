@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode
 } from "react";
-import { rpc, mapRpcError, openStream } from "../api";
+import { rpc, mapRpcError, openStream, getThread, setThread } from "../api";
 import { useProfile } from "./ProfileContext";
 
 export type ChannelKind = "dm" | "group" | "web" | "mobile";
@@ -96,17 +96,40 @@ export function ChatProvider({ children }: ChatProviderProps) {
   const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const streamRef = useRef<EventSource | null>(null);
+  /** Only sync to server after we've loaded from server for this session/profile (avoids overwriting server with sessionStorage on first paint). */
+  const serverLoadDoneRef = useRef(false);
 
-  // Persist thread when messages change (use current sessionId; don't persist on sessionId change to avoid overwriting the new session's thread)
-  useEffect(() => {
-    if (sessionId.trim()) saveThread(sessionId.trim(), messages);
-  }, [messages]); // eslint-disable-line react-hooks/exhaustive-deps -- intentionally use latest sessionId when messages change
-
-  // Load thread when session changes
+  // Load thread from server when session or profile changes (shared message list for desktop and mobile)
   useEffect(() => {
     const sid = sessionId.trim();
-    if (sid) setMessages(loadThread(sid));
-  }, [sessionId]);
+    if (!sid || !selectedProfileId) return;
+    serverLoadDoneRef.current = false;
+    let cancelled = false;
+    getThread(sid, selectedProfileId)
+      .then(({ messages: serverMessages }) => {
+        if (!cancelled && Array.isArray(serverMessages)) setMessages(serverMessages);
+        if (!cancelled) serverLoadDoneRef.current = true;
+      })
+      .catch(() => {
+        if (!cancelled) setMessages(loadThread(sid));
+        if (!cancelled) serverLoadDoneRef.current = true;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, selectedProfileId]);
+
+  // Persist thread when messages change: sessionStorage (backup) and server (shared view for desktop/Tailscale)
+  useEffect(() => {
+    const sid = sessionId.trim();
+    if (!sid) return;
+    saveThread(sid, messages);
+    if (selectedProfileId && serverLoadDoneRef.current) {
+      setThread(sid, selectedProfileId, messages).catch(() => {
+        // Offline or server unavailable; sessionStorage already updated
+      });
+    }
+  }, [messages, sessionId, selectedProfileId]);
 
   // Keep lifecycle stream open for current session (survives tab switch)
   useEffect(() => {
@@ -206,14 +229,18 @@ export function ChatProvider({ children }: ChatProviderProps) {
 
   const clearThread = useCallback(() => {
     setMessages([]);
-    if (sessionId.trim()) {
+    const sid = sessionId.trim();
+    if (sid) {
       try {
-        sessionStorage.removeItem(STORAGE_KEY_PREFIX + sessionId.trim());
+        sessionStorage.removeItem(STORAGE_KEY_PREFIX + sid);
       } catch {
         // ignore
       }
+      if (selectedProfileId) {
+        setThread(sid, selectedProfileId, []).catch(() => {});
+      }
     }
-  }, [sessionId]);
+  }, [sessionId, selectedProfileId]);
 
   const value: ChatContextValue = {
     sessionId,

@@ -43,7 +43,7 @@ Optional trusted identity header enforcement:
 }
 ```
 
-**Profile-scoped RPCs:** For multi-agent setups, `params` may include an optional `profileId` string. When present, the request is executed in the context of that agent profile (substrate, memory, approvals, etc.). When omitted, the gateway uses the default profile. Single-agent deployments ignore this and use the single profile. Profile-scoped methods include: `heartbeat.poll`, `heartbeat.getFile`, `heartbeat.update`, `memory.*`, `substrate.*`, `skills.list`, `skills.fetchFromUrl`, `skills.analyze`, `skills.install`, `skills.credentials.set`, `skills.credentials.delete`, `skills.credentials.list`, `approval.*`, `cron.list`/`cron.add`, `workspace.status`/`workspace.semantic_search`, `trace.ingest`, `advisor.file_change`/`advisor.explain_function`, and `incident.bundle`. `agent.run` accepts `session.profileId` to run the turn in that profile's context.
+**Profile-scoped RPCs:** For multi-agent setups, `params` may include an optional `profileId` string. When present, the request is executed in the context of that agent profile (substrate, memory, approvals, etc.). When omitted, the gateway uses the default profile. Single-agent deployments ignore this and use the single profile. Profile-scoped methods include: `heartbeat.poll`, `heartbeat.getFile`, `heartbeat.update`, `memory.*`, `substrate.*`, `skills.list`, `skills.fetchFromUrl`, `skills.analyze`, `skills.install`, `skills.credentials.set`, `skills.credentials.delete`, `skills.credentials.list`, `approval.*`, `cron.list`/`cron.add`, `workspace.status`/`workspace.semantic_search`, `trace.ingest`, `advisor.file_change`/`advisor.explain_function`, `incident.bundle`, `chat.getThread`, and `thread.set`. `agent.run` accepts `session.profileId` to run the turn in that profile's context.
 
 ### Success response
 
@@ -119,6 +119,8 @@ Method scope rules (`METHOD_SCOPES`):
 - `agent.run`: local, remote, admin
 - `agent.wait`: local, remote, admin
 - `chat.send`: local, remote, admin
+- `chat.getThread`: local, remote, admin
+- `thread.set`: local, remote, admin
 - `cron.add`: admin, local
 - `cron.list`: admin, local
 - `incident.bundle`: admin
@@ -215,6 +217,37 @@ Behavior:
 - If `proactive=true` and incident mode disabled proactive sends, returns `FORBIDDEN`.
 - Behavior policy may pace/block a send and return `{ delivered: false, reason: "paced" }`.
 - Greeting policy can prepend `"Hi! "` in eligible new-thread cases.
+
+---
+
+### 5.3.1 `chat.getThread`
+
+Returns the persisted chat thread (message list) for a session so desktop and mobile (e.g. via Tailscale) see the same messages. Profile-scoped; when `profileId` is omitted, the default profile is used.
+
+`params`:
+
+- `sessionId: string` (required)
+
+Returns:
+
+- `messages: Array<{ id: string; role: "user" | "assistant"; content: string; at?: string }>`
+
+When the thread store is not configured or the session has no persisted thread, returns `{ messages: [] }`. The thread is updated on each `agent.run` (request message list is stored), when the run completes (assistant reply is appended), and when the client calls `thread.set`.
+
+---
+
+### 5.3.2 `thread.set`
+
+Persists the full chat thread for a session so that other clients (e.g. desktop and Tailscale) see the same messages. Profile-scoped via optional `params.profileId`. Use after the UI updates the message list (e.g. after a streamed assistant message) so the server state stays in sync.
+
+`params`:
+
+- `sessionId: string` (required)
+- `messages: Array<{ role: string; content: string }>` (required)
+
+Returns:
+
+- `ok: true` when the thread store is configured and write succeeded. If the thread store is not configured, the call still returns `{ ok: true }` (no-op).
 
 ---
 
@@ -436,9 +469,9 @@ Returns `{ ok: true }`.
 
 ### 5.15.2 `config.patch`
 
-Merges a partial config into the current config and writes to disk. Only top-level keys in the allowlist are merged (e.g. `heartbeat`, `autonomyBudget`, `memory`, `reflection`, `session`, `compaction`, `workspaces`, `contextCompression`, `networkTrace`, `metrics`, `reliability`, `tools`, `substrate`, `profiles`). Gateway auth, `defaultModel`, and `models` are not patchable. Changes apply in memory immediately without restart. Requires `workspaceRoot` (admin, local).
+Merges a partial config into the current config and writes to disk. Only top-level keys in the allowlist are merged (e.g. `heartbeat`, `autonomyBudget`, `memory`, `reflection`, `session`, `compaction`, `workspaces`, `contextCompression`, `networkTrace`, `metrics`, `reliability`, `tools`, `substrate`, `profiles`). You can also pass `gateway` with **only** `bindAddress` and/or `bind`: `{ gateway: { bindAddress: "100.64.1.1" } }` (e.g. for Tailscale). Gateway auth, `defaultModel`, and `models` are not patchable. Changes apply in memory immediately; a change to `gateway.bindAddress` or `gateway.bind` takes effect only after restart. Requires `workspaceRoot` (admin, local). Requests from Tailscale IPs (100.x) are treated as local, so you can set the bind address and use Restart from another Tailscale device.
 
-`params`: partial config object, e.g. `{ heartbeat: { everyMs: 60000, enabled: true } }`.
+`params`: partial config object, e.g. `{ heartbeat: { everyMs: 60000, enabled: true } }` or `{ gateway: { bindAddress: "100.64.1.1" } }`.
 
 Returns `{ ok: true }`.
 

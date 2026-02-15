@@ -58,7 +58,7 @@ import {
 } from "./responsiveness.js";
 import { ApprovalWorkflow } from "./security/approval-workflow.js";
 import { CapabilityStore } from "./security/capabilities.js";
-import { AuthService, IncidentCommander, MethodRateLimiter, PolicyDecisionLogger } from "./security.js";
+import { AuthService, IncidentCommander, MethodRateLimiter, PolicyDecisionLogger, validateBindAddress } from "./security.js";
 import {
   CapabilityApprovalGate,
   ToolRouter,
@@ -688,8 +688,14 @@ async function main(): Promise<void> {
   }
 
   const port = Number.parseInt(process.env.PORT ?? "8787", 10);
+  const bindHost =
+    config.gateway.bindAddress?.trim() ||
+    (config.gateway.bind === "loopback" ? "127.0.0.1" : "0.0.0.0");
+  if (config.gateway.bindAddress?.trim()) {
+    await validateBindAddress(config.gateway.bindAddress.trim());
+  }
   await gateway.listen({
-    host: config.gateway.bind === "loopback" ? "127.0.0.1" : "0.0.0.0",
+    host: bindHost,
     port
   });
 

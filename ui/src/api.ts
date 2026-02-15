@@ -235,6 +235,92 @@ export async function restartFramework(): Promise<{ buildRan?: boolean }> {
   return res.result ?? {};
 }
 
+/** Get persisted chat thread for a session (shared across desktop and mobile). Uses current profile when profileId is passed via rpcWithProfile. */
+export async function getThread(
+  sessionId: string,
+  profileId: string
+): Promise<{ messages: Array<{ id: string; role: "user" | "assistant"; content: string; at?: string }> }> {
+  const res = await rpcWithProfile<{ messages: Array<{ id: string; role: "user" | "assistant"; content: string; at?: string }> }>(
+    "chat.getThread",
+    { sessionId: sessionId.trim() },
+    profileId
+  );
+  const out = res.result;
+  if (out == null || typeof out !== "object" || !Array.isArray((out as { messages?: unknown }).messages)) {
+    return { messages: [] };
+  }
+  return out as { messages: Array<{ id: string; role: "user" | "assistant"; content: string; at?: string }> };
+}
+
+/** Persist chat thread for a session so desktop and Tailscale see the same messages. */
+export async function setThread(
+  sessionId: string,
+  profileId: string,
+  messages: Array<{ role: string; content: string }>
+): Promise<void> {
+  await rpcWithProfile<{ ok?: boolean }>(
+    "thread.set",
+    {
+      sessionId: sessionId.trim(),
+      messages: messages.map((m) => ({ role: m.role, content: m.content }))
+    },
+    profileId
+  );
+}
+
+/** Installed skill record (id, sourceUrl, installedAt, credentialNames). Values never returned. */
+export interface InstalledSkillRecord {
+  id: string;
+  sourceUrl: string;
+  installedAt: string;
+  credentialNames: string[];
+}
+
+/** List installed skills for the profile. Requires admin/local auth. */
+export async function skillsList(profileId: string): Promise<InstalledSkillRecord[]> {
+  const res = await rpcWithProfile<{ skills: InstalledSkillRecord[] }>("skills.list", undefined, profileId);
+  const skills = res.result?.skills;
+  return Array.isArray(skills) ? skills : [];
+}
+
+/** Set a credential value for a skill. Value is never logged. Requires admin/local auth. */
+export async function skillsCredentialsSet(
+  profileId: string,
+  skillId: string,
+  keyName: string,
+  value: string
+): Promise<void> {
+  await rpcWithProfile("skills.credentials.set", { skillId, keyName, value }, profileId);
+}
+
+/** Delete a credential for a skill. Requires admin/local auth. */
+export async function skillsCredentialsDelete(
+  profileId: string,
+  skillId: string,
+  keyName: string
+): Promise<boolean> {
+  const res = await rpcWithProfile<{ deleted?: boolean }>(
+    "skills.credentials.delete",
+    { skillId, keyName },
+    profileId
+  );
+  return res.result?.deleted === true;
+}
+
+/** List credential names (no values) for a skill. Requires admin/local auth. */
+export async function skillsCredentialsList(
+  profileId: string,
+  skillId: string
+): Promise<string[]> {
+  const res = await rpcWithProfile<{ names?: string[] }>(
+    "skills.credentials.list",
+    { skillId },
+    profileId
+  );
+  const names = res.result?.names;
+  return Array.isArray(names) ? names : [];
+}
+
 /** Opens SSE to /stream. Note: EventSource cannot send Authorization header; use same-origin or future stream-ticket flow for auth. */
 export function openStream(sessionId?: string): EventSource {
   const base = getBaseUrl();

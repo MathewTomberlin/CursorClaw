@@ -14,6 +14,7 @@ import Substrate from "./pages/Substrate";
 import Heartbeat from "./pages/Heartbeat";
 import Trace from "./pages/Trace";
 import Memory from "./pages/Memory";
+import Skills from "./pages/Skills";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   if (!isAuthenticated()) {
@@ -88,6 +89,9 @@ function Shell() {
           <NavLink to="/config" className={({ isActive }) => (isActive ? "active" : "")}>
             Config
           </NavLink>
+          <NavLink to="/skills" className={({ isActive }) => (isActive ? "active" : "")}>
+            Skills
+          </NavLink>
           <NavLink to="/substrate" className={({ isActive }) => (isActive ? "active" : "")}>
             Substrate
           </NavLink>
@@ -108,6 +112,7 @@ function Shell() {
                 <Route path="/memory" element={<Memory />} />
                 <Route path="/incidents" element={<Incidents />} />
                 <Route path="/config" element={<Config />} />
+                <Route path="/skills" element={<Skills />} />
                 <Route path="/substrate" element={<Substrate />} />
                 <Route path="/heartbeat" element={<Heartbeat />} />
                 <Route path="/trace" element={<Trace />} />

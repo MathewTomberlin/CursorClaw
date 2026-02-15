@@ -5,6 +5,12 @@ import { dirname, join, resolve, sep } from "node:path";
 
 export interface GatewayConfig {
   bind: "loopback" | "0.0.0.0";
+  /**
+   * When set, the gateway listens on this address instead of the host derived from `bind`.
+   * Use for Tailscale: set to the host's Tailscale IP (e.g. 100.x.x.x) so only Tailnet traffic is accepted.
+   * Allowed: loopback (127.x, ::1), link-local (169.254.x), private (10.x, 172.16–31.x, 192.168.x), Tailscale CGNAT (100.64.0.0/10).
+   */
+  bindAddress?: string;
   bodyLimitBytes: number;
   auth: {
     mode: "token" | "password" | "none";

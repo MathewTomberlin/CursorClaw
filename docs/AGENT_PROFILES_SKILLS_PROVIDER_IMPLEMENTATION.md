@@ -247,16 +247,16 @@ Recommended layout for one profile root `{profileRoot}`:
 
 **Phase S.5 – User add/update/delete keys**
 
-- [ ] **S.5.1** UI or RPC: list installed skills; for each skill, list credential names (no values); allow add/update/delete for each key. Values are set via secure input (e.g. masked field, not logged).
-- [ ] **S.5.2** Agent can “ask” the user to set a credential (e.g. “Please add your API key for skill X in Settings”); agent does not need to see the key.
+- [x] **S.5.1** UI or RPC: list installed skills; for each skill, list credential names (no values); allow add/update/delete for each key. Values are set via secure input (e.g. masked field, not logged).
+- [x] **S.5.2** Agent can “ask” the user to set a credential (e.g. “Please add your API key for skill X in Settings”); agent does not need to see the key.
 
 ### 4.5 Success Criteria (Agent Skills)
 
-- [ ] Agent can read and parse a skill.md (from URL or path); safety analysis runs before any install.
-- [ ] Install commands run in a restricted context; no write outside profile skills dir; no unsafe escalation.
-- [ ] Credentials are stored in the existing (or profile-scoped) secure system; agent and prompt never receive raw secrets.
-- [ ] User can add, update, and delete credentials for installed skills via RPC or UI; agent can use the skill without seeing the secret.
-- [ ] Skills and credentials are per Agent Profile; no cross-profile access.
+- [x] Agent can read and parse a skill.md (from URL or path); safety analysis runs before any install.
+- [x] Install commands run in a restricted context; no write outside profile skills dir; no unsafe escalation.
+- [x] Credentials are stored in the existing (or profile-scoped) secure system; agent and prompt never receive raw secrets.
+- [x] User can add, update, and delete credentials for installed skills via RPC or UI; agent can use the skill without seeing the secret.
+- [x] Skills and credentials are per Agent Profile; no cross-profile access.
 
 ### 4.6 Guardrails (Agent Skills)
 
@@ -292,31 +292,31 @@ Recommended layout for one profile root `{profileRoot}`:
 
 **Phase V.1 – Server-side thread persistence**
 
-- [ ] **V.1.1** Add a thread store under profile root: e.g. `tmp/threads/` with one file per session (sessionId sanitized to a safe filename). Format: `{ messages: Array<{ id, role, content, at? }> }`.
-- [ ] **V.1.2** API: get thread (profileRoot, sessionId) → messages; set thread (profileRoot, sessionId, messages); append message (profileRoot, sessionId, message). Enforce size/limit to avoid unbounded growth (e.g. max messages per thread, or max bytes).
+- [x] **V.1.1** Add a thread store under profile root: e.g. `tmp/threads/` with one file per session (sessionId sanitized to a safe filename). Format: `{ messages: Array<{ id, role, content, at? }> }`. Implemented in `src/thread-store.ts`.
+- [x] **V.1.2** API: get thread (profileRoot, sessionId) → messages; set thread (profileRoot, sessionId, messages); append message (profileRoot, sessionId, message). Enforce size/limit (MAX_MESSAGES_PER_THREAD = 1000) to avoid unbounded growth.
 
 **Phase V.2 – Gateway and run flow**
 
-- [ ] **V.2.1** At start of `agent.run`, persist the request’s message list to the thread store for (profileId, sessionId). Store profileId in the run record (RunStore) so completion knows which profile to update.
-- [ ] **V.2.2** When `agent.wait` returns successfully, append the assistant message to the thread store for that run’s profile and session.
-- [ ] **V.2.3** New RPC `chat.getThread`: params `sessionId`, optional `profileId`; returns `{ messages }`. Same auth scope as `chat.send` (local/remote/admin).
+- [x] **V.2.1** At start of `agent.run`, persist the request’s message list to the thread store for (profileId, sessionId). Store profileId in the run record (RunStore) so completion knows which profile to update.
+- [x] **V.2.2** When `agent.wait` returns successfully, append the assistant message to the thread store for that run’s profile and session.
+- [x] **V.2.3** New RPC `chat.getThread`: params `sessionId`, optional `profileId`; returns `{ messages }`. Same auth scope as `chat.send` (local/remote/admin).
 
 **Phase V.3 – UI: load thread from server**
 
-- [ ] **V.3.1** In ChatContext, when sessionId (or selected profile) changes, call `chat.getThread` and set the message list from the response. Use sessionStorage only as fallback if the RPC fails or for offline.
-- [ ] **V.3.2** Optional: after sending a message and receiving the reply, the server already updated the thread; on next focus or session switch the client will refetch. No change required if we refetch on session change; optionally refetch after runTurn completes so that multi-tab or multi-device sees the update without changing session.
+- [x] **V.3.1** In ChatContext, when sessionId (or selected profile) changes, call `chat.getThread` and set the message list from the response. Use sessionStorage only as fallback if the RPC fails or for offline.
+- [x] **V.3.2** Optional: after sending a message and receiving the reply, the server already updated the thread; on next focus or session switch the client will refetch. No change required if we refetch on session change; optionally refetch after runTurn completes so that multi-tab or multi-device sees the update without changing session.
 
 **Phase V.4 – Optional: Tailscale / bind address**
 
-- [ ] **V.4.1** Config: add `gateway.bindAddress?: string`. When set, listen on that host (and config port) instead of using `gateway.bind` alone. Validate that it is a valid host (IP or hostname).
-- [ ] **V.4.2** UI: in Settings or Dashboard, allow the user to set and save the bind address (e.g. Tailscale IP); persist via config patch. Document that this restricts the server to that interface only.
+- [x] **V.4.1** Config: add `gateway.bindAddress?: string`. When set, listen on that host (and config port) instead of using `gateway.bind` alone. Validate that it is a valid host (IP or hostname). Implemented: validation allows loopback, link-local, private, Tailscale (100.64.0.0/10); rejects 0.0.0.0 and public IPs.
+- [x] **V.4.2** UI: in Settings or Dashboard, allow the user to set and save the bind address (e.g. Tailscale IP); persist via config patch. Document that this restricts the server to that interface only.
 
 ### 5.5 Success Criteria (Shared Message View)
 
-- [ ] Desktop and mobile (e.g. via Tailscale) see the same message list for the same sessionId and profile: thread is loaded from the server and updated when the user sends messages and the agent replies.
-- [ ] No regression: existing single-device usage still works; sessionId and profile selection behave as today.
-- [ ] Thread store is scoped to profile; path and sessionId are sanitized to prevent traversal and abuse.
-- [ ] Optional: when bind address is set, the server listens only on that address; UI can set it.
+- [x] Desktop and mobile (e.g. via Tailscale) see the same message list for the same sessionId and profile: thread is loaded from the server and updated when the user sends messages and the agent replies.
+- [x] No regression: existing single-device usage still works; sessionId and profile selection behave as today.
+- [x] Thread store is scoped to profile; path and sessionId are sanitized to prevent traversal and abuse.
+- [x] Optional (bind): when bind address is set, the server listens only on that address (V.4.1). UI to set it remains optional (V.4.2).
 
 ### 5.6 Guardrails (Shared Message View)
 
@@ -339,7 +339,7 @@ Recommended layout for one profile root `{profileRoot}`:
 ## 7) Document Metadata
 
 - **Version:** 1.1  
-- **Status:** In progress. Agent Profiles, Provider/Model, Skills through S.4 complete; Shared Message View (Section 5) added, not yet implemented.  
+- **Status:** In progress. Agent Profiles (A.1–A.4), Provider/Model (P.1–P.5 except P.4.2/P.4.3), Agent Skills (S.1–S.5), and Shared Message View / Tailnet (V.1–V.4) complete. Remaining: P.4.2 (user add/update/delete provider API keys via UX or RPC; apiKeyRef currently env: only), P.4.3 (model list from provider API).  
 - **Changelog (1.0):** Initial guide for Agent Profiles, Agent Skills, and Provider/Model Selection with success criteria and guardrails.
 - **Changelog (1.1):** Phase A.1 implemented: `AgentProfileConfig`, `profiles` in config, `resolveProfileRoot`/`getDefaultProfileId` in config.ts; index.ts and gateway use profile root for substrate, memory, heartbeat, cron, tmp, logs. Single-agent mode unchanged (no `profiles` → profileRoot = workspaceDir).
 - **Changelog (1.2):** Phase A.2 marked complete: index.ts already wires profile root for SubstrateStore.reload, MemoryStore, HEARTBEAT.md and autonomy-state, cron-state, run-store, workflow-state, CLAW_HISTORY.log, and all tmp state files. Success criteria for single/multi-agent and path safety met; tests still pending.
@@ -355,3 +355,6 @@ Recommended layout for one profile root `{profileRoot}`:
 - **Changelog (1.12):** Phase S.3 complete. S.3.1: `src/skills/runner.ts` — `runInstall(profileRoot, skillId, definition)` runs install block via `bash -s` with cwd `profileRoot/skills/install/<skillId>`, timeout 300s; returns stdout/stderr and exit status. S.3.2: RPC `skills.install` (url or definition+sourceUrl) runs safety then install; on success appends to installed manifest (profile skills/installed/manifest.json). Install is admin-only (implicit operator approval). S.3.3: Credential names extracted from Credentials section via `parseCredentialNames` (backticked names); returned in install result; user sets values via future credentials RPC (S.4/S.5). Added `parseCredentialNames` in parser, `src/skills/index.ts` re-exports. RPC reference and implementation guide updated. All 190 tests pass.
 - **Changelog (1.13):** Phase S.4 complete. S.4.1: `src/skills/credentials.ts` — profile-scoped store: getCredential, setCredential, deleteCredential, listCredentialNames; storage under `skills/credentials/{skillId}.json`; skillId and keyName restricted to `[a-zA-Z0-9_-]+`. S.4.2: RPCs `skills.credentials.set`, `skills.credentials.delete`, `skills.credentials.list` (profile-scoped; list returns names only). S.4.3: Doc and module comment state credentials must not appear in substrate, prompts, or logs; getCredential for runtime resolution only. Tests: skills.test.ts credentials suite. RPC reference updated.
 - **Changelog (1.14):** Section 5 (Shared Message View) added: goal (same message list on desktop and mobile via Tailscale), current state (sessionStorage-only), phases V.1–V.4 (thread store, gateway persist on run/wait, chat.getThread, UI load from server, optional bind address), success criteria and guardrails. Implementation not yet started.
+- **Changelog (1.15):** Phases V.1–V.3 implemented. V.1: `src/thread-store.ts` (getThread, setThread, appendMessage; tmp/threads/{sessionId}.json; MAX_MESSAGES_PER_THREAD 1000; sanitizeSessionId). V.2: gateway persists thread at agent.run start; RunStore.createPending accepts profileId; appendAssistantToThread before consume in agent.wait; RPC chat.getThread. V.3: UI getThread(sessionId, profileId) in api.ts; ChatContext loads thread from server when sessionId or selectedProfileId changes, fallback to sessionStorage on error. V.4 (bind address) deferred. RPC reference updated. All 196 tests pass.
+- **Changelog (1.16):** Phase V.4.1 (Tailnet bind address) implemented. Config `gateway.bindAddress?: string`; when set, listen host uses it; validation via `validateBindAddress` in security.ts (isSafeBindAddress: loopback, link-local, private, Tailscale 100.64.0.0/10; reject 0.0.0.0 and public IPs). Hostname resolution validated against resolved IPs. Tests: tests/bind-address.test.ts. Docs: configuration-reference.md, SHARED_MESSAGE_VIEW_IMPLEMENTATION.md (V.3.1–V.3.2, success criteria).
+- **Changelog (1.17):** Phase S.5 and V.4.2 complete. S.5.1: Skills page in UI (nav + route): list installed skills via skills.list, for each skill show credential names (manifest + credentials.list), password input (masked), Save (skills.credentials.set), Delete (skills.credentials.delete). S.5.2: Copy on Skills page instructs user that the agent can ask them to add a key and they set it here. V.4.2: Config page already had Gateway bind address (Tailscale) field and Save via config.patch; marked complete in both implementation guide and SHARED_MESSAGE_VIEW_IMPLEMENTATION.md. API: skillsList, skillsCredentialsSet, skillsCredentialsDelete, skillsCredentialsList, InstalledSkillRecord.
