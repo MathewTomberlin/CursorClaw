@@ -698,7 +698,15 @@ async function main(): Promise<void> {
         },
         messages: [{ role: "user", content }]
       });
-      return result.assistantText.trim() === "" ? "HEARTBEAT_OK" : result.assistantText;
+      const reply = result.assistantText.trim();
+      if (reply !== "" && reply !== "HEARTBEAT_OK") {
+        await channelHub.send({
+          channelId,
+          text: result.assistantText,
+          proactive: true
+        });
+      }
+      return reply === "" ? "HEARTBEAT_OK" : result.assistantText;
     },
     onProactiveIntent: async (intent) => {
       const delivered = await channelHub.send({

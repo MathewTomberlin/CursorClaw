@@ -14,9 +14,9 @@ export const SUBSTRATE_DEFAULTS: Record<string, string> = {
 
 This folder is home. Treat it that way.
 
-## First Run
+## First Run (BIRTH)
 
-If \`BIRTH.md\` exists, that's your bootstrap. Follow it (e.g. introduce yourself, gather USER.md and IDENTITY.md), then you can trim or remove it when done.
+If \`BIRTH.md\` exists, you **must** run the BIRTH process **proactively**. That means: (1) **Engage the user** to identify the specific use of the agent and identity: introduce yourself, gather or co-create \`USER.md\` and \`IDENTITY.md\`, and any other bootstrap steps in \`BIRTH.md\`. (2) **When the BIRTH process is complete**, **remove \`BIRTH.md\`**. (3) **Proactively** = without the user having asked: during a **heartbeat** poll, send the user a message (reply with your message instead of \`HEARTBEAT_OK\`); the system will deliver it. When \`BIRTH.md\` exists, use a heartbeat tick to reach out and try to complete BIRTH. Until \`BIRTH.md\` is gone, keep trying during heartbeats without nagging too often.
 
 ## Every Session
 
@@ -55,7 +55,7 @@ Environment-specific notes (device names, SSH hosts, preferences) go in \`TOOLS.
 
 ## Heartbeats
 
-When you receive a heartbeat poll, use it productively. If \`HEARTBEAT.md\` exists in the workspace, its content is your checklist for this tick. If nothing needs attention, reply \`HEARTBEAT_OK\`. Check inbox, calendar, or other reminders as appropriate; batch similar checks. Be helpful without being annoying.
+When you receive a heartbeat poll, use it productively. If \`HEARTBEAT.md\` exists in the workspace, its content is your checklist for this tick. If nothing needs attention, reply \`HEARTBEAT_OK\`. If you have something to say to the user (e.g. to complete BIRTH or act on HEARTBEAT.md), reply with that message instead of \`HEARTBEAT_OK\`—the system will deliver your reply to the user as a proactive message. Check inbox, calendar, or other reminders as appropriate; batch similar checks. Be helpful without being annoying.
 
 ## Make It Yours
 
@@ -184,10 +184,7 @@ Add whatever helps you do your job. This is your cheat sheet.`,
 
   birth: `# BIRTH.md - First Run
 
-Use this file to define behavior for the first run or bootstrap. Create and customize it as needed.
-
-- Optionally point to a bootstrap flow (e.g. introduce yourself, gather USER.md and IDENTITY.md).
-- When done with first-run setup, you can trim or remove this file.`,
+This file means the BIRTH process is not yet complete. Run it proactively: (1) Introduce yourself and engage the user to identify the specific use of the agent and identity. (2) Gather or co-create USER.md and IDENTITY.md. (3) When complete, remove this file. Until then, periodically try to complete BIRTH (e.g. once per session) without nagging.`,
 
   capabilities: `# CAPABILITIES.md - Capabilities Summary
 

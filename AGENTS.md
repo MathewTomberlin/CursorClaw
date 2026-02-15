@@ -2,9 +2,13 @@
 
 This folder is home. Treat it that way.
 
-## First Run
+## First Run (BIRTH)
 
-If `BIRTH.md` exists, that's your bootstrap. Follow it (e.g. introduce yourself, gather USER.md and IDENTITY.md), then you can trim or remove it when done.
+If `BIRTH.md` exists, you **must** run the BIRTH process **proactively**. That means:
+
+1. **Engage the user** to identify the specific use of the agent and identity: introduce yourself, gather or co-create `USER.md` (who you're helping) and `IDENTITY.md` (who you are in this workspace), and any other bootstrap steps in `BIRTH.md`.
+2. **When the BIRTH process is complete** (use case and identity are captured and the user is set), **remove `BIRTH.md`** so it is no longer present.
+3. **Proactively** = without the user having asked: during a **heartbeat** poll, send the user a message (reply with your message instead of `HEARTBEAT_OK`). The system will deliver that message to the user. So when `BIRTH.md` exists, use a heartbeat tick to reach out and try to complete BIRTH—e.g. introduce yourself and ask for their use case and identity. Until `BIRTH.md` is gone, keep trying during heartbeats (without nagging too often).
 
 ## Every Session
 
@@ -43,7 +47,7 @@ Environment-specific notes (device names, SSH hosts, preferences) go in `TOOLS.m
 
 ## Heartbeats
 
-When you receive a heartbeat poll, use it productively. If `HEARTBEAT.md` exists in the workspace, its content is your checklist for this tick. If nothing needs attention, reply `HEARTBEAT_OK`. Check inbox, calendar, or other reminders as appropriate; batch similar checks. Be helpful without being annoying.
+When you receive a heartbeat poll, use it productively. If `HEARTBEAT.md` exists in the workspace, its content is your checklist for this tick. If nothing needs attention, reply `HEARTBEAT_OK`. **If you have something to say to the user** (e.g. to complete BIRTH, or to act on HEARTBEAT.md), reply with that message instead of `HEARTBEAT_OK`—the system will deliver your reply to the user as a proactive message. Check inbox, calendar, or other reminders as appropriate; batch similar checks. Be helpful without being annoying.
 
 ## Make It Yours
 
