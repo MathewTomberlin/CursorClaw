@@ -18,6 +18,12 @@ This folder contains implementation-grounded documentation for the current Curso
    - Architecture, runtime lifecycle, subsystem internals, and file-by-file map.
    - Test-suite map and extension points for contributors.
 
+### Provider and integration guides
+
+- **Provider Model Resilience (PMR):** [PMR Provider Model Resilience](./PMR-provider-model-resilience.md) — validation store, probe, capability suite, `useOnlyValidatedFallbacks`; [PMR allow-one-unvalidated](./PMR-allow-one-unvalidated.md).
+- **Local Ollama:** [Local Ollama agent setup](./local-ollama-agent-setup.md) — end-to-end setup; [Ollama tool-call support](./Ollama-tool-call-support.md) — tool-call format and validation.
+- **GitHub:** [Read-only GitHub integration](./GH.1-read-only-github-integration.md); [GitHub PR write](./GH.2-github-pr-write.md).
+
 ### Existing focused specification
 
 - [Cursor-Agent Adapter Contract](./cursor-agent-adapter.md)

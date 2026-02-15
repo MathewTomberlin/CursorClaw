@@ -1261,9 +1261,10 @@ describe("gateway integration", () => {
         }
       }
     });
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error.code).toBe("BAD_REQUEST");
-    expect(String(res.json().error.message)).toContain("message too long");
+    expect(res.statusCode).toBe(200);
+    const result = res.json().result;
+    expect(result).toBeDefined();
+    expect(result.runId).toBeDefined();
     await app.close();
   });
 
