@@ -168,6 +168,8 @@ export interface SubstrateConfig {
   capabilitiesPath?: string;
   userPath?: string;
   toolsPath?: string;
+  /** Path to planning file (milestones, roadmap). Default ROADMAP.md. */
+  roadmapPath?: string;
   /** When true, include a short capabilities summary in the system prompt (default false). */
   includeCapabilitiesInPrompt?: boolean;
 }

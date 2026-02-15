@@ -4,7 +4,7 @@
  * agent and any client (e.g. Claude Code, Cursor) that uses AGENTS.md as a rules file see consistent behavior.
  */
 
-/** Content keyed by substrate file name (agents, identity, soul, birth, etc.). Missing files → undefined. */
+/** Content keyed by substrate file name (agents, identity, soul, birth, roadmap, etc.). Missing files → undefined. */
 export interface SubstrateContent {
   agents?: string;
   identity?: string;
@@ -13,6 +13,8 @@ export interface SubstrateContent {
   capabilities?: string;
   user?: string;
   tools?: string;
+  /** Optional planning file: milestones, roadmap, feature backlog. Injected so the agent natively plans and automates work. */
+  roadmap?: string;
 }
 
 /** Workspace-relative paths for each substrate file. Defaults are root filenames. */
@@ -24,6 +26,7 @@ export interface SubstratePaths {
   capabilitiesPath?: string;
   userPath?: string;
   toolsPath?: string;
+  roadmapPath?: string;
 }
 
 /** Default filenames in workspace root (no subdir). AGENTS.md is the OpenClaw-style rules file (session start, memory, safety). */
@@ -34,7 +37,8 @@ export const DEFAULT_SUBSTRATE_PATHS: Required<SubstratePaths> = {
   birthPath: "BIRTH.md",
   capabilitiesPath: "CAPABILITIES.md",
   userPath: "USER.md",
-  toolsPath: "TOOLS.md"
+  toolsPath: "TOOLS.md",
+  roadmapPath: "ROADMAP.md"
 };
 
 /** Allowed keys for substrate content (used by store/RPC validation). */
@@ -45,7 +49,8 @@ export const SUBSTRATE_KEYS = [
   "birth",
   "capabilities",
   "user",
-  "tools"
+  "tools",
+  "roadmap"
 ] as const;
 
 export type SubstrateKey = (typeof SUBSTRATE_KEYS)[number];

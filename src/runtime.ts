@@ -830,6 +830,15 @@ export class AgentRuntime {
         )
       });
     }
+    if (substrate.roadmap?.trim()) {
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(
+          `Planning (ROADMAP):\n\n${substrate.roadmap.trim()}`,
+          scopeId
+        )
+      });
+    }
 
     if (freshness.summaryLine) {
       systemMessages.push({

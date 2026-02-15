@@ -895,6 +895,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           if (sub.capabilitiesPath) pathKeys.capabilitiesPath = sub.capabilitiesPath;
           if (sub.userPath) pathKeys.userPath = sub.userPath;
           if (sub.toolsPath) pathKeys.toolsPath = sub.toolsPath;
+          if (sub.roadmapPath) pathKeys.roadmapPath = sub.roadmapPath;
         }
         result = {
           keys: SUBSTRATE_KEYS.map((key) => {

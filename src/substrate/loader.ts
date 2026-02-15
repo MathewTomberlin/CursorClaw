@@ -22,7 +22,8 @@ export async function loadSubstrate(
     { key: "birth", path: p.birthPath },
     { key: "capabilities", path: p.capabilitiesPath },
     { key: "user", path: p.userPath },
-    { key: "tools", path: p.toolsPath }
+    { key: "tools", path: p.toolsPath },
+    { key: "roadmap", path: p.roadmapPath }
   ];
 
   for (const { key, path } of entries) {
