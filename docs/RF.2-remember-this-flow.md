@@ -31,4 +31,4 @@
 
 ## Completed
 
-RF.2 is done. Remove this file from the roadmap "open" list and add to "Completed" in HEARTBEAT.md.
+RF.2 is done. Remove this file from the roadmap "open" list and add to "Completed" in ROADMAP.md.

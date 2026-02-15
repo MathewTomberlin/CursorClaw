@@ -90,7 +90,18 @@ Restart CursorClaw after config changes so the new model and settings are loaded
 
 ---
 
-## 6. Success criteria
+## 6. Operator-driven run (Ollama-only)
+
+To run the agent using **only** your local Ollama model for a single session:
+
+- **Chat UI:** Open Chat, choose the profile that has the Ollama model as primary (or use the default profile if `defaultModel` is your Ollama model), and send messages. All turns use that model.
+- **RPC:** Call `agent.run` / `agent.wait` with the session bound to that profile (or the default). No fallback is used unless you configure one; with only the Ollama model in the chain, every turn goes to Ollama.
+
+So “Ollama-only” means: either set that model as the sole model for the profile (no `fallbackModels`), or set it as default and use no other models in config for that run.
+
+---
+
+## 7. Success criteria
 
 - Ollama is running and the chosen model is pulled.
 - Config contains a model with `provider: "ollama"`, `ollamaModelName`, and optional `baseURL`.
@@ -100,7 +111,7 @@ Restart CursorClaw after config changes so the new model and settings are loaded
 
 ---
 
-## 7. Tool use and tool-call validation
+## 8. Tool use and tool-call validation
 
 The Ollama provider supports **tool-call** flow: it sends tools to the Ollama API and parses tool-call responses into adapter events. When your model and Ollama version support tools:
 

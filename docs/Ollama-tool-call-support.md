@@ -112,4 +112,4 @@ If the deployed Ollama version does not support tools, or uses a different endpo
 
 ## 6. Completion
 
-Implemented on branch `feature/ollama-tool-call-support`. When merged: add a brief “Implemented” section at the top of this guide with the branch name and PR number, and update HEARTBEAT.md to move “Ollama tool-call support” from Open to Completed.
+Implemented on branch `feature/ollama-tool-call-support`. When merged: add a brief “Implemented” section at the top of this guide with the branch name and PR number, and update ROADMAP.md to move “Ollama tool-call support” from Open to Completed.
