@@ -59,8 +59,10 @@ export interface ModelProviderConfig {
   baseURL?: string;
   /** Provider-specific: OpenAI-compatible model id (e.g. gpt-4o-mini, gpt-4o). */
   openaiModelId?: string;
-  /** Optional per-model context token cap. When set, runtime trims oldest messages (system first) so estimated tokens ≤ cap. Best-effort char-based estimate (~4 chars/token). */
+  /** Optional per-model context token cap. When set, runtime trims messages so estimated tokens ≤ cap. Best-effort char-based estimate (~4 chars/token). */
   maxContextTokens?: number;
+  /** Optional drop order when trimming for maxContextTokens. Roles listed first are dropped first (e.g. ['assistant','user','system']). Omit for oldest-first (TU.2). */
+  truncationPriority?: ("system" | "user" | "assistant")[];
 }
 
 export interface ToolsConfig {
@@ -166,6 +168,8 @@ export interface SubstrateConfig {
   capabilitiesPath?: string;
   userPath?: string;
   toolsPath?: string;
+  /** Path to planning file (milestones, roadmap). Default ROADMAP.md. */
+  roadmapPath?: string;
   /** When true, include a short capabilities summary in the system prompt (default false). */
   includeCapabilitiesInPrompt?: boolean;
 }

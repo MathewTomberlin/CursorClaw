@@ -321,7 +321,8 @@ Model object fields:
 - `authProfiles: string[]`
 - `fallbackModels: string[]`
 - `enabled: boolean`
-- `maxContextTokens?: number` — Optional per-model context token cap. When set, the runtime trims the prompt by dropping oldest messages (system first) so the estimated token count does not exceed this value. Estimation is best-effort (~4 characters per token). If the last user message alone exceeds the cap, it is still sent (only older content is trimmed).
+- `maxContextTokens?: number` — Optional per-model context token cap. When set, the runtime trims the prompt so the estimated token count does not exceed this value. Estimation is best-effort (~4 characters per token). The last message is always kept. By default, oldest messages are dropped first (TU.2). With `truncationPriority`, drop order is configurable (TU.3).
+- `truncationPriority?: ("system"|"user"|"assistant")[]` — Optional. When set with `maxContextTokens`, roles listed first are dropped first when over the cap (e.g. `["assistant","user","system"]` drops assistant messages first, then user, then system). Omit for oldest-first behavior.
 
 ## 4.15 `autonomyBudget`
 
@@ -355,7 +356,7 @@ If you see "heartbeat skipped: budget limit or quiet hours", it was from an olde
 
 Optional. When present, workspace markdown files (AGENTS, Identity, Soul, Birth, etc.) are loaded at startup and injected into the system prompt for every turn, including heartbeat.
 
-Path defaults (workspace root): `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `BIRTH.md`, `CAPABILITIES.md`, `USER.md`, `TOOLS.md`.
+Path defaults (workspace root): `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `BIRTH.md`, `CAPABILITIES.md`, `USER.md`, `TOOLS.md`, `ROADMAP.md`.
 
 ```json
 {
@@ -367,19 +368,25 @@ Path defaults (workspace root): `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `BIRTH.md
     "capabilitiesPath": "CAPABILITIES.md",
     "userPath": "USER.md",
     "toolsPath": "TOOLS.md",
+    "roadmapPath": "ROADMAP.md",
     "includeCapabilitiesInPrompt": false
   }
 }
 ```
 
-- **AGENTS.md:** Coordinating workspace rules file (OpenClaw-style). Injected **first** in the system prompt so the agent sees session-start ritual (read SOUL, USER, memory), memory system, safety, and heartbeat behavior before Identity/Soul/User. Using the filename `AGENTS.md` allows clients that treat it as a rules file (e.g. Claude Code, Cursor) to use it the same way when editing the workspace.
+- **AGENTS.md:** Coordinating workspace rules file (OpenClaw-style). Injected **first** in the system prompt so the agent sees session-start ritual (read SOUL, USER, memory), memory system, safety, planning/agency, and heartbeat behavior before Identity/Soul/User. Using the filename `AGENTS.md` allows clients that treat it as a rules file (e.g. Claude Code, Cursor) to use it the same way when editing the workspace.
 - **Identity and Soul:** When the files exist, their content is prepended after AGENTS (Identity, then Soul) for every turn, including heartbeat. This gives the agent consistent identity and tone.
 - **USER.md:** Injected only in main session (web channel). Contains information about the human (name, timezone, preferences). Do not put secrets here; treat as private.
 - **BIRTH (Bootstrap):** Injected only on the first turn per session (e.g. "wake" behavior). Not repeated on later turns.
+- **ROADMAP.md (planning):** When present, injected as "Planning (ROADMAP)" so the agent natively sees milestones, roadmaps, and backlogs. The default AGENTS text instructs the agent to use this file for planning and to advance it during heartbeats; user messages always take priority and can interrupt heartbeat work (see § User priority below).
 - **Capabilities:** When `includeCapabilitiesInPrompt` is `true` and `CAPABILITIES.md` exists, a short summary (up to 500 chars) is appended to the system prompt. Informational only; `CapabilityStore` and approval workflow remain the source of truth for tool execution.
 - If `substrate` is absent, no substrate loading occurs (backward compatible). Substrate loading must not block startup; on loader failure, the process continues with empty substrate.
 
-**Guardrail:** Substrate files are included in the agent prompt. Do not put secrets in AGENTS.md, IDENTITY.md, SOUL.md, BIRTH.md, CAPABILITIES.md, USER.md, or TOOLS.md.
+**Guardrail:** Substrate files are included in the agent prompt. Do not put secrets in AGENTS.md, IDENTITY.md, SOUL.md, BIRTH.md, CAPABILITIES.md, USER.md, TOOLS.md, or ROADMAP.md.
+
+### User priority and responsiveness
+
+User messages are prioritized over background work. When a user sends a message (`agent.run` with any session other than `heartbeat:main`), the runtime cancels any in-flight turn for `heartbeat:main`. The user turn runs immediately in its own session queue; the next heartbeat is scheduled as usual, so heartbeat work effectively resumes on the next tick. This gives the agent better user-facing responsiveness while still allowing planned work (e.g. from HEARTBEAT.md or ROADMAP.md) to advance between user interactions.
 
 ### Substrate and heartbeat
 
@@ -425,7 +432,7 @@ The runtime limits prompt size in several places. There is **no per-model or per
 - **continuity.sessionMemoryCap** (default 32_000): Cap on session-start memory injection (MEMORY.md + memory/today+yesterday) in characters. See § 4.17 and docs/memory.md.
 - **Runtime system prompt budget:** The runtime applies `applySystemPromptBudget`: each system message is capped at `session.maxMessageChars`, and the combined system messages are capped at about 1.5× that value (total system budget). Excess is truncated (conversation history and optional context are trimmed first; core system blocks are preserved in the current implementation).
 
-So critical system blocks (AGENTS, SOUL, USER, memory summary) are preserved up to the per-message and total budget. Per-model `maxContextTokens` (see models section) can cap total context before sending to small-context models (e.g. 8K local models). Future work may add priority-aware truncation.
+So critical system blocks (AGENTS, SOUL, USER, memory summary) are preserved up to the per-message and total budget. Per-model `maxContextTokens` (see models section) can cap total context before sending to small-context models (e.g. 8K local models). Optional `truncationPriority` (TU.3) controls which roles are dropped first when over the cap.
 
 ## 5) Environment variables used at runtime
 

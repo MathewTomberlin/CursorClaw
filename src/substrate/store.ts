@@ -15,7 +15,8 @@ const KEY_TO_PATH_KEY: Record<string, keyof SubstratePaths> = {
   birth: "birthPath",
   capabilities: "capabilitiesPath",
   user: "userPath",
-  tools: "toolsPath"
+  tools: "toolsPath",
+  roadmap: "roadmapPath"
 };
 
 /**

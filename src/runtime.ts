@@ -399,7 +399,11 @@ export class AgentRuntime {
           const modelId = getModelIdForProfile(this.options.config, profileId);
           const modelConfig = this.options.config.models[modelId];
           if (modelConfig?.maxContextTokens !== undefined && modelConfig.maxContextTokens > 0) {
-            promptMessages = applyMaxContextTokens(promptMessages, modelConfig.maxContextTokens);
+            promptMessages = applyMaxContextTokens(
+              promptMessages,
+              modelConfig.maxContextTokens,
+              modelConfig.truncationPriority
+            );
           }
           const lastUserContent =
             request.messages.filter((m) => m.role === "user").pop()?.content ?? "";
@@ -822,6 +826,15 @@ export class AgentRuntime {
         role: "system",
         content: this.scrubText(
           `Tools (local notes, not enforcement):\n\n${summary}`,
+          scopeId
+        )
+      });
+    }
+    if (substrate.roadmap?.trim()) {
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(
+          `Planning (ROADMAP):\n\n${substrate.roadmap.trim()}`,
           scopeId
         )
       });

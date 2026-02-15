@@ -2,6 +2,8 @@
 
 Exploration of how user messages are received, how heartbeats run, and where we could add “interrupt to respond” so the agent can prioritize replying to the user over an in-flight heartbeat.
 
+**Status: Implemented.** When a user sends a message (`agent.run` with a session other than `heartbeat:main`), the gateway calls `runtime.cancelTurnForSession("heartbeat:main")` so any in-flight heartbeat turn is cancelled. The user turn runs in its own session queue; the next heartbeat is scheduled as usual in the orchestrator's `runHeartbeat().finally()`. User-facing responsiveness is prioritized; heartbeat work resumes on the next scheduled tick.
+
 ## 1. How user messages are received
 
 1. **UI** (`ui/src/contexts/ChatContext.tsx`, `ui/src/pages/Chat.tsx`)
@@ -91,8 +93,8 @@ Goal: when a user sends a message, the system should be able to “interrupt” 
 ## 5. Recommended direction (for implementation)
 
 - **Short term:** **A (cancel in-flight heartbeat)** gives clear “interrupt to respond” semantics: as soon as the user sends a message, any running heartbeat is cancelled and the user turn can start (and if they share a queue, the user turn runs next).
-- **Implementation steps:**
-  1. **Record active heartbeat runId:** In `index.ts`, when starting the heartbeat turn, use `runtime.startTurn` instead of `runtime.runTurn`, and store the returned `runId` in a ref or object that the gateway (or a small “run coordinator”) can read. Optionally expose `getActiveHeartbeatRunId(): string | null` and `clearActiveHeartbeatRunId()`.
+- **Implementation steps (done):**
+  1. **Record active runId:** In `index.ts`, when starting the heartbeat turn, use `runtime.startTurn` instead of `runtime.runTurn`, and store the returned `runId` in a ref or object that the gateway (or a small “run coordinator”) can read. Optionally expose `getActiveHeartbeatRunId(): string | null` and `clearActiveHeartbeatRunId()`.
   2. **Gateway calls cancel on user run:** When handling `agent.run` for the main/default session, gateway (or deps) calls something like `cancelHeartbeatIfRunning()`. That function gets the active heartbeat runId (if any), calls `runtime.cancelTurn(runId)` (or adapter.cancel), then clears the ref. Add `runtime.cancelTurn(runId)` that finds the in-flight turn and calls `this.options.adapter.cancel(runId)` (and optionally rejects the turn’s promise so the orchestrator doesn’t treat it as a normal completion).
   3. **Orchestrator:** Either orchestrator holds the “active heartbeat runId” and a way to cancel (injected from index), or index holds it and gateway receives a `getDeps()` that includes `cancelHeartbeatIfRunning`. Keep scheduling as today: after `runHeartbeat().finally(...)` the next heartbeat is scheduled; if the turn was cancelled, the promise rejects and we still schedule the next one.
 
@@ -110,3 +112,13 @@ Goal: when a user sends a message, the system should be able to “interrupt” 
 | `src/orchestrator.ts` | Optional: accept `onBeforeHeartbeat` / `getActiveHeartbeatRunId` so orchestrator can skip or cancel; or keep all cancel logic in index/gateway. |
 
 This keeps the exploration in one place and gives a clear path to add interrupt-to-respond behavior.
+
+---
+
+## 7. Implementation (current)
+
+Approach A is in place:
+
+- **Runtime** (`src/runtime.ts`): Tracks `currentRunIdBySession` per session; `cancelTurnForSession(sessionId)` calls `adapter.cancel(runId)` for that session's in-flight run.
+- **Gateway** (`src/gateway.ts`): On `agent.run`, when `session.sessionId !== "heartbeat:main"`, calls `deps.runtime.cancelTurnForSession("heartbeat:main")` before `runtime.startTurn`. User turn runs in its own queue; any in-flight heartbeat is cancelled.
+- **Orchestrator**: Unchanged; `runHeartbeat().finally(() => scheduleHeartbeat(0))` ensures the next heartbeat is always scheduled. Cancelled turns reject; `finally` still runs.
