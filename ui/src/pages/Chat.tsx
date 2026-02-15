@@ -42,7 +42,6 @@ export default function Chat() {
     currentRunId,
     loadingStartedAt,
     error,
-    setError,
     runTurn: runTurnFromContext,
     clearThread
   } = useChat();
