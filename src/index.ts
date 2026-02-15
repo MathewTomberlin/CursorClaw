@@ -1,7 +1,5 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { readFile } from "node:fs/promises";
-
 import { safeReadUtf8 } from "./fs-utils.js";
 
 import {
@@ -696,7 +694,13 @@ async function main(): Promise<void> {
           confidence: 0
         };
       }
-      const sourceText = await readFile(match.path, "utf8");
+      const sourceText = await safeReadUtf8(match.path);
+      if (sourceText == null || sourceText === "") {
+        return {
+          error: `could not read file (missing or invalid encoding): ${match.path}`,
+          confidence: 0
+        };
+      }
       const graph = contextIndexService.getCrossRepoGraph();
       const callerHints = graph.edges
         .filter((edge) => edge.signal.includes(symbol) || edge.fromModule.endsWith(modulePath))
