@@ -33,7 +33,7 @@
 **Phase 3 — Switching policy and mid-stream use**
 
 - [x] Config or policy flag (e.g. `providerModelResilience.useOnlyValidatedFallbacks: boolean`) ensures that when falling back, only models that have **passed** the minimum-capability check in the store are tried (and in a defined order, e.g. by last success time or explicit priority).
-- [x] If all validated fallbacks are exhausted, fail with a clear error (“no validated model available”) ; optional "allow one unvalidated attempt" can be added later if needed.
+- [x] If all validated fallbacks are exhausted, fail with a clear error (“no validated model available”) ; optional **allow one unvalidated attempt** is implemented via `providerModelResilience.allowOneUnvalidatedAttempt` (see configuration-reference §4.15.1 and `docs/PMR-allow-one-unvalidated.md`).
 - [x] Docs: operator knows how to run validation, how to add new providers/models, and how to interpret the validation store (see configuration-reference §4.15.1).
 
 **Phase 4 — Optional and stretch**

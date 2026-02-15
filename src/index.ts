@@ -305,6 +305,7 @@ async function main(): Promise<void> {
     ...(pmr?.useOnlyValidatedFallbacks === true && {
       providerModelResilience: {
         useOnlyValidatedFallbacks: true,
+        allowOneUnvalidatedAttempt: pmr?.allowOneUnvalidatedAttempt === true,
         ...(pmr.validationStorePath !== undefined &&
           pmr.validationStorePath !== "" && {
             validationStorePath: pmr.validationStorePath

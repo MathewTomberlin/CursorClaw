@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import {
   readValidationStore,
-  resolveValidationStorePath
+  resolveValidationStorePath,
+  type ProviderModelValidationStore
 } from "./provider-model-resilience/validation-store.js";
 import { redactSecrets } from "./security.js";
 import { getProvider } from "./providers/registry.js";
@@ -45,6 +46,8 @@ export interface CursorAgentAdapterModelConfig {
 export interface AdapterProviderModelResilienceConfig {
   useOnlyValidatedFallbacks?: boolean;
   validationStorePath?: string;
+  /** When true and validated chain is empty, allow one attempt with unfiltered chain (log warning). */
+  allowOneUnvalidatedAttempt?: boolean;
 }
 
 export interface CursorAgentAdapterConfig {
@@ -55,6 +58,9 @@ export interface CursorAgentAdapterConfig {
   /** Process cwd for resolving validation store path. Used when providerModelResilience.useOnlyValidatedFallbacks is true. */
   cwd?: string;
 }
+
+/** TTL for in-memory validation store cache to avoid disk read on every sendTurn (reduces input lag). */
+const VALIDATION_STORE_CACHE_TTL_MS = 5_000;
 
 function isRecoverableAdapterError(error: unknown): boolean {
   if (!(error instanceof Error)) {
@@ -73,6 +79,12 @@ export class CursorAgentModelAdapter implements ModelAdapter {
     fallbackAttemptCount: 0,
     lastFallbackError: null as string | null
   };
+  /** Cached validation store to avoid reading disk on every sendTurn when PMR is enabled. */
+  private validationStoreCache: {
+    path: string;
+    store: ProviderModelValidationStore;
+    atMs: number;
+  } | null = null;
 
   constructor(private readonly config: CursorAgentAdapterConfig) {}
 
@@ -128,14 +140,34 @@ export class CursorAgentModelAdapter implements ModelAdapter {
         this.config.providerModelResilience.validationStorePath,
         cwd
       );
-      const store = await readValidationStore(storePath);
+      const now = Date.now();
+      let store: ProviderModelValidationStore;
+      const cached = this.validationStoreCache;
+      if (
+        cached &&
+        cached.path === storePath &&
+        now - cached.atMs < VALIDATION_STORE_CACHE_TTL_MS
+      ) {
+        store = cached.store;
+      } else {
+        store = await readValidationStore(storePath);
+        this.validationStoreCache = { path: storePath, store, atMs: now };
+      }
       const validated = modelChain.filter((id) => store.results[id]?.passed === true);
       if (validated.length === 0) {
-        throw new Error(
-          "no validated model available; run 'npm run validate-model' for candidate models or set providerModelResilience.useOnlyValidatedFallbacks to false"
-        );
+        if (this.config.providerModelResilience?.allowOneUnvalidatedAttempt === true) {
+          this.pushAdapterEventLog(
+            "no validated models; allowing one unvalidated attempt per PMR allowOneUnvalidatedAttempt"
+          );
+          // Leave modelChain as original [session.model, ...fallbackModels]
+        } else {
+          throw new Error(
+            "no validated model available; run 'npm run validate-model' for candidate models or set providerModelResilience.useOnlyValidatedFallbacks to false"
+          );
+        }
+      } else {
+        modelChain = validated;
       }
-      modelChain = validated;
     }
 
     let lastError: unknown;
