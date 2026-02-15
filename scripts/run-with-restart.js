@@ -8,9 +8,11 @@
  *
  * Exit code 42 must match RESTART_EXIT_CODE in src/index.ts.
  */
-const { spawn } = require("node:child_process");
-const path = require("node:path");
+import { spawn } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RESTART_EXIT_CODE = 42;
 const cwd = path.resolve(__dirname, "..");
 
