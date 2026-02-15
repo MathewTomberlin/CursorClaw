@@ -78,9 +78,11 @@ export function mapRpcError(res: { status?: number; error?: RpcError }): string 
   if (res.status === 401) return "Invalid or expired token.";
   if (res.status === 403) return "Forbidden.";
   if (res.status === 404) return "Not found.";
+  if (res.status === 413) return "Request too large (try a shorter thread or clear the chat).";
   if (res.status === 429) return "Rate limited. Please try again later.";
   if (res.error?.code) return mapErrorCode(res.error.code) + (res.error.message ? ` ${res.error.message}` : "");
-  return "Request failed.";
+  const status = res.status !== undefined ? ` (${res.status})` : "";
+  return `Request failed${status}.`;
 }
 
 export async function rpc<T = unknown>(method: string, params?: Record<string, unknown>): Promise<RpcResponse<T>> {
@@ -98,7 +100,16 @@ export async function rpc<T = unknown>(method: string, params?: Record<string, u
       ...(params !== undefined ? { params } : {})
     })
   });
-  const data = (await res.json()) as RpcResponse<T>;
+  let data: RpcResponse<T>;
+  try {
+    data = (await res.json()) as RpcResponse<T>;
+  } catch (parseErr) {
+    const text = await res.text().catch(() => "");
+    const snippet = text.slice(0, 80).replace(/\s+/g, " ");
+    throw new Error(
+      `Invalid response (${res.status}): ${snippet ? snippet + "…" : "empty or non-JSON body"}`
+    );
+  }
   if (!res.ok) {
     const err = new Error(data.error?.message ?? mapRpcError({ status: res.status, error: data.error }));
     (err as unknown as { status: number; rpcCode?: string }).status = res.status;

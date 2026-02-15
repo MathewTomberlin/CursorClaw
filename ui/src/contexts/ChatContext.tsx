@@ -192,7 +192,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
         setError(
           e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } })
         );
-        setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
+        // Keep the user message so they see what they sent and the error
       } finally {
         setLoading(false);
         setLoadingStartedAt(null);

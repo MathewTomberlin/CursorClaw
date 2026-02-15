@@ -167,7 +167,7 @@ export type DeepPartial<T> = {
 export const DEFAULT_CONFIG: CursorClawConfig = {
   gateway: {
     bind: "loopback",
-    bodyLimitBytes: 64 * 1024,
+    bodyLimitBytes: 512 * 1024, // 512 KiB – RPC can include full message history
     auth: { mode: "token", token: "changeme" },
     trustedProxyIps: [],
     protocolVersion: "2.0"
