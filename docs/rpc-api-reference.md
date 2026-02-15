@@ -43,7 +43,7 @@ Optional trusted identity header enforcement:
 }
 ```
 
-**Profile-scoped RPCs:** For multi-agent setups, `params` may include an optional `profileId` string. When present, the request is executed in the context of that agent profile (substrate, memory, approvals, etc.). When omitted, the gateway uses the default profile. Single-agent deployments ignore this and use the single profile. Profile-scoped methods include: `heartbeat.poll`, `heartbeat.getFile`, `heartbeat.update`, `memory.*`, `substrate.*`, `skills.list`, `skills.fetchFromUrl`, `skills.analyze`, `skills.install`, `approval.*`, `cron.list`/`cron.add`, `workspace.status`/`workspace.semantic_search`, `trace.ingest`, `advisor.file_change`/`advisor.explain_function`, and `incident.bundle`. `agent.run` accepts `session.profileId` to run the turn in that profile's context.
+**Profile-scoped RPCs:** For multi-agent setups, `params` may include an optional `profileId` string. When present, the request is executed in the context of that agent profile (substrate, memory, approvals, etc.). When omitted, the gateway uses the default profile. Single-agent deployments ignore this and use the single profile. Profile-scoped methods include: `heartbeat.poll`, `heartbeat.getFile`, `heartbeat.update`, `memory.*`, `substrate.*`, `skills.list`, `skills.fetchFromUrl`, `skills.analyze`, `skills.install`, `skills.credentials.set`, `skills.credentials.delete`, `skills.credentials.list`, `approval.*`, `cron.list`/`cron.add`, `workspace.status`/`workspace.semantic_search`, `trace.ingest`, `advisor.file_change`/`advisor.explain_function`, and `incident.bundle`. `agent.run` accepts `session.profileId` to run the turn in that profile's context.
 
 ### Success response
 
@@ -145,6 +145,9 @@ Method scope rules (`METHOD_SCOPES`):
 - `skills.list`: admin, local
 - `skills.analyze`: admin, local
 - `skills.install`: admin, local
+- `skills.credentials.set`: admin, local
+- `skills.credentials.delete`: admin, local
+- `skills.credentials.list`: admin, local
 
 ---
 
@@ -548,7 +551,37 @@ Fetches (if URL given) or uses provided definition, runs safety check, then runs
 - **Option B:** `definition: object` (required) and `sourceUrl: string` (required) — use pre-fetched definition; `definition` must have `description`, `install`, `credentials`, `usage` (strings).
 - `skillId?: string` — optional id for the skill; default derived from URL path or `"skill"`.
 
-If safety check fails, returns `BAD_REQUEST` with reason. If install script fails, returns `result: { installed: false, skillId, error, stdout, stderr }`. On success returns `result: { installed: true, skillId, credentialNames, stdout, stderr }`. Credential names are parsed from the Credentials section (backticked names); the user can set values later via credential store RPCs (see Agent Skills implementation guide).
+If safety check fails, returns `BAD_REQUEST` with reason. If install script fails, returns `result: { installed: false, skillId, error, stdout, stderr }`. On success returns `result: { installed: true, skillId, credentialNames, stdout, stderr }`. Credential names are parsed from the Credentials section (backticked names); the user can set values via `skills.credentials.set`.
+
+---
+
+### 5.24 `skills.credentials.set`
+
+Stores a credential value for a skill (admin, local). Profile-scoped; requires profile root. Values are never returned to the agent or included in prompts or logs.
+
+`params`: `skillId: string`, `keyName: string`, `value: string`. All required. `skillId` and `keyName` must match `[a-zA-Z0-9_-]+`.
+
+Returns `{ ok: true }`.
+
+---
+
+### 5.25 `skills.credentials.delete`
+
+Removes a credential for a skill (admin, local). Profile-scoped.
+
+`params`: `skillId: string`, `keyName: string`. Both required.
+
+Returns `{ deleted: boolean }` — `true` if the key existed and was removed.
+
+---
+
+### 5.26 `skills.credentials.list`
+
+Lists credential **names** for a skill (no values). Profile-scoped.
+
+`params`: `skillId: string` (required).
+
+Returns `{ names: string[] }`.
 
 ## 6) RPC error codes in practice
 

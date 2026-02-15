@@ -8,6 +8,8 @@ type RunStatus = "pending" | "completed" | "failed" | "interrupted";
 export interface PersistedRunRecord {
   runId: string;
   sessionId: string;
+  /** When set, used to resolve profile root for thread store (append assistant on completion). */
+  profileId?: string;
   status: RunStatus;
   createdAt: string;
   updatedAt: string;
@@ -49,12 +51,13 @@ export class RunStore {
     this.loaded = true;
   }
 
-  async createPending(runId: string, sessionId: string): Promise<void> {
+  async createPending(runId: string, sessionId: string, profileId?: string): Promise<void> {
     await this.ensureLoaded();
     const now = new Date().toISOString();
     this.records.set(runId, {
       runId,
       sessionId,
+      ...(profileId !== undefined ? { profileId } : {}),
       status: "pending",
       createdAt: now,
       updatedAt: now

@@ -11,6 +11,12 @@ import {
 } from "../src/skills/store.js";
 import { analyzeSkillSafety } from "../src/skills/safety.js";
 import { runInstall } from "../src/skills/runner.js";
+import {
+  getCredential,
+  setCredential,
+  deleteCredential,
+  listCredentialNames
+} from "../src/skills/credentials.js";
 import type { SkillDefinition } from "../src/skills/types.js";
 
 describe("skills parser", () => {
@@ -229,5 +235,50 @@ describe("skills runner", () => {
     expect(r.ok).toBe(true);
     expect(r.stdout).toContain("pwd-skill");
     expect(r.stdout).toContain("skills");
+  });
+});
+
+describe("skills credentials", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "cursorclaw-skills-creds-"));
+  });
+
+  it("setCredential and getCredential round-trip", async () => {
+    await setCredential(dir, "my-skill", "API_KEY", "secret-123");
+    const value = await getCredential(dir, "my-skill", "API_KEY");
+    expect(value).toBe("secret-123");
+  });
+
+  it("listCredentialNames returns names only", async () => {
+    await setCredential(dir, "skill-a", "KEY1", "v1");
+    await setCredential(dir, "skill-a", "KEY2", "v2");
+    const names = await listCredentialNames(dir, "skill-a");
+    expect(names.sort()).toEqual(["KEY1", "KEY2"]);
+  });
+
+  it("deleteCredential removes key and returns true", async () => {
+    await setCredential(dir, "skill-b", "TOKEN", "x");
+    const deleted = await deleteCredential(dir, "skill-b", "TOKEN");
+    expect(deleted).toBe(true);
+    expect(await getCredential(dir, "skill-b", "TOKEN")).toBeUndefined();
+    expect(await listCredentialNames(dir, "skill-b")).toEqual([]);
+  });
+
+  it("deleteCredential returns false when key missing", async () => {
+    const deleted = await deleteCredential(dir, "skill-c", "MISSING");
+    expect(deleted).toBe(false);
+  });
+
+  it("rejects invalid skillId", async () => {
+    await expect(setCredential(dir, "bad/skill", "K", "v")).rejects.toThrow(/skillId/);
+    await expect(getCredential(dir, "../etc", "K")).rejects.toThrow(/skillId/);
+    await expect(listCredentialNames(dir, "a b")).rejects.toThrow(/skillId/);
+  });
+
+  it("rejects invalid keyName", async () => {
+    await expect(setCredential(dir, "s", "bad.key", "v")).rejects.toThrow(/keyName/);
+    await expect(deleteCredential(dir, "s", "key with spaces")).rejects.toThrow(/keyName/);
   });
 });

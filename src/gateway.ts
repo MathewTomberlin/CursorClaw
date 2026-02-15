@@ -32,6 +32,7 @@ import type { LifecycleStream } from "./lifecycle-stream/types.js";
 import type { SubstrateStore } from "./substrate/index.js";
 import { DEFAULT_SUBSTRATE_PATHS, SUBSTRATE_DEFAULTS, SUBSTRATE_KEYS } from "./substrate/index.js";
 import type { RpcRequest, RpcResponse, SessionContext } from "./types.js";
+import { getThread, setThread, appendMessage } from "./thread-store.js";
 
 interface PendingRun {
   promise: Promise<TurnResult>;
@@ -78,6 +79,8 @@ export interface GatewayDependencies {
   capabilityStore?: CapabilityStore;
   /** When set, profile-scoped RPCs use this context for the resolved profileId. Single-profile mode: omit or return one context for "default". */
   getProfileContext?: (profileId: string) => ProfileContext | undefined;
+  /** When set, chat thread is persisted per profile/session so desktop and mobile see the same message list. */
+  threadStore?: { getThread: typeof getThread; setThread: typeof setThread; appendMessage: typeof appendMessage };
   onFileChangeSuggestions?: (args: {
     channelId: string;
     files: string[];
@@ -144,10 +147,27 @@ function getEffectiveProfileContext(deps: GatewayDependencies, resolvedProfileId
   };
 }
 
+/** When thread store is present, append the assistant reply to the persisted thread for the run's profile/session. Call before consume(runId). */
+async function appendAssistantToThread(
+  deps: GatewayDependencies,
+  runId: string,
+  result: TurnResult
+): Promise<void> {
+  if (!deps.threadStore || !deps.runStore || !result.assistantText) return;
+  const record = await deps.runStore.get(runId);
+  if (!record?.profileId || !record?.sessionId) return;
+  const profileCtx = getEffectiveProfileContext(deps, record.profileId);
+  await deps.threadStore.appendMessage(profileCtx.profileRoot, record.sessionId, {
+    role: "assistant",
+    content: result.assistantText
+  });
+}
+
 const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
   "agent.run": ["local", "remote", "admin"],
   "agent.wait": ["local", "remote", "admin"],
   "chat.send": ["local", "remote", "admin"],
+  "chat.getThread": ["local", "remote", "admin"],
   "cron.add": ["admin", "local"],
   "cron.list": ["admin", "local"],
   "incident.bundle": ["admin"],
@@ -381,10 +401,13 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           sessionConfig.maxMessagesPerTurn,
           sessionConfig.maxMessageChars
         );
+        if (deps.threadStore) {
+          await deps.threadStore.setThread(profileCtx.profileRoot, session.sessionId, messages);
+        }
         // Runtime compacts via applyUserMessageFreshness; no user-facing message limit.
         const started = deps.runtime.startTurn({ session, messages });
         if (deps.runStore) {
-          await deps.runStore.createPending(started.runId, session.sessionId);
+          await deps.runStore.createPending(started.runId, session.sessionId, session.profileId);
         }
         pendingRuns.set(started.runId, {
           promise: started.promise
@@ -420,6 +443,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
             throw new RpcGatewayError(404, "NOT_FOUND", `runId not found: ${runId}`);
           }
           if (persisted.status === "completed" && persisted.result !== undefined) {
+            await appendAssistantToThread(deps, runId, persisted.result);
             await deps.runStore?.consume(runId);
             result = persisted.result;
           } else if (persisted.status === "pending") {
@@ -430,6 +454,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           }
         } else if (pending.result !== undefined) {
           pendingRuns.delete(runId);
+          await appendAssistantToThread(deps, runId, pending.result);
           await deps.runStore?.consume(runId);
           result = pending.result;
         } else if (pending.error !== undefined) {
@@ -441,11 +466,21 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           try {
             const resolved = await pending.promise;
             result = resolved;
+            await appendAssistantToThread(deps, runId, resolved);
             await deps.runStore?.consume(runId);
           } finally {
             pendingRuns.delete(runId);
           }
         }
+      } else if (body.method === "chat.getThread") {
+        const sessionId = String(body.params?.sessionId ?? "").trim();
+        if (!sessionId) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "sessionId is required");
+        }
+        const messages = deps.threadStore
+          ? await deps.threadStore.getThread(profileCtx.profileRoot, sessionId)
+          : [];
+        result = { messages };
       } else if (body.method === "cron.add") {
         const type = String(body.params?.type ?? "every") as "at" | "every" | "cron";
         const expression = String(body.params?.expression ?? "30m");
@@ -1034,6 +1069,42 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
             stderr: runResult.stderr
           };
         }
+      } else if (body.method === "skills.credentials.set") {
+        if (!profileCtx.profileRoot) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "profile root not configured");
+        }
+        const skillId = typeof body.params?.skillId === "string" ? body.params.skillId.trim() : "";
+        const keyName = typeof body.params?.keyName === "string" ? body.params.keyName.trim() : "";
+        const value = typeof body.params?.value === "string" ? body.params.value : String(body.params?.value ?? "");
+        if (!skillId || !keyName) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "skills.credentials.set requires skillId and keyName");
+        }
+        const { setCredential } = await import("./skills/credentials.js");
+        await setCredential(profileCtx.profileRoot, skillId, keyName, value);
+        result = { ok: true };
+      } else if (body.method === "skills.credentials.delete") {
+        if (!profileCtx.profileRoot) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "profile root not configured");
+        }
+        const skillId = typeof body.params?.skillId === "string" ? body.params.skillId.trim() : "";
+        const keyName = typeof body.params?.keyName === "string" ? body.params.keyName.trim() : "";
+        if (!skillId || !keyName) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "skills.credentials.delete requires skillId and keyName");
+        }
+        const { deleteCredential } = await import("./skills/credentials.js");
+        const deleted = await deleteCredential(profileCtx.profileRoot, skillId, keyName);
+        result = { deleted };
+      } else if (body.method === "skills.credentials.list") {
+        if (!profileCtx.profileRoot) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "profile root not configured");
+        }
+        const skillId = typeof body.params?.skillId === "string" ? body.params.skillId.trim() : "";
+        if (!skillId) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "skills.credentials.list requires skillId");
+        }
+        const { listCredentialNames } = await import("./skills/credentials.js");
+        const names = await listCredentialNames(profileCtx.profileRoot, skillId);
+        result = { names };
       } else if (body.method === "admin.restart") {
         if (!deps.onRestart) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "restart not configured");

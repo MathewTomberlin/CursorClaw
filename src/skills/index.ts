@@ -14,4 +14,10 @@ export {
 } from "./store.js";
 export { runInstall } from "./runner.js";
 export type { RunInstallResult } from "./runner.js";
+export {
+  getCredential,
+  setCredential,
+  deleteCredential,
+  listCredentialNames
+} from "./credentials.js";
 export type { SkillDefinition, InstalledSkillRecord, SkillsManifest } from "./types.js";

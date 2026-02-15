@@ -243,9 +243,9 @@ describe("autonomy orchestrator integration", () => {
 
     orchestrator.start();
     await vi.advanceTimersByTimeAsync(250);
-    for (let i = 0; i < 10; i++) {
-      await Promise.resolve();
-    }
+    vi.useRealTimers();
+    await new Promise((r) => setTimeout(r, 80));
+    vi.useFakeTimers();
     await orchestrator.stop();
     expect(scanCount).toBeGreaterThanOrEqual(1);
     expect(orchestrator.getState().latestIntegrityFindings.length).toBeGreaterThanOrEqual(1);

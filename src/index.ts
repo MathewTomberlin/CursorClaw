@@ -36,6 +36,7 @@ import {
   type SecretDetectorName
 } from "./privacy/secret-scanner.js";
 import { RunStore } from "./run-store.js";
+import { getThread, setThread, appendMessage } from "./thread-store.js";
 import { AgentRuntime } from "./runtime.js";
 import { NetworkTraceCollector } from "./network/trace-collector.js";
 import { FunctionExplainer } from "./reflection/function-explainer.js";
@@ -535,6 +536,7 @@ async function main(): Promise<void> {
     runtime,
     cronService: defaultCtx.cronService,
     ...(runStore !== undefined ? { runStore } : {}),
+    threadStore: { getThread, setThread, appendMessage },
     ...(channelHub !== undefined ? { channelHub } : {}),
     auth,
     rateLimiter,

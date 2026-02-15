@@ -241,9 +241,9 @@ Recommended layout for one profile root `{profileRoot}`:
 
 **Phase S.4 – Credential storage and usage**
 
-- [ ] **S.4.1** Use existing credential/secret system (or add profile-scoped store) so that credentials are keyed by (profileId, skillId, keyName). Agent never receives raw values; runtime resolves when invoking the skill’s tool or API.
-- [ ] **S.4.2** RPCs: e.g. `skills.list`, `skills.credentials.set`, `skills.credentials.delete`, `skills.credentials.list` (names only, no values). All scoped to profile.
-- [ ] **S.4.3** Document that credentials must not appear in substrate, prompts, or logs; enforce in code paths that inject context into the model.
+- [x] **S.4.1** Use existing credential/secret system (or add profile-scoped store) so that credentials are keyed by (profileId, skillId, keyName). Agent never receives raw values; runtime resolves when invoking the skill’s tool or API.
+- [x] **S.4.2** RPCs: e.g. `skills.list`, `skills.credentials.set`, `skills.credentials.delete`, `skills.credentials.list` (names only, no values). All scoped to profile.
+- [x] **S.4.3** Document that credentials must not appear in substrate, prompts, or logs; enforce in code paths that inject context into the model.
 
 **Phase S.5 – User add/update/delete keys**
 
@@ -268,19 +268,78 @@ Recommended layout for one profile root `{profileRoot}`:
 
 ---
 
-## 5) Cross-Cutting and Order of Work
+## 5) Shared Message View (Desktop and Mobile)
 
-- **Implementation order:** Agent Profiles → Provider and Model Selection → Agent Skills.
-- **Testing:** After each phase, run existing test suite; add new tests for multi-profile, new provider, and skill install/safety.
+### 5.1 Goal
+
+- When the user accesses the UI via the **Tailscale address** (e.g. from a phone), they see the **same message list** as on the desktop. Today the chat thread is stored only in the browser’s **sessionStorage**, so each device has a different view.
+- Optionally: a **UI way to set the Tailscale (or bind) address** so the framework can listen only on that address instead of all interfaces, improving security.
+
+### 5.2 Current State
+
+- **Message list:** The UI keeps the conversation in `sessionStorage` keyed by `sessionId` (`ChatContext`: `loadThread` / `saveThread`). No server-side persistence of the thread.
+- **Desktop vs mobile:** Desktop and mobile browsers have separate `sessionStorage`, so they show different (or empty) threads for the same logical session.
+- **Server bind:** Config has `gateway.bind: "loopback" | "0.0.0.0"`. There is no option to bind to a specific address (e.g. Tailscale IP).
+
+### 5.3 Proposed Design
+
+- **Server-side thread store (per profile, per session):** Persist the chat message list under the profile root (e.g. `tmp/threads/{sessionId}.json`) so that any client using the same `profileId` and `sessionId` sees the same thread.
+- **RPC:** `chat.getThread` (params: `sessionId`, optional `profileId`) returns the persisted message list. On `agent.run` start, persist the incoming message list (including the new user message). When the run completes (in `agent.wait`), append the assistant reply to the stored thread.
+- **UI:** On load and when `sessionId` (or profile) changes, call `chat.getThread` and use the result as the source of truth for the message list. Optionally keep sessionStorage as fallback when offline or when the RPC fails.
+- **Bind address (optional):** Add config (e.g. `gateway.bindAddress?: string`) so the server can listen on a specific host (e.g. Tailscale IP) instead of `0.0.0.0`. Expose this in the UI so the user can set it without editing config by hand.
+
+### 5.4 Implementation Phases (Shared Message View)
+
+**Phase V.1 – Server-side thread persistence**
+
+- [ ] **V.1.1** Add a thread store under profile root: e.g. `tmp/threads/` with one file per session (sessionId sanitized to a safe filename). Format: `{ messages: Array<{ id, role, content, at? }> }`.
+- [ ] **V.1.2** API: get thread (profileRoot, sessionId) → messages; set thread (profileRoot, sessionId, messages); append message (profileRoot, sessionId, message). Enforce size/limit to avoid unbounded growth (e.g. max messages per thread, or max bytes).
+
+**Phase V.2 – Gateway and run flow**
+
+- [ ] **V.2.1** At start of `agent.run`, persist the request’s message list to the thread store for (profileId, sessionId). Store profileId in the run record (RunStore) so completion knows which profile to update.
+- [ ] **V.2.2** When `agent.wait` returns successfully, append the assistant message to the thread store for that run’s profile and session.
+- [ ] **V.2.3** New RPC `chat.getThread`: params `sessionId`, optional `profileId`; returns `{ messages }`. Same auth scope as `chat.send` (local/remote/admin).
+
+**Phase V.3 – UI: load thread from server**
+
+- [ ] **V.3.1** In ChatContext, when sessionId (or selected profile) changes, call `chat.getThread` and set the message list from the response. Use sessionStorage only as fallback if the RPC fails or for offline.
+- [ ] **V.3.2** Optional: after sending a message and receiving the reply, the server already updated the thread; on next focus or session switch the client will refetch. No change required if we refetch on session change; optionally refetch after runTurn completes so that multi-tab or multi-device sees the update without changing session.
+
+**Phase V.4 – Optional: Tailscale / bind address**
+
+- [ ] **V.4.1** Config: add `gateway.bindAddress?: string`. When set, listen on that host (and config port) instead of using `gateway.bind` alone. Validate that it is a valid host (IP or hostname).
+- [ ] **V.4.2** UI: in Settings or Dashboard, allow the user to set and save the bind address (e.g. Tailscale IP); persist via config patch. Document that this restricts the server to that interface only.
+
+### 5.5 Success Criteria (Shared Message View)
+
+- [ ] Desktop and mobile (e.g. via Tailscale) see the same message list for the same sessionId and profile: thread is loaded from the server and updated when the user sends messages and the agent replies.
+- [ ] No regression: existing single-device usage still works; sessionId and profile selection behave as today.
+- [ ] Thread store is scoped to profile; path and sessionId are sanitized to prevent traversal and abuse.
+- [ ] Optional: when bind address is set, the server listens only on that address; UI can set it.
+
+### 5.6 Guardrails (Shared Message View)
+
+- **Path safety:** SessionId is sanitized to a safe filename (e.g. alphanumeric, hyphen, underscore only; length limit); thread files live only under profile `tmp/threads/`.
+- **Size limits:** Cap the number of messages (or total size) per thread to avoid disk exhaustion and DoS.
+- **Backward compatibility:** If `chat.getThread` is absent or fails, the UI can fall back to sessionStorage so existing deployments do not break.
+- **Auth:** `chat.getThread` uses the same auth scope as `chat.send`; no exposure of threads to unauthenticated clients.
+
+---
+
+## 6) Cross-Cutting and Order of Work
+
+- **Implementation order:** Agent Profiles → Provider and Model Selection → Agent Skills; then Shared Message View (depends on profile root and gateway).
+- **Testing:** After each phase, run existing test suite; add new tests for multi-profile, new provider, skill install/safety, and shared thread (getThread, persist on run/wait).
 - **Docs:** Update `docs/configuration-reference.md`, `docs/rpc-api-reference.md`, and this file as implementation progresses.
 - **Changelog:** Append a short changelog at the bottom of this document when a phase is completed or the design is revised.
 
 ---
 
-## 6) Document Metadata
+## 7) Document Metadata
 
-- **Version:** 1.0  
-- **Status:** In progress. Phases A.1, A.2, and A.3.1 complete.  
+- **Version:** 1.1  
+- **Status:** In progress. Agent Profiles, Provider/Model, Skills through S.4 complete; Shared Message View (Section 5) added, not yet implemented.  
 - **Changelog (1.0):** Initial guide for Agent Profiles, Agent Skills, and Provider/Model Selection with success criteria and guardrails.
 - **Changelog (1.1):** Phase A.1 implemented: `AgentProfileConfig`, `profiles` in config, `resolveProfileRoot`/`getDefaultProfileId` in config.ts; index.ts and gateway use profile root for substrate, memory, heartbeat, cron, tmp, logs. Single-agent mode unchanged (no `profiles` → profileRoot = workspaceDir).
 - **Changelog (1.2):** Phase A.2 marked complete: index.ts already wires profile root for SubstrateStore.reload, MemoryStore, HEARTBEAT.md and autonomy-state, cron-state, run-store, workflow-state, CLAW_HISTORY.log, and all tmp state files. Success criteria for single/multi-agent and path safety met; tests still pending.
@@ -294,3 +353,5 @@ Recommended layout for one profile root `{profileRoot}`:
 - **Changelog (1.10):** Phase S.1 started. S.1.1: `src/skills/store.ts` — profile layout `skills/installed/` (manifest.json), `skills/credentials/`; ensureSkillsDirs, readInstalledManifest, writeInstalledManifest. S.1.2: `src/skills/types.ts` (SkillDefinition, InstalledSkillRecord), `src/skills/parser.ts` (parseSkillMd for ## Description, Install, Credentials, Usage). S.1.3: gateway RPCs `skills.fetchFromUrl` (params.url → fetch + parse, returns definition + sourceUrl) and `skills.list` (profile-scoped, returns installed list). No install or safety execution yet (S.2/S.3). Tests: tests/skills.test.ts (parser + store). All 177 tests pass.
 - **Changelog (1.11):** Phase S.2 complete. S.2.1: `src/skills/safety.ts` — `analyzeSkillSafety(definition, sourceUrl)` returns `{ allowed, reason }`; rules: no pipe-to-shell without integrity (hash/sha256/sha512), no escalation (sudo, chmod +s, chown root), no write outside profile/skills (/etc, /usr, /bin, etc.). S.2.2: Install (S.3) will gate on safety; fetch/analyze expose result. S.2.3: `skills.fetchFromUrl` response includes `safety`; new RPC `skills.analyze` (params.definition, params.sourceUrl) returns `{ safety }`. Tests: skills.test.ts safety suite (allow/deny cases). All 184 tests pass.
 - **Changelog (1.12):** Phase S.3 complete. S.3.1: `src/skills/runner.ts` — `runInstall(profileRoot, skillId, definition)` runs install block via `bash -s` with cwd `profileRoot/skills/install/<skillId>`, timeout 300s; returns stdout/stderr and exit status. S.3.2: RPC `skills.install` (url or definition+sourceUrl) runs safety then install; on success appends to installed manifest (profile skills/installed/manifest.json). Install is admin-only (implicit operator approval). S.3.3: Credential names extracted from Credentials section via `parseCredentialNames` (backticked names); returned in install result; user sets values via future credentials RPC (S.4/S.5). Added `parseCredentialNames` in parser, `src/skills/index.ts` re-exports. RPC reference and implementation guide updated. All 190 tests pass.
+- **Changelog (1.13):** Phase S.4 complete. S.4.1: `src/skills/credentials.ts` — profile-scoped store: getCredential, setCredential, deleteCredential, listCredentialNames; storage under `skills/credentials/{skillId}.json`; skillId and keyName restricted to `[a-zA-Z0-9_-]+`. S.4.2: RPCs `skills.credentials.set`, `skills.credentials.delete`, `skills.credentials.list` (profile-scoped; list returns names only). S.4.3: Doc and module comment state credentials must not appear in substrate, prompts, or logs; getCredential for runtime resolution only. Tests: skills.test.ts credentials suite. RPC reference updated.
+- **Changelog (1.14):** Section 5 (Shared Message View) added: goal (same message list on desktop and mobile via Tailscale), current state (sessionStorage-only), phases V.1–V.4 (thread store, gateway persist on run/wait, chat.getThread, UI load from server, optional bind address), success criteria and guardrails. Implementation not yet started.
