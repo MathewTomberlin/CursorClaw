@@ -150,6 +150,11 @@ export default function Dashboard() {
                   Building if needed, then restarting. This page will disconnect.
                 </p>
               )}
+              {!restarting && (
+                <p style={{ fontSize: "0.875rem", color: "var(--text-muted)", marginTop: "0.5rem" }}>
+                  Run <code>npm run start:watch</code> so restart keeps the process in the same terminal.
+                </p>
+              )}
               {restartError && <p className="error-msg" style={{ marginTop: "0.5rem" }}>{restartError}</p>}
             </div>
           </>

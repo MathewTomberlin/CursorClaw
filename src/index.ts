@@ -1,4 +1,4 @@
-import { execSync, spawn } from "node:child_process";
+import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
@@ -72,6 +72,9 @@ import { isDevMode, loadConfigFromDisk, validateStartupConfig, resolveConfigPath
 import { AutonomyOrchestrator } from "./orchestrator.js";
 import { WorkspaceCatalog } from "./workspaces/catalog.js";
 import { MultiRootIndexer } from "./workspaces/multi-root-indexer.js";
+
+/** Exit code used when restart is requested; run-with-restart wrapper will re-run the process in the same terminal. */
+export const RESTART_EXIT_CODE = 42;
 
 const STRICT_EXEC_BINS = new Set(["echo", "pwd", "ls", "cat", "node"]);
 const VALID_SECRET_DETECTORS = new Set(DEFAULT_SECRET_SCANNER_DETECTORS);
@@ -483,14 +486,8 @@ async function main(): Promise<void> {
       } catch {
         // Not a git repo or git failed: skip build and just restart
       }
-      const child = spawn("npm", ["start"], {
-        cwd: workspaceDir,
-        detached: true,
-        stdio: "ignore",
-        shell: true
-      });
-      child.unref();
-      setTimeout(() => process.exit(0), 2000);
+      // Exit with RESTART_EXIT_CODE so run-with-restart wrapper (npm run start:watch) re-runs in the same terminal.
+      process.exit(RESTART_EXIT_CODE);
       return { buildRan };
     },
     onActivity: () => {
