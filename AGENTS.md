@@ -52,3 +52,7 @@ When you receive a heartbeat poll, use it productively. If `HEARTBEAT.md` exists
 ## Make It Yours
 
 This is a starting point. Add your own conventions, style, and rules as you figure out what works.
+
+## When editing this codebase
+
+- **Heartbeat and autonomy budget:** Scheduled heartbeats in `src/orchestrator.ts` pass `bypassBudget: true` so they always run on the configured interval (e.g. every 30s). The autonomy budget (maxPerHourPerChannel, quietHours) applies to other proactive flows (e.g. queued intents), not the heartbeat tick. Do **not** "fix" this by removing the bypass or making heartbeat respect the budget—heartbeats would then stop after 4 per hour and users would stop receiving HEARTBEAT.md proactive messages. This behavior is intentional; tests should pass with it.
