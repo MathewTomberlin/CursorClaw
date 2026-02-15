@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getHealth, getStatus, mapRpcError, restartFramework, type StatusPayload } from "../api";
 
 export default function Dashboard() {
@@ -9,30 +9,44 @@ export default function Dashboard() {
   const [restarting, setRestarting] = useState(false);
   const [restartError, setRestartError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setError(null);
-      setLoading(true);
+  const load = useCallback(async () => {
+    setError(null);
+    setLoading(true);
+    const maxAttempts = 3;
+    const delayMs = 800;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         const [h, s] = await Promise.all([getHealth(), getStatus()]);
-        if (!cancelled) {
-          setHealth(h);
-          setStatus(s);
-        }
+        setHealth(h);
+        setStatus(s);
+        setLoading(false);
+        return;
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } }));
-      } finally {
-        if (!cancelled) setLoading(false);
+        if (attempt === maxAttempts) {
+          setError(e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } }));
+        } else {
+          await new Promise((r) => setTimeout(r, delayMs));
+        }
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    }
+    setLoading(false);
   }, []);
 
+  useEffect(() => {
+    load();
+  }, [load]);
+
   if (loading) return <p>Loading…</p>;
-  if (error) return <p className="error-msg">{error}</p>;
+  if (error) {
+    return (
+      <p className="error-msg">
+        {error}
+        <button type="button" className="btn" style={{ marginLeft: "0.75rem" }} onClick={load}>
+          Retry
+        </button>
+      </p>
+    );
+  }
 
   return (
     <>
