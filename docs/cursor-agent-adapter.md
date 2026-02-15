@@ -58,7 +58,7 @@ All output events must match:
 }
 ```
 
-The adapter also accepts `protocol` (version handshake), `system`, `user`, and `thinking` (Cursor CLI stream annotations); these are ignored and not forwarded. Cursor CLI `assistant` events (with `message.content[].text`) are mapped to `assistant_delta` so the reply text is shown. A final `result` event is treated as end-of-turn and converted to a `done` event so the stream is accepted.
+The adapter also accepts `protocol` (version handshake), `system`, `user`, and `thinking` (Cursor CLI stream annotations); these are ignored and not forwarded. Cursor CLI `assistant` events (with `message.content[].text`) are mapped to `assistant_delta` so the reply text is shown. A final `result` event is treated as end-of-turn and converted to a `done` event so the stream is accepted. Cursor CLI `tool_call` events use a different shape (e.g. `tool_call.shellToolCall`) and are skipped—the CLI runs tools internally; only tool calls in the contract shape (`data.name` + `data.args`) are forwarded to the runtime.
 
 ### `assistant_delta`
 

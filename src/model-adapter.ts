@@ -314,7 +314,12 @@ export class CursorAgentModelAdapter implements ModelAdapter {
     if (!parsed || typeof parsed !== "object") {
       throw new Error("malformed frame payload");
     }
-    const candidate = parsed as { type?: string; data?: unknown; message?: { content?: Array<{ type?: string; text?: string }> } };
+    const candidate = parsed as {
+      type?: string;
+      data?: unknown;
+      message?: { content?: Array<{ type?: string; text?: string }> };
+      tool_call?: unknown;
+    };
     if (!candidate.type) {
       throw new Error("malformed frame missing type");
     }
@@ -347,7 +352,25 @@ export class CursorAgentModelAdapter implements ModelAdapter {
       return { type: "done", data: {} };
     }
     if (candidate.type === "tool_call") {
-      this.validateToolCall(candidate.data, tools);
+      if (candidate.tool_call != null) {
+        return null;
+      }
+      const payload = (candidate.data ?? candidate) as { name?: string; args?: unknown };
+      if (
+        payload == null ||
+        typeof payload !== "object" ||
+        typeof payload.name !== "string" ||
+        !payload.name ||
+        !tools.some((t) => t.name === payload.name)
+      ) {
+        return null;
+      }
+      this.validateToolCall(payload, tools);
+      this.pushEventLog(redactSecrets(JSON.stringify(candidate)));
+      return {
+        type: "tool_call",
+        data: candidate.data ?? { name: payload.name, args: payload.args }
+      };
     }
     this.pushEventLog(redactSecrets(JSON.stringify(candidate)));
     return {
