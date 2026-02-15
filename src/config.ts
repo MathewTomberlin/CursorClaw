@@ -77,6 +77,12 @@ export interface ToolsGhConfig {
   repoScope?: string | null;
   /** When true, register gh_pr_write (comment on PR, create PR). Requires tools.gh.enabled. Default false. */
   allowWrite?: boolean;
+  /** Optional (GH.2 soft limit). Max gh_pr_write calls per calendar minute (sliding window). When set, over-limit calls throw before running. */
+  maxWritesPerMinute?: number;
+  /** Optional (GH.2 soft limit). Max gh_pr_write calls per process run. When set, over-limit calls throw before running. */
+  maxWritesPerRun?: number;
+  /** Optional (GH.2 backoff). When true and a write fails with 403 rate limit, retry once after the suggested delay (or 60s). Default false. */
+  respectRetryAfter?: boolean;
 }
 
 export interface ToolsConfig {

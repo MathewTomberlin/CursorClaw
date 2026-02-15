@@ -324,6 +324,9 @@ Fields:
 - **`enabled`:** When `true`, the `gh_pr_read` tool is registered. Default `false`.
 - **`repoScope` (optional):** When set (e.g. `"owner/repo"`), every `gh` call is made with `--repo owner/repo` so the agent cannot target other repositories.
 - **`allowWrite` (optional):** When `true` (and `enabled` is true), the `gh_pr_write` tool is registered. Default `false`. Write operations (comment on PR, create PR) require **approval** and the **mutating** capability (`process.exec.mutate`); see approval workflow and capability store.
+- **`maxWritesPerMinute` (optional):** Soft rate limit: max `gh_pr_write` calls per calendar minute (sliding window). When set, over-limit calls throw before running. Omit for no per-minute cap.
+- **`maxWritesPerRun` (optional):** Soft rate limit: max `gh_pr_write` calls per process run. When set, over-limit calls throw before running. Omit for no per-run cap.
+- **`respectRetryAfter` (optional):** When `true`, if a write fails with GitHub API 403 rate limit, the tool retries once after the suggested delay (or 60s). Default `false`.
 
 **Authentication:** No token is passed in tool arguments or config. The operator must either:
 

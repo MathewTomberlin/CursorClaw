@@ -504,6 +504,55 @@ const GH_PR_WRITE_BODY_MAX_BYTES = 32 * 1024;
 const GH_PR_WRITE_TITLE_MAX_CHARS = 256;
 const GH_PR_WRITE_BODY_MAX_CHARS = GH_PR_WRITE_BODY_MAX_BYTES; // UTF-8 safe for ASCII
 
+const GH_PR_WRITE_RATE_LIMIT_MSG = "gh_pr_write rate limit exceeded";
+
+/** In-process rate limiter for gh_pr_write: optional per-minute (sliding) and per-run caps. */
+export interface GhPrWriteRateLimiter {
+  checkLimit(): void;
+  recordSuccess(): void;
+}
+
+export function createGhPrWriteRateLimiter(options: {
+  maxWritesPerMinute?: number;
+  maxWritesPerRun?: number;
+}): GhPrWriteRateLimiter | null {
+  const { maxWritesPerMinute, maxWritesPerRun } = options;
+  if (maxWritesPerMinute == null && maxWritesPerRun == null) return null;
+  const windowMs = 60_000;
+  const minuteTimestamps: number[] = [];
+  let runCount = 0;
+  return {
+    checkLimit(): void {
+      const now = Date.now();
+      if (maxWritesPerMinute != null) {
+        const since = now - windowMs;
+        const recent = minuteTimestamps.filter((t) => t > since);
+        if (recent.length >= maxWritesPerMinute) {
+          throw new Error(
+            `${GH_PR_WRITE_RATE_LIMIT_MSG} (max ${maxWritesPerMinute} per minute); try again later`
+          );
+        }
+      }
+      if (maxWritesPerRun != null && runCount >= maxWritesPerRun) {
+        throw new Error(
+          `${GH_PR_WRITE_RATE_LIMIT_MSG} (max ${maxWritesPerRun} per run); limit resets when process restarts`
+        );
+      }
+    },
+    recordSuccess(): void {
+      const now = Date.now();
+      if (maxWritesPerMinute != null) {
+        minuteTimestamps.push(now);
+        const since = now - windowMs;
+        while (minuteTimestamps.length > 0 && (minuteTimestamps[0] ?? 0) <= since) {
+          minuteTimestamps.shift();
+        }
+      }
+      if (maxWritesPerRun != null) runCount += 1;
+    }
+  };
+}
+
 function sanitizeGhPrWriteString(s: string, maxChars: number, field: string): string {
   const noControl = s.replace(/[\x00-\x1f\x7f]/g, " ").trim();
   if (noControl.length === 0) {
@@ -515,6 +564,14 @@ function sanitizeGhPrWriteString(s: string, maxChars: number, field: string): st
   return noControl;
 }
 
+/** Parses Retry-After (seconds) from gh stderr if present. Returns undefined if not found. */
+function parseRetryAfterSeconds(stderr: string): number | undefined {
+  const m = stderr.match(/retry[- ]after[:\s]+(\d+)/i);
+  const sec = m?.[1];
+  if (sec == null) return undefined;
+  return Math.min(300, Math.max(1, Number.parseInt(sec, 10)));
+}
+
 /** GitHub PR write tool: comment on PR and create PR. Auth via host `gh auth` or GH_TOKEN in env; no token in args. Requires mutating approval. */
 export function createGhPrWriteTool(args: {
   approvalGate: ApprovalGate;
@@ -522,10 +579,15 @@ export function createGhPrWriteTool(args: {
   repoScope?: string;
   sandbox?: ExecSandbox;
   maxBufferBytes?: number;
+  rateLimiter?: GhPrWriteRateLimiter | null;
+  /** When true, on 403 rate-limit response retry once after suggested delay (or 60s). Default false. */
+  respectRetryAfter?: boolean;
 }): ToolDefinition {
   const sandbox: ExecSandbox = args.sandbox ?? new HostExecSandbox();
   const maxBuffer = args.maxBufferBytes ?? 64 * 1024;
   const repoFlag = args.repoScope ? ["--repo", args.repoScope] : [];
+  const rateLimiter = args.rateLimiter ?? null;
+  const respectRetryAfter = args.respectRetryAfter === true;
 
   return {
     name: "gh_pr_write",
@@ -605,11 +667,42 @@ export function createGhPrWriteTool(args: {
         const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
         throw new Error(`gh_pr_write requires approval${suffix}`);
       }
-      const result = await sandbox.run("gh", ghArgs, {
-        cwd: args.workspaceCwd,
-        maxBufferBytes: maxBuffer,
-        timeoutMs: 15_000
-      });
+      rateLimiter?.checkLimit();
+
+      const runOnce = async () => {
+        return await sandbox.run("gh", ghArgs, {
+          cwd: args.workspaceCwd,
+          maxBufferBytes: maxBuffer,
+          timeoutMs: 15_000
+        });
+      };
+
+      let result = await runOnce();
+      const stderr = result.stderr ?? "";
+      const isRateLimit =
+        result.code !== 0 &&
+        (stderr.includes("403") || /rate[- ]?limit/i.test(stderr));
+      if (isRateLimit && respectRetryAfter) {
+        const retryAfterSec = parseRetryAfterSeconds(stderr) ?? 60;
+        await new Promise((r) => setTimeout(r, retryAfterSec * 1000));
+        result = await runOnce();
+      }
+
+      const resultStderr = result.stderr ?? "";
+      if (result.code !== 0 && (resultStderr.includes("403") || /rate[- ]?limit/i.test(resultStderr))) {
+        const retrySec = parseRetryAfterSeconds(resultStderr);
+        const hint = retrySec != null ? `; retry after ${retrySec}s` : "";
+        throw new Error(
+          `gh_pr_write failed: GitHub API rate limit (403)${hint}. ${resultStderr.trim() || "See stderr for details."}`
+        );
+      }
+
+      if (result.code !== 0) {
+        const errOut = (result.stderr ?? "").trim() || (result.stdout ?? "").trim() || "unknown";
+        throw new Error(`gh_pr_write failed (exit ${result.code}): ${errOut}`);
+      }
+
+      rateLimiter?.recordSuccess();
       return { stdout: result.stdout, stderr: result.stderr };
     }
   };
