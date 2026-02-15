@@ -684,13 +684,20 @@ export class AgentRuntime {
     return this.queue.enqueue(pending);
   }
 
+  /** Cache key so switching profile (e.g. Ollama → Cursor CLI) gets a new session with the correct model. */
+  private sessionHandleKey(context: SessionContext): string {
+    const profileId = context.profileId ?? getDefaultProfileId(this.options.config);
+    return `${profileId}:${context.sessionId}`;
+  }
+
   private async ensureModelSession(context: SessionContext) {
-    const stored = this.sessionHandles.get(context.sessionId);
+    const key = this.sessionHandleKey(context);
+    const stored = this.sessionHandles.get(key);
     if (stored) return stored;
     const profileId = context.profileId ?? getDefaultProfileId(this.options.config);
     const modelId = getModelIdForProfile(this.options.config, profileId);
     const handle = await this.options.adapter.createSession(context, { modelId });
-    this.sessionHandles.set(context.sessionId, {
+    this.sessionHandles.set(key, {
       id: handle.id,
       model: handle.model,
       ...(handle.authProfile !== undefined ? { authProfile: handle.authProfile } : {})
