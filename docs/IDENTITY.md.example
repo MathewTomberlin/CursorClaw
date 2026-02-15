@@ -1,0 +1,4 @@
+# Identity (example)
+# Copy to workspace root as IDENTITY.md. Do not put secrets here.
+
+Who am I? Name, role, boundaries, scope. This file is included in the agent system prompt.

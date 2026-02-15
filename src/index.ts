@@ -70,6 +70,8 @@ import {
 } from "./tools.js";
 import { isDevMode, loadConfigFromDisk, validateStartupConfig, resolveConfigPath } from "./config.js";
 import { AutonomyOrchestrator } from "./orchestrator.js";
+import { loadSubstrate, SubstrateStore } from "./substrate/index.js";
+import type { SubstrateContent } from "./substrate/index.js";
 import { WorkspaceCatalog } from "./workspaces/catalog.js";
 import { MultiRootIndexer } from "./workspaces/multi-root-indexer.js";
 
@@ -283,6 +285,15 @@ async function main(): Promise<void> {
   });
   let recentBackgroundTestsPassing = false;
 
+  const substrateStore = new SubstrateStore();
+  try {
+    await substrateStore.reload(workspaceDir, config.substrate);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn("[CursorClaw] substrate load failed, continuing with empty:", (err as Error).message);
+  }
+  const getSubstrate = (): SubstrateContent => substrateStore.get();
+
   const lifecycleStream = new InMemoryLifecycleStream();
   const runtime = new AgentRuntime({
     config,
@@ -312,7 +323,8 @@ async function main(): Promise<void> {
       : {}),
     privacyScrubber,
     lifecycleStream,
-    snapshotDir: join(workspaceDir, "tmp", "snapshots")
+    snapshotDir: join(workspaceDir, "tmp", "snapshots"),
+    getSubstrate
   });
 
   const cronService = new CronService({
@@ -473,6 +485,8 @@ async function main(): Promise<void> {
     approvalWorkflow,
     capabilityStore,
     lifecycleStream,
+    workspaceDir,
+    substrateStore,
     ...(existsSync(uiDist) ? { uiDistPath: uiDist } : {}),
     onRestart: async () => {
       // Exit with RESTART_EXIT_CODE so run-with-restart wrapper runs build then start in the same terminal.
@@ -645,7 +659,27 @@ async function main(): Promise<void> {
       });
     },
     onHeartbeatTurn: async (channelId) => {
+      // Heartbeat turn uses the same runtime.runTurn → buildPromptMessages path, so Identity and Soul
+      // (and optional User/Birth/Capabilities) are already in the system prompt. HEARTBEAT.md is the
+      // per-tick checklist and is prepended to the heartbeat user message below.
       const heartbeatPath = join(workspaceDir, "HEARTBEAT.md");
+      const skipWhenEmpty = config.heartbeat.skipWhenEmpty === true;
+      if (skipWhenEmpty) {
+        if (!existsSync(heartbeatPath)) {
+          return "HEARTBEAT_OK";
+        }
+        const fileContent = await readFile(heartbeatPath, "utf8");
+        const trimmed = fileContent.trim();
+        const hasSubstantiveLine = trimmed
+          .split(/\n/)
+          .some((line) => {
+            const s = line.trim();
+            return s.length > 0 && !s.startsWith("#");
+          });
+        if (!hasSubstantiveLine) {
+          return "HEARTBEAT_OK";
+        }
+      }
       const baseInstruction =
         config.heartbeat.prompt ?? "If no action needed, reply HEARTBEAT_OK.";
       let content: string;

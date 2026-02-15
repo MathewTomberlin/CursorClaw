@@ -31,6 +31,7 @@ Implemented primarily in `src/runtime.ts`.
    - optional deep scan (`DeepScanService`)
    - optional confidence gate (`ConfidenceModel`) that can return a human-hint request before model invocation
 4. Prompt is assembled from:
+   - optional substrate (Identity, Soul, User in main session, Birth on first turn, optional Capabilities/Tools summary) when `config.substrate` is set; see `src/substrate/` and docs/configuration-reference.md §4.16
    - fresh user messages (last 8 max)
    - contradiction annotations
    - multi-path/deep-scan system hints

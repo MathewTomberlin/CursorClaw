@@ -25,6 +25,7 @@ import { scoreInboundRisk } from "./security.js";
 import type { QueueBackend } from "./queue/types.js";
 import { InMemoryQueueBackend } from "./queue/in-memory-backend.js";
 import type { LifecycleStream } from "./lifecycle-stream/types.js";
+import type { SubstrateContent } from "./substrate/index.js";
 import type { PolicyDecisionLog, SessionContext, ToolCall } from "./types.js";
 import { ToolRouter, classifyCommandIntent } from "./tools.js";
 
@@ -175,6 +176,8 @@ export interface AgentRuntimeOptions {
   lifecycleStream?: LifecycleStream;
   snapshotDir: string;
   onEvent?: (event: RuntimeEvent) => void;
+  /** When set, used each turn to get current substrate (Identity, Soul, etc.) for the system prompt. */
+  getSubstrate?: () => SubstrateContent;
 }
 
 export class AgentRuntime {
@@ -192,6 +195,8 @@ export class AgentRuntime {
   private readonly touchedFileHintsBySession = new Map<string, Set<string>>();
   private readonly multiPathResolutionEvents: Array<{ at: number; outcome: "success" | "failure" }> = [];
   private static readonly MULTI_PATH_RESOLUTION_MAX = 100;
+  /** Session IDs that have had at least one turn (used to inject BIRTH only on first turn per session). */
+  private readonly sessionsWithTurn = new Set<string>();
 
   constructor(private readonly options: AgentRuntimeOptions) {
     const queueBackend = options.queueBackend ?? new InMemoryQueueBackend();
@@ -659,6 +664,66 @@ export class AgentRuntime {
       content: this.scrubText(message.content, scopeId)
     }));
     const systemMessages: Array<{ role: string; content: string }> = [];
+
+    const substrate = this.options.getSubstrate?.() ?? {};
+    if (substrate.identity?.trim()) {
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(`Identity:\n\n${substrate.identity.trim()}`, scopeId)
+      });
+    }
+    if (substrate.soul?.trim()) {
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(`Soul:\n\n${substrate.soul.trim()}`, scopeId)
+      });
+    }
+    const isMainSession = request.session.channelKind === "web";
+    if (substrate.user?.trim() && isMainSession) {
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(`User:\n\n${substrate.user.trim()}`, scopeId)
+      });
+    }
+
+    const isFirstTurnThisSession = !this.sessionsWithTurn.has(request.session.sessionId);
+    if (isFirstTurnThisSession) {
+      this.sessionsWithTurn.add(request.session.sessionId);
+    }
+    if (substrate.birth?.trim() && isFirstTurnThisSession) {
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(`Bootstrap (BIRTH):\n\n${substrate.birth.trim()}`, scopeId)
+      });
+    }
+
+    const includeCapabilitiesInPrompt =
+      this.options.config.substrate?.includeCapabilitiesInPrompt === true;
+    if (includeCapabilitiesInPrompt && substrate.capabilities?.trim()) {
+      const capText = substrate.capabilities.trim();
+      const summary =
+        capText.length <= 500 ? capText : `${capText.slice(0, 497)}...`;
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(
+          `Capabilities (summary, subject to approval):\n\n${summary}`,
+          scopeId
+        )
+      });
+    }
+    if (substrate.tools?.trim()) {
+      const toolsText = substrate.tools.trim();
+      const summary =
+        toolsText.length <= 400 ? toolsText : `${toolsText.slice(0, 397)}...`;
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(
+          `Tools (local notes, not enforcement):\n\n${summary}`,
+          scopeId
+        )
+      });
+    }
+
     if (freshness.summaryLine) {
       systemMessages.push({
         role: "system",

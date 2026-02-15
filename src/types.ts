@@ -156,6 +156,8 @@ export interface HeartbeatConfig {
   visibility: "silent" | "visible";
   /** Optional custom instruction for the heartbeat turn. When HEARTBEAT.md exists, this is appended after its content. */
   prompt?: string;
+  /** When true, skip issuing a heartbeat API call when HEARTBEAT.md is missing, empty, or contains only comments/whitespace. Default false (backward compatible). */
+  skipWhenEmpty?: boolean;
 }
 
 export interface AutonomyBudgetConfig {

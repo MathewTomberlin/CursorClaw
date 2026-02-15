@@ -132,6 +132,18 @@ export interface MetricsConfig {
   intervalSeconds?: number;
 }
 
+/** Optional substrate file paths (workspace-relative). Defaults: IDENTITY.md, SOUL.md, BIRTH.md, CAPABILITIES.md, USER.md, TOOLS.md in workspace root. */
+export interface SubstrateConfig {
+  identityPath?: string;
+  soulPath?: string;
+  birthPath?: string;
+  capabilitiesPath?: string;
+  userPath?: string;
+  toolsPath?: string;
+  /** When true, include a short capabilities summary in the system prompt (default false). */
+  includeCapabilitiesInPrompt?: boolean;
+}
+
 export interface CursorClawConfig {
   gateway: GatewayConfig;
   session: SessionConfig;
@@ -154,6 +166,8 @@ export interface CursorClawConfig {
     maxPerDayPerChannel: number;
     quietHours?: { startHour: number; endHour: number };
   };
+  /** Optional. When present, substrate files (Identity, Soul, Birth, etc.) are loaded from workspace and injected into the prompt. */
+  substrate?: SubstrateConfig;
 }
 
 export type DeepPartial<T> = {

@@ -44,7 +44,8 @@ Dev-mode detection:
   "tools": {},
   "models": {},
   "defaultModel": "cursor-auto",
-  "autonomyBudget": {}
+  "autonomyBudget": {},
+  "substrate": {}
 }
 ```
 
@@ -112,6 +113,8 @@ Defaults:
 Optional:
 
 - `activeHours: { "startHour": number, "endHour": number }`
+- `prompt`: custom instruction for the heartbeat turn (appended after HEARTBEAT.md content).
+- `skipWhenEmpty`: when `true`, do not issue a heartbeat API call when HEARTBEAT.md is missing, empty, or contains only comment lines (default `false` for backward compatibility).
 
 ## 4.4 `compaction`
 
@@ -338,6 +341,43 @@ Optional:
   }
 }
 ```
+
+## 4.16 `substrate`
+
+Optional. When present, workspace markdown files (Identity, Soul, Birth, etc.) are loaded at startup and injected into the system prompt for every turn, including heartbeat.
+
+Path defaults (workspace root): `IDENTITY.md`, `SOUL.md`, `BIRTH.md`, `CAPABILITIES.md`, `USER.md`, `TOOLS.md`.
+
+```json
+{
+  "substrate": {
+    "identityPath": "IDENTITY.md",
+    "soulPath": "SOUL.md",
+    "birthPath": "BIRTH.md",
+    "capabilitiesPath": "CAPABILITIES.md",
+    "userPath": "USER.md",
+    "toolsPath": "TOOLS.md",
+    "includeCapabilitiesInPrompt": false
+  }
+}
+```
+
+- **Identity and Soul:** When the files exist, their content is prepended to the system prompt (Identity first, then Soul) for every turn, including heartbeat. This gives the agent consistent identity and tone.
+- **USER.md:** Injected only in main session (web channel). Contains information about the human (name, timezone, preferences). Do not put secrets here; treat as private.
+- **BIRTH (Bootstrap):** Injected only on the first turn per session (e.g. "wake" behavior). Not repeated on later turns.
+- **Capabilities:** When `includeCapabilitiesInPrompt` is `true` and `CAPABILITIES.md` exists, a short summary (up to 500 chars) is appended to the system prompt. Informational only; `CapabilityStore` and approval workflow remain the source of truth for tool execution.
+- If `substrate` is absent, no substrate loading occurs (backward compatible). Substrate loading must not block startup; on loader failure, the process continues with empty substrate.
+
+**Guardrail:** Substrate files are included in the agent prompt. Do not put secrets in IDENTITY.md, SOUL.md, BIRTH.md, CAPABILITIES.md, USER.md, or TOOLS.md.
+
+### Substrate and heartbeat
+
+- **HEARTBEAT.md** is the per-tick checklist: read from the workspace on each heartbeat turn and prepended to the heartbeat user message (with `heartbeat.prompt` appended). Same as before; not part of the substrate loader.
+- **Identity and Soul** are in the system prompt for every turn, including heartbeat, so the agent that interprets the checklist has consistent identity and behavior.
+- **BIRTH** is included only on the first turn per session; heartbeat reuses the same session, so BIRTH is not re-injected on every heartbeat.
+- When **HEARTBEAT.md** is missing, empty, or comments-only, set `heartbeat.skipWhenEmpty: true` to skip issuing a heartbeat API call for that cycle; see `heartbeat` section.
+
+**BOOT.md (future):** Short startup instructions; when implemented, would run at process/gateway startup (e.g. send welcome, run check). Not injected into the chat system prompt. Optional memory layer (MEMORY.md, memory/YYYY-MM-DD.md) for session-start continuity is documented as future work in the implementation spec.
 
 ## 5) Environment variables used at runtime
 

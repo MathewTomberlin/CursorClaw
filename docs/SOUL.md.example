@@ -1,0 +1,5 @@
+# Soul (example)
+# Copy to workspace root as SOUL.md. Do not put secrets here.
+
+Personality, tone, values, how to respond and when to stay silent.
+Persistence is file-based: write important decisions and "remember this" to memory files (e.g. memory/YYYY-MM-DD.md or MEMORY.md) so they survive session restarts.

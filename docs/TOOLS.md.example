@@ -1,0 +1,4 @@
+# Tools – local notes (example)
+# Copy to workspace root as TOOLS.md. Environment-specific notes only; not used for capability enforcement.
+
+Device nicknames, speaker/room names, TTS voices, SSH hosts/aliases, camera names. Separate from skills.

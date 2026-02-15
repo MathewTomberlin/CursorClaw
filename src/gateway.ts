@@ -20,6 +20,8 @@ import {
   scoreInboundRisk
 } from "./security.js";
 import type { LifecycleStream } from "./lifecycle-stream/types.js";
+import type { SubstrateStore } from "./substrate/index.js";
+import { DEFAULT_SUBSTRATE_PATHS, SUBSTRATE_DEFAULTS, SUBSTRATE_KEYS } from "./substrate/index.js";
 import type { RpcRequest, RpcResponse, SessionContext } from "./types.js";
 
 interface PendingRun {
@@ -88,6 +90,10 @@ export interface GatewayDependencies {
   uiDistPath?: string;
   /** When admin.restart is called, exit with RESTART_EXIT_CODE so the start:watch wrapper runs build then start. */
   onRestart?: () => Promise<{ buildRan?: boolean } | void>;
+  /** Workspace root (for substrate.update path resolution). */
+  workspaceDir?: string;
+  /** When substrate config is present, store for list/get/update/reload. */
+  substrateStore?: SubstrateStore;
 }
 
 const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
@@ -106,7 +112,11 @@ const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
   "trace.ingest": ["local", "remote", "admin"],
   "advisor.explain_function": ["local", "remote", "admin"],
   "config.get": ["admin", "local"],
-  "admin.restart": ["admin", "local"]
+  "admin.restart": ["admin", "local"],
+  "substrate.list": ["admin", "local"],
+  "substrate.get": ["admin", "local"],
+  "substrate.update": ["admin", "local"],
+  "substrate.reload": ["admin", "local"]
 };
 
 export function buildGateway(deps: GatewayDependencies): FastifyInstance {
@@ -567,6 +577,86 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
             }
           }
         };
+      } else if (body.method === "substrate.list") {
+        if (!deps.substrateStore) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "substrate not configured");
+        }
+        const pathKeys: Record<string, string> = { ...DEFAULT_SUBSTRATE_PATHS };
+        const sub = deps.config.substrate;
+        if (sub) {
+          if (sub.identityPath) pathKeys.identityPath = sub.identityPath;
+          if (sub.soulPath) pathKeys.soulPath = sub.soulPath;
+          if (sub.birthPath) pathKeys.birthPath = sub.birthPath;
+          if (sub.capabilitiesPath) pathKeys.capabilitiesPath = sub.capabilitiesPath;
+          if (sub.userPath) pathKeys.userPath = sub.userPath;
+          if (sub.toolsPath) pathKeys.toolsPath = sub.toolsPath;
+        }
+        result = {
+          keys: SUBSTRATE_KEYS.map((key) => {
+            const pathKey = `${key}Path`;
+            const path = pathKeys[pathKey];
+            const content = deps.substrateStore!.get();
+            return {
+              key,
+              path: path ?? DEFAULT_SUBSTRATE_PATHS[pathKey as keyof typeof DEFAULT_SUBSTRATE_PATHS],
+              present: (content as Record<string, string | undefined>)[key] != null
+            };
+          })
+        };
+      } else if (body.method === "substrate.get") {
+        if (!deps.substrateStore) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "substrate not configured");
+        }
+        const key = body.params?.key !== undefined ? String(body.params.key) : undefined;
+        const content = deps.substrateStore.get();
+        const withDefaults = (c: Record<string, string | undefined>) => {
+          const out: Record<string, string> = {};
+          for (const k of SUBSTRATE_KEYS) {
+            const v = c[k];
+            out[k] = (v != null && v.trim() !== "" ? v : SUBSTRATE_DEFAULTS[k]) ?? "";
+          }
+          return out;
+        };
+        if (key !== undefined) {
+          const value = (content as Record<string, string | undefined>)[key];
+          const resolved =
+            value != null && value.trim() !== ""
+              ? value
+              : (SUBSTRATE_DEFAULTS[key] ?? "");
+          result = { [key]: resolved };
+        } else {
+          result = withDefaults(content as Record<string, string | undefined>);
+        }
+      } else if (body.method === "substrate.update") {
+        if (!deps.substrateStore || !deps.workspaceDir) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "substrate not configured");
+        }
+        const key = String(body.params?.key ?? "").trim();
+        const content = String(body.params?.content ?? "");
+        if (!key) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "key is required");
+        }
+        try {
+          await deps.substrateStore.writeKey(
+            deps.workspaceDir,
+            deps.config.substrate,
+            key,
+            content
+          );
+          result = { ok: true };
+        } catch (err) {
+          const msg = (err as Error).message;
+          if (msg.includes("Invalid substrate key") || msg.includes("under workspace")) {
+            throw new RpcGatewayError(400, "BAD_REQUEST", msg);
+          }
+          throw err;
+        }
+      } else if (body.method === "substrate.reload") {
+        if (!deps.substrateStore || !deps.workspaceDir) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "substrate not configured");
+        }
+        await deps.substrateStore.reload(deps.workspaceDir, deps.config.substrate);
+        result = { ok: true };
       } else if (body.method === "admin.restart") {
         if (!deps.onRestart) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "restart not configured");

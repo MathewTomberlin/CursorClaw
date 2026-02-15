@@ -127,6 +127,10 @@ Method scope rules (`METHOD_SCOPES`):
 - `trace.ingest`: local, remote, admin
 - `advisor.explain_function`: local, remote, admin
 - `config.get`: admin, local
+- `substrate.list`: admin, local
+- `substrate.get`: admin, local
+- `substrate.update`: admin, local
+- `substrate.reload`: admin, local
 
 ---
 
@@ -400,6 +404,58 @@ Returns current runtime config with secrets redacted (admin, local).
 No params.
 
 Returns the same shape as [Configuration Reference](configuration-reference.md); `gateway.auth.token` and `gateway.auth.password` are replaced with `{ redacted: true, length?: number }`.
+
+---
+
+### 5.16 `substrate.list`
+
+Returns which substrate files exist and their workspace-relative paths (admin, local). Requires substrate config to be present.
+
+No params.
+
+Returns:
+
+```json
+{
+  "keys": [
+    { "key": "identity", "path": "IDENTITY.md", "present": true },
+    { "key": "soul", "path": "SOUL.md", "present": false }
+  ]
+}
+```
+
+---
+
+### 5.17 `substrate.get`
+
+Returns substrate content for the UI. If `key` is omitted, returns full `SubstrateContent`; if `key` is provided, returns `{ [key]: string | undefined }` (admin, local).
+
+`params`:
+
+- `key?`: `"identity" | "soul" | "birth" | "capabilities" | "user" | "tools"` (optional)
+
+Edits take effect on the next agent turn without restart (runtime reads from store each turn).
+
+---
+
+### 5.18 `substrate.update`
+
+Writes content for one substrate key to the workspace file and updates the in-memory cache (admin, local). Path is resolved from config; must be under workspace root. Only allowed keys: identity, soul, birth, capabilities, user, tools.
+
+`params`:
+
+- `key: string` (required)
+- `content: string` (required)
+
+Returns `{ ok: true }`. On path traversal or invalid key, returns `BAD_REQUEST`. Do not put secrets in substrate files; they are included in the agent prompt.
+
+---
+
+### 5.19 `substrate.reload`
+
+Re-reads all substrate files from disk and replaces the in-memory cache (admin, local). Use when files were edited outside the UI so the next turn uses the new content.
+
+No params. Returns `{ ok: true }`.
 
 ## 6) RPC error codes in practice
 

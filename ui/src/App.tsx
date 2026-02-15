@@ -9,6 +9,7 @@ import Cron from "./pages/Cron";
 import Workspace from "./pages/Workspace";
 import Incidents from "./pages/Incidents";
 import Config from "./pages/Config";
+import Substrate from "./pages/Substrate";
 import Trace from "./pages/Trace";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -50,6 +51,9 @@ function Shell() {
           <NavLink to="/config" className={({ isActive }) => (isActive ? "active" : "")}>
             Config
           </NavLink>
+          <NavLink to="/substrate" className={({ isActive }) => (isActive ? "active" : "")}>
+            Substrate
+          </NavLink>
           <NavLink to="/trace" className={({ isActive }) => (isActive ? "active" : "")}>
             Trace
           </NavLink>
@@ -63,6 +67,7 @@ function Shell() {
             <Route path="/workspace" element={<Workspace />} />
             <Route path="/incidents" element={<Incidents />} />
             <Route path="/config" element={<Config />} />
+            <Route path="/substrate" element={<Substrate />} />
             <Route path="/trace" element={<Trace />} />
           </Routes>
         </main>
