@@ -399,7 +399,11 @@ export class AgentRuntime {
           const modelId = getModelIdForProfile(this.options.config, profileId);
           const modelConfig = this.options.config.models[modelId];
           if (modelConfig?.maxContextTokens !== undefined && modelConfig.maxContextTokens > 0) {
-            promptMessages = applyMaxContextTokens(promptMessages, modelConfig.maxContextTokens);
+            promptMessages = applyMaxContextTokens(
+              promptMessages,
+              modelConfig.maxContextTokens,
+              modelConfig.truncationPriority
+            );
           }
           const lastUserContent =
             request.messages.filter((m) => m.role === "user").pop()?.content ?? "";

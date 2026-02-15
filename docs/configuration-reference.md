@@ -321,7 +321,8 @@ Model object fields:
 - `authProfiles: string[]`
 - `fallbackModels: string[]`
 - `enabled: boolean`
-- `maxContextTokens?: number` — Optional per-model context token cap. When set, the runtime trims the prompt by dropping oldest messages (system first) so the estimated token count does not exceed this value. Estimation is best-effort (~4 characters per token). If the last user message alone exceeds the cap, it is still sent (only older content is trimmed).
+- `maxContextTokens?: number` — Optional per-model context token cap. When set, the runtime trims the prompt so the estimated token count does not exceed this value. Estimation is best-effort (~4 characters per token). The last message is always kept. By default, oldest messages are dropped first (TU.2). With `truncationPriority`, drop order is configurable (TU.3).
+- `truncationPriority?: ("system"|"user"|"assistant")[]` — Optional. When set with `maxContextTokens`, roles listed first are dropped first when over the cap (e.g. `["assistant","user","system"]` drops assistant messages first, then user, then system). Omit for oldest-first behavior.
 
 ## 4.15 `autonomyBudget`
 
@@ -425,7 +426,7 @@ The runtime limits prompt size in several places. There is **no per-model or per
 - **continuity.sessionMemoryCap** (default 32_000): Cap on session-start memory injection (MEMORY.md + memory/today+yesterday) in characters. See § 4.17 and docs/memory.md.
 - **Runtime system prompt budget:** The runtime applies `applySystemPromptBudget`: each system message is capped at `session.maxMessageChars`, and the combined system messages are capped at about 1.5× that value (total system budget). Excess is truncated (conversation history and optional context are trimmed first; core system blocks are preserved in the current implementation).
 
-So critical system blocks (AGENTS, SOUL, USER, memory summary) are preserved up to the per-message and total budget. Per-model `maxContextTokens` (see models section) can cap total context before sending to small-context models (e.g. 8K local models). Future work may add priority-aware truncation.
+So critical system blocks (AGENTS, SOUL, USER, memory summary) are preserved up to the per-message and total budget. Per-model `maxContextTokens` (see models section) can cap total context before sending to small-context models (e.g. 8K local models). Optional `truncationPriority` (TU.3) controls which roles are dropped first when over the cap.
 
 ## 5) Environment variables used at runtime
 
