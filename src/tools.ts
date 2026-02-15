@@ -428,6 +428,78 @@ export function createExecTool(args: {
   };
 }
 
+/** Read-only GitHub PR tool: gh pr list and gh pr view. Auth via host `gh auth` or GH_TOKEN in env; no token in args. */
+export function createGhPrReadTool(args: {
+  approvalGate: ApprovalGate;
+  workspaceCwd: string;
+  repoScope?: string;
+  sandbox?: ExecSandbox;
+  maxBufferBytes?: number;
+}): ToolDefinition {
+  const sandbox: ExecSandbox = args.sandbox ?? new HostExecSandbox();
+  const maxBuffer = args.maxBufferBytes ?? 64 * 1024;
+  const repoFlag = args.repoScope ? ["--repo", args.repoScope] : [];
+
+  return {
+    name: "gh_pr_read",
+    description:
+      "Read pull request information via GitHub CLI. List open PRs or view a single PR by number or branch. Uses host-configured auth (gh auth login or GH_TOKEN in env). Only pr list and pr view are allowed.",
+    schema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["list", "view"] },
+        number: { type: "number", description: "PR number (for action view)" },
+        branch: { type: "string", description: "Branch name (for action view, alternative to number)" },
+        state: { type: "string", enum: ["open", "closed", "all"], description: "For list: filter by state (default open)" },
+        limit: { type: "number", description: "For list: max number of PRs to return (e.g. 30)" }
+      },
+      required: ["action"],
+      additionalProperties: false
+    },
+    riskLevel: "low",
+    execute: async (rawArgs: unknown, ctx?: ToolExecuteContext) => {
+      const parsed = rawArgs as { action: string; number?: number; branch?: string; state?: string; limit?: number };
+      if (parsed.action !== "list" && parsed.action !== "view") {
+        throw new Error("gh_pr_read: action must be list or view");
+      }
+      let ghArgs: string[];
+      if (parsed.action === "list") {
+        ghArgs = ["pr", "list", ...repoFlag];
+        if (parsed.state) ghArgs.push("--state", parsed.state);
+        if (parsed.limit != null && Number.isInteger(parsed.limit) && parsed.limit > 0) {
+          ghArgs.push("--limit", String(Math.min(parsed.limit, 100)));
+        }
+      } else {
+        if (parsed.number != null && Number.isInteger(parsed.number)) {
+          ghArgs = ["pr", "view", ...repoFlag, String(parsed.number)];
+        } else if (parsed.branch && typeof parsed.branch === "string" && /^[\w./-]+$/.test(parsed.branch)) {
+          ghArgs = ["pr", "view", ...repoFlag, parsed.branch];
+        } else {
+          throw new Error("gh_pr_read: for action view provide number or branch");
+        }
+      }
+      const approved = await args.approvalGate.approve({
+        tool: "gh_pr_read",
+        intent: "network-impacting",
+        plan: "read-only GitHub PR (list or view)",
+        args: parsed,
+        ...(ctx?.provenance !== undefined && { provenance: ctx.provenance })
+      });
+      if (!approved) {
+        const denial = args.approvalGate.getLastDenial?.();
+        const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
+        throw new Error(`gh_pr_read requires approval${suffix}`);
+      }
+      const result = await sandbox.run("gh", ghArgs, {
+        cwd: args.workspaceCwd,
+        maxBufferBytes: maxBuffer,
+        timeoutMs: 15_000
+      });
+      return { stdout: result.stdout, stderr: result.stderr };
+    }
+  };
+}
+
 export interface WebFetchArgs {
   url: string;
 }
