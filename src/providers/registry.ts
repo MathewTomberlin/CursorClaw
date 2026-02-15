@@ -3,6 +3,7 @@ import type { CursorClawConfig } from "../config.js";
 import { CursorAgentCliProvider } from "./cursor-agent-cli.js";
 import { FallbackModelProvider } from "./fallback.js";
 import { OllamaProvider } from "./ollama.js";
+import { OpenAICompatibleProvider } from "./openai-compatible.js";
 
 /** Config slice needed to create providers (models + defaultModel). */
 export type ProviderRegistryConfig = Pick<CursorClawConfig, "models" | "defaultModel">;
@@ -12,7 +13,8 @@ export type ProviderFactory = (config: ProviderRegistryConfig) => ModelProvider;
 const builtin: Record<string, ProviderFactory> = {
   "cursor-agent-cli": () => new CursorAgentCliProvider(),
   "fallback-model": () => new FallbackModelProvider(),
-  ollama: () => new OllamaProvider()
+  ollama: () => new OllamaProvider(),
+  "openai-compatible": () => new OpenAICompatibleProvider()
 };
 
 const cache = new Map<string, ModelProvider>();

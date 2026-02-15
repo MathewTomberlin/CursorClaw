@@ -43,7 +43,7 @@ Optional trusted identity header enforcement:
 }
 ```
 
-**Profile-scoped RPCs:** For multi-agent setups, `params` may include an optional `profileId` string. When present, the request is executed in the context of that agent profile (substrate, memory, approvals, etc.). When omitted, the gateway uses the default profile. Single-agent deployments ignore this and use the single profile. Profile-scoped methods include: `heartbeat.poll`, `heartbeat.getFile`, `heartbeat.update`, `memory.*`, `substrate.*`, `approval.*`, `cron.list`/`cron.add`, `workspace.status`/`workspace.semantic_search`, `trace.ingest`, `advisor.file_change`/`advisor.explain_function`, and `incident.bundle`. `agent.run` accepts `session.profileId` to run the turn in that profile's context.
+**Profile-scoped RPCs:** For multi-agent setups, `params` may include an optional `profileId` string. When present, the request is executed in the context of that agent profile (substrate, memory, approvals, etc.). When omitted, the gateway uses the default profile. Single-agent deployments ignore this and use the single profile. Profile-scoped methods include: `heartbeat.poll`, `heartbeat.getFile`, `heartbeat.update`, `memory.*`, `substrate.*`, `skills.list`, `approval.*`, `cron.list`/`cron.add`, `workspace.status`/`workspace.semantic_search`, `trace.ingest`, `advisor.file_change`/`advisor.explain_function`, and `incident.bundle`. `agent.run` accepts `session.profileId` to run the turn in that profile's context.
 
 ### Success response
 
@@ -138,6 +138,11 @@ Method scope rules (`METHOD_SCOPES`):
 - `substrate.get`: admin, local
 - `substrate.update`: admin, local
 - `substrate.reload`: admin, local
+- `heartbeat.poll`: local, remote, admin
+- `heartbeat.getFile`: admin, local
+- `heartbeat.update`: admin, local
+- `skills.fetchFromUrl`: admin, local
+- `skills.list`: admin, local
 
 ---
 
@@ -411,6 +416,26 @@ Returns current runtime config with secrets redacted (admin, local).
 No params.
 
 Returns the same shape as [Configuration Reference](configuration-reference.md); `gateway.auth.token` and `gateway.auth.password` are replaced with `{ redacted: true, length?: number }`. Includes `profiles` when present.
+
+---
+
+### 5.15.1 `config.reload`
+
+Reloads config from disk (`openclaw.json` or `CURSORCLAW_CONFIG_PATH`). The in-memory config is replaced immediately; heartbeat interval and other live settings apply on the next tick without restart. Requires `workspaceRoot` to be configured (admin, local).
+
+No params.
+
+Returns `{ ok: true }`.
+
+---
+
+### 5.15.2 `config.patch`
+
+Merges a partial config into the current config and writes to disk. Only top-level keys in the allowlist are merged (e.g. `heartbeat`, `autonomyBudget`, `memory`, `reflection`, `session`, `compaction`, `workspaces`, `contextCompression`, `networkTrace`, `metrics`, `reliability`, `tools`, `substrate`, `profiles`). Gateway auth, `defaultModel`, and `models` are not patchable. Changes apply in memory immediately without restart. Requires `workspaceRoot` (admin, local).
+
+`params`: partial config object, e.g. `{ heartbeat: { everyMs: 60000, enabled: true } }`.
+
+Returns `{ ok: true }`.
 
 ---
 

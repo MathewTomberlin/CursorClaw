@@ -100,32 +100,36 @@ export class AutonomyBudget {
 
 export class HeartbeatRunner {
   private currentIntervalMs: number;
+  /** Resolves to current config so hot-reload (config.reload) applies on next tick. */
+  private readonly getConfig: () => HeartbeatConfig;
 
-  constructor(private readonly config: HeartbeatConfig) {
-    this.currentIntervalMs = config.everyMs;
+  constructor(configOrGetter: HeartbeatConfig | (() => HeartbeatConfig)) {
+    this.getConfig = typeof configOrGetter === "function" ? configOrGetter : () => configOrGetter;
+    this.currentIntervalMs = this.getConfig().everyMs;
   }
 
   nextInterval(input: HeartbeatTickInput): number {
+    const config = this.getConfig();
     const now = input.now ?? new Date();
-    if (this.config.activeHours) {
-      const { startHour, endHour } = this.config.activeHours;
+    if (config.activeHours) {
+      const { startHour, endHour } = config.activeHours;
       const hour = now.getHours();
       const inActiveWindow =
         startHour <= endHour
           ? hour >= startHour && hour < endHour
           : hour >= startHour || hour < endHour;
       if (!inActiveWindow) {
-        this.currentIntervalMs = this.config.maxMs;
+        this.currentIntervalMs = config.maxMs;
         return this.currentIntervalMs;
       }
     }
 
     if (input.unreadEvents > 20) {
-      this.currentIntervalMs = Math.max(this.config.minMs, Math.floor(this.currentIntervalMs * 0.5));
+      this.currentIntervalMs = Math.max(config.minMs, Math.floor(this.currentIntervalMs * 0.5));
     } else if (input.unreadEvents > 8) {
-      this.currentIntervalMs = Math.max(this.config.minMs, Math.floor(this.currentIntervalMs * 0.75));
+      this.currentIntervalMs = Math.max(config.minMs, Math.floor(this.currentIntervalMs * 0.75));
     } else if (input.unreadEvents === 0) {
-      this.currentIntervalMs = Math.min(this.config.maxMs, Math.floor(this.currentIntervalMs * 1.2));
+      this.currentIntervalMs = Math.min(config.maxMs, Math.floor(this.currentIntervalMs * 1.2));
     }
     return this.currentIntervalMs;
   }
@@ -137,7 +141,8 @@ export class HeartbeatRunner {
     /** When true, run the turn even if budget would deny. Orchestrator sets this for every scheduled heartbeat so heartbeats run on interval; budget applies to other proactive channels only. */
     bypassBudget?: boolean;
   }): Promise<"HEARTBEAT_OK" | "SENT"> {
-    if (!this.config.enabled) {
+    const config = this.getConfig();
+    if (!config.enabled) {
       if (process.env.NODE_ENV !== "test") {
         console.warn("[CursorClaw] heartbeat skipped: disabled in config");
       }

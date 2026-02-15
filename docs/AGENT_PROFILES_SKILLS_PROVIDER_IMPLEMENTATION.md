@@ -171,14 +171,16 @@ Recommended layout for one profile root `{profileRoot}`:
 
 **Phase P.4 – OpenAI-compatible / API key**
 
-- [ ] **P.4.1** Implement provider that talks to OpenAI-compatible HTTP API; use `apiKeyRef` to resolve key from credential store at request time.
+- [x] **P.4.1** Implement provider that talks to OpenAI-compatible HTTP API; use `apiKeyRef` to resolve key from credential store at request time.
 - [ ] **P.4.2** User can add/update/delete API keys for a profile via secure UX or RPC; keys never logged or included in prompts.
 - [ ] **P.4.3** Model selection: from config list or from provider’s model list if API supports it.
 
 **Phase P.5 – Cursor-Agent CLI parity**
 
-- [ ] **P.5.1** All existing tests and flows that use Cursor-Agent CLI must pass unchanged when profile uses `provider: "cursor-agent-cli"`.
-- [ ] **P.5.2** Document that Cursor-Agent CLI is the reference provider; new providers should match behavior (streaming, tool calls, error handling) where applicable.
+- [x] **P.5.1** All existing tests and flows that use Cursor-Agent CLI must pass unchanged when profile uses `provider: "cursor-agent-cli"`. (Verified: full suite 171 tests pass on feature/agent-profiles.)
+- [x] **P.5.2** Document that Cursor-Agent CLI is the reference provider; new providers should match behavior (streaming, tool calls, error handling) where applicable.
+
+**Reference provider (Cursor-Agent CLI):** Streaming, tool calls (MCP and built-in tools), and error handling are implemented and tested against Cursor-Agent CLI. New providers (Ollama, OpenAI-compatible) should match behavior where applicable (e.g. streaming, cancellation). Tool-calling semantics may differ per provider (e.g. Ollama text-only until tool API is used); see § 3.3.2.
 
 ### 3.5 Success Criteria (Provider and Model)
 
@@ -221,9 +223,9 @@ Recommended layout for one profile root `{profileRoot}`:
 
 **Phase S.1 – Skill layout and discovery**
 
-- [ ] **S.1.1** Under profile root: `skills/installed/` (metadata for installed skills), `skills/credentials/` (or integration with existing credential store keyed by profile + skill id). Never put raw secrets in repo or substrate.
-- [ ] **S.1.2** Define minimal `skill.md` schema (description, install section, credentials section, usage). Parser or convention so the agent can read and reason about it.
-- [ ] **S.1.3** RPC or internal API: “install skill from URL” (fetch skill.md, safety check, then run install with user approval if required).
+- [x] **S.1.1** Under profile root: `skills/installed/` (metadata for installed skills), `skills/credentials/` (or integration with existing credential store keyed by profile + skill id). Never put raw secrets in repo or substrate.
+- [x] **S.1.2** Define minimal `skill.md` schema (description, install section, credentials section, usage). Parser or convention so the agent can read and reason about it.
+- [x] **S.1.3** RPC or internal API: “install skill from URL” (fetch skill.md, safety check, then run install with user approval if required). Implemented: `skills.fetchFromUrl` (fetch + parse only; no install yet) and `skills.list` (list installed from manifest).
 
 **Phase S.2 – Safety analysis**
 
@@ -287,3 +289,6 @@ Recommended layout for one profile root `{profileRoot}`:
 - **Changelog (1.5):** Phase P.1 complete. AgentProfileConfig has optional `modelId`. `getModelIdForProfile(config, profileId)` resolves model per profile (profile.modelId ?? defaultModel; validates against config.models). SessionContext has optional `profileId`; gateway sets it from resolvedProfileId for agent.run. ModelAdapter.createSession accepts optional CreateSessionOptions.modelId; runtime uses profile-resolved model for ensureModelSession and stores full handle (id, model, authProfile). Heartbeat session includes profileId. Tests: getModelIdForProfile (no profiles, profile without modelId, profile with modelId, invalid modelId fallback). All 157 tests pass.
 - **Changelog (1.6):** Phase P.2 complete. Added `ModelProvider` interface (`sendTurn`, `cancel`) in `src/providers/types.ts`. Implemented `CursorAgentCliProvider` (CLI subprocess + NDJSON parsing) and `FallbackModelProvider` in `src/providers/`. Registry in `src/providers/registry.ts`: `getProvider(id, config)`, `registerProvider`, `clearProviderCache`. Adapter delegates to registry; turnId→provider map for cancel; getRedactedLogs/getMetrics delegate to CLI provider. `ModelProviderConfig` extended with `apiKeyRef?`, `ollamaModelName?`, `baseURL?`. All 164 tests pass.
 - **Changelog (1.7):** Phase P.3 complete. Implemented `OllamaProvider` in `src/providers/ollama.ts`: calls Ollama `POST /api/chat` with stream, maps messages to Ollama format, yields `assistant_delta`, `usage`, `done`; supports `cancel` via AbortController. Config and adapter types extended with `"ollama"`; registry registers `ollama` factory. Added § 3.3.1 (context/token limits for 16GB models) and § 3.3.2 (tool support for Ollama). Adapter test added for Ollama with mocked fetch. All adapter and gateway tests pass.
+- **Changelog (1.8):** Phase P.4.1 complete. Added `resolveApiKey` in `src/security/credential-resolver.ts` (supports `env:VAR_NAME`; key never logged). Implemented `OpenAICompatibleProvider` in `src/providers/openai-compatible.ts`: POST to `baseURL/chat/completions`, SSE stream parsing, `openaiModelId` and `apiKeyRef` in config; Bearer token resolved at request time. Config extended with `openaiModelId` and provider type `"openai-compatible"`; registry registers `openai-compatible`. Adapter test and credential-resolver tests added. P.4.2 (user RPC/UX for keys) and P.4.3 (model list from API) remain for a later iteration.
+- **Changelog (1.9):** Phase P.5 complete. P.5.1: full test suite (171 tests) passes on feature/agent-profiles with Cursor-Agent CLI. P.5.2: documented Cursor-Agent CLI as reference provider (streaming, tool calls, error handling) in § 3.4. Remaining optional work: P.4.2 (user add/update/delete API keys via RPC/UX), P.4.3 (model list from provider API).
+- **Changelog (1.10):** Phase S.1 started. S.1.1: `src/skills/store.ts` — profile layout `skills/installed/` (manifest.json), `skills/credentials/`; ensureSkillsDirs, readInstalledManifest, writeInstalledManifest. S.1.2: `src/skills/types.ts` (SkillDefinition, InstalledSkillRecord), `src/skills/parser.ts` (parseSkillMd for ## Description, Install, Credentials, Usage). S.1.3: gateway RPCs `skills.fetchFromUrl` (params.url → fetch + parse, returns definition + sourceUrl) and `skills.list` (profile-scoped, returns installed list). No install or safety execution yet (S.2/S.3). Tests: tests/skills.test.ts (parser + store). All 177 tests pass.

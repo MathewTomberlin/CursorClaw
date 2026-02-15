@@ -414,4 +414,91 @@ describe("CursorAgentModelAdapter", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("openai-compatible provider streams events when fetch returns OpenAI-format SSE and apiKeyRef resolves", async () => {
+    const sseChunks = [
+      "data: " + JSON.stringify({ choices: [{ delta: { content: "Hi " } }] }) + "\n",
+      "data: " + JSON.stringify({ choices: [{ delta: { content: "from API" } }] }) + "\n",
+      "data: " + JSON.stringify({ choices: [{ finish_reason: "stop" }] }) + "\n",
+      "data: [DONE]\n"
+    ];
+    const stream = new ReadableStream({
+      start(controller) {
+        for (const chunk of sseChunks) {
+          controller.enqueue(new TextEncoder().encode(chunk));
+        }
+        controller.close();
+      }
+    });
+
+    const fetchStub = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: stream,
+      text: () => Promise.resolve("")
+    });
+    vi.stubGlobal("fetch", fetchStub);
+
+    const envKey = "TEST_OPENAI_KEY_" + Date.now();
+    const originalEnv = process.env[envKey];
+    process.env[envKey] = "sk-test-secret";
+
+    try {
+      const adapter = new CursorAgentModelAdapter({
+        defaultModel: "api",
+        models: {
+          api: {
+            provider: "openai-compatible",
+            apiKeyRef: "env:" + envKey,
+            openaiModelId: "gpt-4o-mini",
+            baseURL: "https://api.openai.com/v1",
+            timeoutMs: 10_000,
+            authProfiles: ["default"],
+            fallbackModels: [],
+            enabled: true
+          }
+        }
+      });
+      const session = await adapter.createSession({
+        sessionId: "s1",
+        channelId: "c1",
+        channelKind: "dm"
+      });
+      const events: Array<{ type: string; data?: unknown }> = [];
+      for await (const event of adapter.sendTurn(
+        session,
+        [{ role: "user", content: "hi" }],
+        [simpleTool],
+        { turnId: "openai-turn-1" }
+      )) {
+        events.push({ type: event.type, data: event.data });
+      }
+      expect(events.map((e) => e.type)).toEqual(["assistant_delta", "assistant_delta", "usage", "done"]);
+      const deltas = events
+        .filter((e) => e.type === "assistant_delta")
+        .map((e) => (e.data as { content?: string })?.content);
+      expect(deltas).toEqual(["Hi ", "from API"]);
+      expect(fetchStub).toHaveBeenCalledWith(
+        "https://api.openai.com/v1/chat/completions",
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({
+            Authorization: "Bearer sk-test-secret"
+          }),
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            messages: [{ role: "user", content: "hi" }],
+            stream: true
+          })
+        })
+      );
+    } finally {
+      if (originalEnv !== undefined) {
+        process.env[envKey] = originalEnv;
+      } else {
+        delete process.env[envKey];
+      }
+      vi.unstubAllGlobals();
+    }
+  });
 });

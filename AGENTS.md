@@ -47,7 +47,7 @@ Environment-specific notes (device names, SSH hosts, preferences) go in `TOOLS.m
 
 ## Heartbeats
 
-When you receive a heartbeat poll, use it productively. If `HEARTBEAT.md` exists in the workspace, its content is your checklist for this tick. If nothing needs attention, reply `HEARTBEAT_OK`. **If you have something to say to the user** (e.g. to complete BIRTH, or to act on HEARTBEAT.md), reply with that message instead of `HEARTBEAT_OK`—the system will deliver your reply to the user as a proactive message. Check inbox, calendar, or other reminders as appropriate; batch similar checks. Be helpful without being annoying.
+When you receive a heartbeat poll, use it productively. The **substrate files** (AGENTS.md, IDENTITY.md, SOUL.md, USER.md, etc.) are already in your context—use them as your guide for this tick. If a per-tick checklist file exists (e.g. HEARTBEAT.md), its content is prepended to the heartbeat message as an additional checklist. If nothing needs attention, reply `HEARTBEAT_OK`. **If you have something to say to the user** (e.g. to complete BIRTH, or to act on the substrate rules or checklist), reply with that message instead of `HEARTBEAT_OK`—the system will deliver your reply to the user as a proactive message. Check inbox, calendar, or other reminders as appropriate; batch similar checks. Be helpful without being annoying.
 
 ## Make It Yours
 
@@ -55,4 +55,4 @@ This is a starting point. Add your own conventions, style, and rules as you figu
 
 ## When editing this codebase
 
-- **Heartbeat and autonomy budget:** Scheduled heartbeats in `src/orchestrator.ts` pass `bypassBudget: true` so they always run on the configured interval (e.g. every 30s). The autonomy budget (maxPerHourPerChannel, quietHours) applies to other proactive flows (e.g. queued intents), not the heartbeat tick. Do **not** "fix" this by removing the bypass or making heartbeat respect the budget—heartbeats would then stop after 4 per hour and users would stop receiving HEARTBEAT.md proactive messages. This behavior is intentional; tests should pass with it.
+- **Heartbeat and autonomy budget:** Scheduled heartbeats in `src/orchestrator.ts` pass `bypassBudget: true` so they always run on the configured interval (e.g. every 30s). The autonomy budget (maxPerHourPerChannel, quietHours) applies to other proactive flows (e.g. queued intents), not the heartbeat tick. Do **not** "fix" this by removing the bypass or making heartbeat respect the budget—heartbeats would then stop after 4 per hour and users would stop receiving proactive messages driven by the substrate and heartbeat checklist. This behavior is intentional; tests should pass with it.

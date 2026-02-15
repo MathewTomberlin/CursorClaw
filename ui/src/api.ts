@@ -219,6 +219,16 @@ export async function profileDelete(id: string, removeDirectory?: boolean): Prom
   await rpc("profile.delete", { id: id.trim(), removeDirectory: removeDirectory === true });
 }
 
+/** Reload config from disk (openclaw.json). Applies without restart. Requires admin/local auth. */
+export async function configReload(): Promise<void> {
+  await rpc("config.reload");
+}
+
+/** Patch config with allowed keys (e.g. heartbeat, autonomyBudget). Writes to disk and applies in memory without restart. Requires admin/local auth. */
+export async function configPatch(partial: Record<string, unknown>): Promise<void> {
+  await rpc("config.patch", partial);
+}
+
 /** Restart the framework (runs full build, then restarts). Requires admin/local auth. */
 export async function restartFramework(): Promise<{ buildRan?: boolean }> {
   const res = await rpc<{ buildRan?: boolean }>("admin.restart");

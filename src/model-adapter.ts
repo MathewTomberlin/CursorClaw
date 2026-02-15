@@ -14,7 +14,7 @@ import type {
 } from "./types.js";
 
 export interface CursorAgentAdapterModelConfig {
-  provider: "cursor-agent-cli" | "fallback-model" | "ollama";
+  provider: "cursor-agent-cli" | "fallback-model" | "ollama" | "openai-compatible";
   command?: string;
   args?: string[];
   /**
@@ -31,6 +31,10 @@ export interface CursorAgentAdapterModelConfig {
   ollamaModelName?: string;
   /** Ollama / OpenAI-compatible: base URL (e.g. http://localhost:11434). */
   baseURL?: string;
+  /** Reference into credential store for API key (e.g. env:OPENAI_API_KEY). Used by OpenAI-compatible provider. */
+  apiKeyRef?: string;
+  /** OpenAI-compatible provider: model id (e.g. gpt-4o-mini). */
+  openaiModelId?: string;
 }
 
 export interface CursorAgentAdapterConfig {

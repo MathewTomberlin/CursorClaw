@@ -36,7 +36,7 @@ export interface CompactionConfig {
 }
 
 export interface ModelProviderConfig {
-  provider: "cursor-agent-cli" | "fallback-model" | "ollama";
+  provider: "cursor-agent-cli" | "fallback-model" | "ollama" | "openai-compatible";
   command?: string;
   args?: string[];
   /** If true, pass last user message as final CLI arg (e.g. Cursor CLI -p --output-format stream-json). */
@@ -51,6 +51,8 @@ export interface ModelProviderConfig {
   ollamaModelName?: string;
   /** Provider-specific: base URL for OpenAI-compatible or Ollama (e.g. http://localhost:11434). */
   baseURL?: string;
+  /** Provider-specific: OpenAI-compatible model id (e.g. gpt-4o-mini, gpt-4o). */
+  openaiModelId?: string;
 }
 
 export interface ToolsConfig {
@@ -351,6 +353,40 @@ function merge<T extends object>(base: T, override?: DeepPartial<T>): T {
     out[key] = value;
   }
   return out as T;
+}
+
+/** Top-level config keys safe to patch via config.patch (excludes gateway, defaultModel, models). */
+export const PATCHABLE_CONFIG_KEYS: (keyof CursorClawConfig)[] = [
+  "heartbeat",
+  "autonomyBudget",
+  "memory",
+  "reflection",
+  "session",
+  "compaction",
+  "workspaces",
+  "contextCompression",
+  "networkTrace",
+  "metrics",
+  "reliability",
+  "tools",
+  "substrate",
+  "profiles"
+];
+
+/** Merges a partial config into current, only for allowed top-level keys. Used by config.patch. */
+export function mergeConfigPatch(
+  current: CursorClawConfig,
+  partial: DeepPartial<CursorClawConfig>,
+  allowedKeys: (keyof CursorClawConfig)[]
+): CursorClawConfig {
+  const filtered: DeepPartial<CursorClawConfig> = {};
+  for (const k of allowedKeys) {
+    const v = (partial as Record<string, unknown>)[k as string];
+    if (v !== undefined) {
+      (filtered as Record<string, unknown>)[k as string] = v;
+    }
+  }
+  return merge(current, filtered) as CursorClawConfig;
 }
 
 export function loadConfig(raw?: DeepPartial<CursorClawConfig>): CursorClawConfig {

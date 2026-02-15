@@ -147,7 +147,10 @@ async function buildProfileContext(
 async function main(): Promise<void> {
   const workspaceDir = process.cwd();
   const configPath = resolveConfigPath({ cwd: workspaceDir });
-  const config = loadConfigFromDisk({ cwd: workspaceDir });
+  const initialConfig = loadConfigFromDisk({ cwd: workspaceDir });
+  /** Live config ref so config.reload and heartbeat/budget see updates without restart. */
+  const configRef = { current: initialConfig };
+  const config = configRef.current;
   const tokenLen = config.gateway.auth.token?.length ?? config.gateway.auth.password?.length ?? 0;
   // eslint-disable-next-line no-console
   console.log("[CursorClaw] config:", configPath, "| gateway auth token length:", tokenLen);
@@ -390,7 +393,7 @@ async function main(): Promise<void> {
   await runStore.load();
   await runStore.markInFlightInterrupted();
 
-  const heartbeat = new HeartbeatRunner(config.heartbeat);
+  const heartbeat = new HeartbeatRunner(() => configRef.current.heartbeat);
   const budget = new AutonomyBudget(config.autonomyBudget);
   const workflow = new WorkflowRuntime(join(profileRoot, "tmp", "workflow-state"));
 
@@ -525,7 +528,10 @@ async function main(): Promise<void> {
   }
   const uiDist = join(workspaceDir, "ui", "dist");
   const gateway = buildGateway({
-    config,
+    getConfig: () => configRef.current,
+    setConfig: (c) => {
+      configRef.current = c;
+    },
     runtime,
     cronService: defaultCtx.cronService,
     ...(runStore !== undefined ? { runStore } : {}),
@@ -537,7 +543,7 @@ async function main(): Promise<void> {
     ...(behavior !== undefined ? { behavior } : {}),
     ...(defaultCtx.approvalWorkflow !== undefined ? { approvalWorkflow: defaultCtx.approvalWorkflow } : {}),
     ...(defaultCtx.capabilityStore !== undefined ? { capabilityStore: defaultCtx.capabilityStore } : {}),
-    defaultProfileId: getDefaultProfileId(config),
+    defaultProfileId: getDefaultProfileId(configRef.current),
     getProfileContext: (profileId) => profileContextMap.get(profileId),
     lifecycleStream,
     workspaceDir: profileRoot,
@@ -740,7 +746,8 @@ async function main(): Promise<void> {
       const fallbackMessage =
         "Hi — BIRTH is pending for this workspace. I'm here to help you set up: who you are (USER.md), who I am here (IDENTITY.md), and how you want to use this agent. What's your main use case, and what would you like to call me?";
       try {
-      const skipWhenEmpty = config.heartbeat.skipWhenEmpty === true;
+      const heartbeatConfig = configRef.current.heartbeat;
+      const skipWhenEmpty = heartbeatConfig.skipWhenEmpty === true;
       // Do not skip heartbeat when BIRTH.md exists — agent must get a chance to send a proactive BIRTH message.
       if (skipWhenEmpty && !birthPending) {
         if (!existsSync(heartbeatPath)) {
@@ -759,7 +766,7 @@ async function main(): Promise<void> {
         }
       }
       const baseInstruction =
-        config.heartbeat.prompt ?? "If no action needed, reply HEARTBEAT_OK.";
+        heartbeatConfig.prompt ?? "If no action needed, reply HEARTBEAT_OK.";
       let content: string;
       if (existsSync(heartbeatPath)) {
         const fileContent = await readFile(heartbeatPath, "utf8");
@@ -779,7 +786,7 @@ async function main(): Promise<void> {
           sessionId: "heartbeat:main",
           channelId,
           channelKind: "web",
-          profileId: getDefaultProfileId(config)
+          profileId: getDefaultProfileId(configRef.current)
         },
         messages: [{ role: "user", content }]
       });

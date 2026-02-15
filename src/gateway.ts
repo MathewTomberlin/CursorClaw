@@ -6,7 +6,11 @@ import Fastify, { type FastifyInstance } from "fastify";
 import type { ChannelHub } from "./channels.js";
 import {
   type CursorClawConfig,
+  type DeepPartial,
   getDefaultProfileId,
+  loadConfigFromDisk,
+  mergeConfigPatch,
+  PATCHABLE_CONFIG_KEYS,
   resolveProfileRoot,
   writeConfigToDisk
 } from "./config.js";
@@ -57,7 +61,10 @@ export interface ProfileContext {
 }
 
 export interface GatewayDependencies {
-  config: CursorClawConfig;
+  /** Current config (read on each use so config.reload applies without restart). */
+  getConfig: () => CursorClawConfig;
+  /** Replace in-memory config (used by config.reload). Requires workspaceRoot. */
+  setConfig?: (config: CursorClawConfig) => void;
   runtime: AgentRuntime;
   cronService: CronService;
   runStore?: RunStore;
@@ -153,6 +160,8 @@ const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
   "trace.ingest": ["local", "remote", "admin"],
   "advisor.explain_function": ["local", "remote", "admin"],
   "config.get": ["admin", "local"],
+  "config.reload": ["admin", "local"],
+  "config.patch": ["admin", "local"],
   "profile.list": ["admin", "local"],
   "profile.create": ["admin", "local"],
   "profile.delete": ["admin", "local"],
@@ -166,13 +175,15 @@ const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
   "memory.writeFile": ["admin", "local"],
   "heartbeat.poll": ["local", "remote", "admin"],
   "heartbeat.getFile": ["local", "remote", "admin"],
-  "heartbeat.update": ["local", "remote", "admin"]
+  "heartbeat.update": ["local", "remote", "admin"],
+  "skills.fetchFromUrl": ["admin", "local"],
+  "skills.list": ["admin", "local"]
 };
 
 export function buildGateway(deps: GatewayDependencies): FastifyInstance {
   const app = Fastify({
     logger: false,
-    bodyLimit: deps.config.gateway.bodyLimitBytes
+    bodyLimit: deps.getConfig().gateway.bodyLimitBytes
   });
   const pendingRuns = new Map<string, PendingRun>();
 
@@ -247,15 +258,16 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
   });
 
   app.get("/status", async () => {
+    const config = deps.getConfig();
     const profiles =
-      (deps.config.profiles?.length ?? 0) > 0
-        ? deps.config.profiles!.map((p) => ({ id: p.id, root: p.root, modelId: p.modelId }))
+      (config.profiles?.length ?? 0) > 0
+        ? config.profiles!.map((p) => ({ id: p.id, root: p.root, modelId: p.modelId }))
         : [{ id: "default", root: "." }];
-    const defaultProfileId = deps.defaultProfileId ?? getDefaultProfileId(deps.config);
+    const defaultProfileId = deps.defaultProfileId ?? getDefaultProfileId(config);
     const defaultCtx = getEffectiveProfileContext(deps, defaultProfileId);
     const base = {
       gateway: "ok",
-      defaultModel: deps.config.defaultModel,
+      defaultModel: config.defaultModel,
       profiles,
       defaultProfileId,
       queueWarnings: deps.runtime.getQueueWarnings(),
@@ -287,7 +299,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
       return reply.code(400).send(errorResponse(body.id, auditId, "PROTO_VERSION_UNSUPPORTED", "Invalid RPC envelope"));
     }
 
-    if (body.version !== deps.config.gateway.protocolVersion) {
+    if (body.version !== deps.getConfig().gateway.protocolVersion) {
       deps.policyLogs.add({
         auditId,
         method: body.method,
@@ -361,10 +373,11 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
       if (body.method === "agent.run") {
         const session = parseSessionContext(body.params?.session);
         session.profileId = resolvedProfileId;
+        const sessionConfig = deps.getConfig().session;
         const messages = parseMessages(
           body.params?.messages,
-          deps.config.session.maxMessagesPerTurn,
-          deps.config.session.maxMessageChars
+          sessionConfig.maxMessagesPerTurn,
+          sessionConfig.maxMessageChars
         );
         // Runtime compacts via applyUserMessageFreshness; no user-facing message limit.
         const started = deps.runtime.startTurn({ session, messages });
@@ -626,7 +639,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           symbol
         });
       } else if (body.method === "config.get") {
-        const c = deps.config;
+        const c = deps.getConfig();
         result = {
           ...c,
           gateway: {
@@ -644,15 +657,35 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
             }
           }
         };
+      } else if (body.method === "config.reload") {
+        if (!deps.setConfig || !deps.workspaceRoot) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "config reload not available");
+        }
+        const newConfig = loadConfigFromDisk({ cwd: deps.workspaceRoot });
+        deps.setConfig(newConfig);
+        result = { ok: true };
+      } else if (body.method === "config.patch") {
+        if (!deps.setConfig || !deps.workspaceRoot) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "config patch not available");
+        }
+        const partial = body.params as Record<string, unknown> | undefined;
+        if (!partial || typeof partial !== "object") {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "params must be an object");
+        }
+        const updated = mergeConfigPatch(deps.getConfig(), partial as DeepPartial<CursorClawConfig>, PATCHABLE_CONFIG_KEYS);
+        deps.setConfig(updated);
+        await writeConfigToDisk(updated, { cwd: deps.workspaceRoot });
+        result = { ok: true };
       } else if (body.method === "profile.list") {
-        const list = deps.config.profiles;
+        const config = deps.getConfig();
+        const list = config.profiles;
         const profiles =
           (list?.length ?? 0) > 0
             ? list!.map((p) => ({ id: p.id, root: p.root, modelId: p.modelId }))
             : [{ id: "default", root: "." }];
         result = {
           profiles,
-          defaultProfileId: deps.defaultProfileId ?? getDefaultProfileId(deps.config)
+          defaultProfileId: deps.defaultProfileId ?? getDefaultProfileId(config)
         };
       } else if (body.method === "profile.create") {
         if (!deps.workspaceRoot) {
@@ -666,22 +699,23 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         if (!root) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "profile root is required");
         }
-        const list = deps.config.profiles ?? [];
+        const configCreate = deps.getConfig();
+        const list = configCreate.profiles ?? [];
         if (list.some((p) => p.id === id)) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "profile id already exists");
         }
         let profileRootPath: string;
         try {
-          profileRootPath = resolveProfileRoot(deps.workspaceRoot, { ...deps.config, profiles: [...list, { id, root }] }, id);
+          profileRootPath = resolveProfileRoot(deps.workspaceRoot, { ...configCreate, profiles: [...list, { id, root }] }, id);
         } catch (err) {
           const msg = err instanceof Error ? err.message : "profile root must be under workspace";
           throw new RpcGatewayError(400, "BAD_REQUEST", msg);
         }
         const newProfiles =
           list.length === 0 ? [{ id: "default", root: "." }, { id, root }] : [...list, { id, root }];
-        (deps.config as CursorClawConfig).profiles = newProfiles;
+        (configCreate as CursorClawConfig).profiles = newProfiles;
         await mkdir(profileRootPath, { recursive: true });
-        const configPath = await writeConfigToDisk(deps.config, { cwd: deps.workspaceRoot });
+        const configPath = await writeConfigToDisk(configCreate, { cwd: deps.workspaceRoot });
         result = { profile: { id, root }, configPath };
       } else if (body.method === "profile.delete") {
         if (!deps.workspaceRoot) {
@@ -691,7 +725,8 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         if (!id) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "profile id is required");
         }
-        const list = deps.config.profiles ?? [];
+        const configDelete = deps.getConfig();
+        const list = configDelete.profiles ?? [];
         if (list.length === 0) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "no profiles to delete (single default profile)");
         }
@@ -705,11 +740,11 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         const removeDirectory = body.params?.removeDirectory === true;
         const removed = list[idx]!;
         const newProfiles = list.filter((p) => p.id !== id);
-        (deps.config as CursorClawConfig).profiles = newProfiles;
-        await writeConfigToDisk(deps.config, { cwd: deps.workspaceRoot });
+        (configDelete as CursorClawConfig).profiles = newProfiles;
+        await writeConfigToDisk(configDelete, { cwd: deps.workspaceRoot });
         if (removeDirectory) {
           try {
-            const dirPath = resolveProfileRoot(deps.workspaceRoot, { ...deps.config, profiles: [removed] }, id);
+            const dirPath = resolveProfileRoot(deps.workspaceRoot, { ...configDelete, profiles: [removed] }, id);
             const base = resolve(deps.workspaceRoot);
             const prefix = base.endsWith(sep) ? base : base + sep;
             if (dirPath !== base && dirPath.startsWith(prefix)) {
@@ -743,7 +778,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           throw new RpcGatewayError(400, "BAD_REQUEST", "substrate not configured");
         }
         const pathKeys: Record<string, string> = { ...DEFAULT_SUBSTRATE_PATHS };
-        const sub = deps.config.substrate;
+        const sub = deps.getConfig().substrate;
         if (sub) {
           if (sub.agentsPath) pathKeys.agentsPath = sub.agentsPath;
           if (sub.identityPath) pathKeys.identityPath = sub.identityPath;
@@ -801,7 +836,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         try {
           await profileCtx.substrateStore.writeKey(
             profileCtx.profileRoot,
-            deps.config.substrate,
+            deps.getConfig().substrate,
             key,
             content
           );
@@ -817,8 +852,8 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         if (!profileCtx.substrateStore || !profileCtx.profileRoot) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "substrate not configured");
         }
-        await profileCtx.substrateStore.reload(profileCtx.profileRoot, deps.config.substrate);
-        await profileCtx.substrateStore.ensureDefaults(profileCtx.profileRoot, deps.config.substrate);
+        await profileCtx.substrateStore.reload(profileCtx.profileRoot, deps.getConfig().substrate);
+        await profileCtx.substrateStore.ensureDefaults(profileCtx.profileRoot, deps.getConfig().substrate);
         result = { ok: true };
       } else if (body.method === "memory.listLogs") {
         if (!profileCtx.profileRoot) {
@@ -874,6 +909,29 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         }
         await writeFile(fullPath, content, "utf8");
         result = { ok: true };
+      } else if (body.method === "skills.fetchFromUrl") {
+        const url = typeof body.params?.url === "string" ? body.params.url.trim() : "";
+        if (!url) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "url is required");
+        }
+        if (!url.startsWith("https://") && !url.startsWith("http://")) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "url must be http or https");
+        }
+        const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+        if (!res.ok) {
+          throw new RpcGatewayError(502, "UPSTREAM_ERROR", `fetch failed: ${res.status}`);
+        }
+        const text = await res.text();
+        const { parseSkillMd } = await import("./skills/parser.js");
+        const definition = parseSkillMd(text);
+        result = { definition, sourceUrl: url };
+      } else if (body.method === "skills.list") {
+        if (!profileCtx.profileRoot) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "profile root not configured");
+        }
+        const { readInstalledManifest } = await import("./skills/store.js");
+        const skills = await readInstalledManifest(profileCtx.profileRoot);
+        result = { skills };
       } else if (body.method === "admin.restart") {
         if (!deps.onRestart) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "restart not configured");

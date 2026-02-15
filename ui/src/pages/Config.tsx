@@ -1,7 +1,14 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useLocation } from "react-router-dom";
-import { rpc, mapRpcError, profileCreate, profileDelete } from "../api";
+import { rpc, mapRpcError, profileCreate, profileDelete, configReload, configPatch } from "../api";
 import { useProfile } from "../contexts/ProfileContext";
+
+interface HeartbeatConfig {
+  enabled?: boolean;
+  everyMs?: number;
+  minMs?: number;
+  maxMs?: number;
+}
 
 export default function Config() {
   const [config, setConfig] = useState<unknown>(null);
@@ -19,19 +26,35 @@ export default function Config() {
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  const [reloadBusy, setReloadBusy] = useState(false);
+  const [reloadError, setReloadError] = useState<string | null>(null);
+  const [heartbeatDraft, setHeartbeatDraft] = useState<HeartbeatConfig | null>(null);
+  const [heartbeatPatchBusy, setHeartbeatPatchBusy] = useState(false);
+  const [heartbeatPatchError, setHeartbeatPatchError] = useState<string | null>(null);
+
+  const fetchConfig = useCallback(async () => {
+    setError(null);
+    try {
+      const res = await rpc("config.get");
+      setConfig(res.result);
+      const c = res.result as Record<string, unknown>;
+      if (c?.heartbeat && typeof c.heartbeat === "object") {
+        const h = c.heartbeat as HeartbeatConfig;
+        setHeartbeatDraft({ enabled: h.enabled, everyMs: h.everyMs, minMs: h.minMs, maxMs: h.maxMs });
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } }));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     (async () => {
-      setError(null);
-      try {
-        const res = await rpc("config.get");
-        setConfig(res.result);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } }));
-      } finally {
-        setLoading(false);
-      }
+      setLoading(true);
+      await fetchConfig();
     })();
-  }, []);
+  }, [fetchConfig]);
 
   useEffect(() => {
     if (location.hash === "#profiles" && profilesRef.current) {
@@ -79,6 +102,40 @@ export default function Config() {
 
   const canDelete = () => profiles.length > 1;
   const isOnlyProfile = profiles.length === 1;
+
+  const handleReload = async () => {
+    setReloadBusy(true);
+    setReloadError(null);
+    try {
+      await configReload();
+      await fetchConfig();
+    } catch (e) {
+      setReloadError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReloadBusy(false);
+    }
+  };
+
+  const handleHeartbeatSave = async () => {
+    if (heartbeatDraft == null) return;
+    setHeartbeatPatchBusy(true);
+    setHeartbeatPatchError(null);
+    try {
+      await configPatch({
+        heartbeat: {
+          enabled: heartbeatDraft.enabled,
+          everyMs: heartbeatDraft.everyMs,
+          minMs: heartbeatDraft.minMs,
+          maxMs: heartbeatDraft.maxMs
+        }
+      });
+      await fetchConfig();
+    } catch (e) {
+      setHeartbeatPatchError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setHeartbeatPatchBusy(false);
+    }
+  };
 
   return (
     <div className="card">
@@ -166,8 +223,69 @@ export default function Config() {
       )}
 
       <div className="config-section" style={{ marginTop: "1.5rem" }}>
-        <h3>Config (read-only)</h3>
-        <p className="muted">Secrets (token/password) are redacted. Changes require editing openclaw.json and restart.</p>
+        <h3>Config</h3>
+        <p className="muted">
+          Reload from disk to apply file changes without restart. Edit heartbeat below and Save to apply in memory and on disk. Secrets (token/password) are redacted in the raw view.
+        </p>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1rem" }}>
+          <button type="button" className="btn" onClick={handleReload} disabled={reloadBusy}>
+            {reloadBusy ? "Reloading…" : "Reload from disk"}
+          </button>
+          {reloadError && <span className="error-msg">{reloadError}</span>}
+        </div>
+
+        {!loading && heartbeatDraft != null ? (
+          <div className="config-section" style={{ marginBottom: "1rem" }}>
+            <h4>Heartbeat (live)</h4>
+            <p className="muted">Interval and limits apply on next tick without restart.</p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "1rem", alignItems: "center" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+                <input
+                  type="checkbox"
+                  checked={heartbeatDraft.enabled ?? true}
+                  onChange={(e) => setHeartbeatDraft((d) => ({ ...d, enabled: e.target.checked }))}
+                />
+                Enabled
+              </label>
+              <label>
+                Interval (ms)
+                <input
+                  type="number"
+                  min={1000}
+                  step={1000}
+                  value={heartbeatDraft.everyMs ?? 30_000}
+                  onChange={(e) => setHeartbeatDraft((d) => ({ ...d, everyMs: parseInt(e.target.value, 10) || 30_000 }))}
+                />
+              </label>
+              <label>
+                Min (ms)
+                <input
+                  type="number"
+                  min={1000}
+                  step={1000}
+                  value={heartbeatDraft.minMs ?? 300_000}
+                  onChange={(e) => setHeartbeatDraft((d) => ({ ...d, minMs: parseInt(e.target.value, 10) || 300_000 }))}
+                />
+              </label>
+              <label>
+                Max (ms)
+                <input
+                  type="number"
+                  min={1000}
+                  step={1000}
+                  value={heartbeatDraft.maxMs ?? 3_600_000}
+                  onChange={(e) => setHeartbeatDraft((d) => ({ ...d, maxMs: parseInt(e.target.value, 10) || 3_600_000 }))}
+                />
+              </label>
+              <button type="button" className="btn" onClick={handleHeartbeatSave} disabled={heartbeatPatchBusy}>
+                {heartbeatPatchBusy ? "Saving…" : "Save"}
+              </button>
+              {heartbeatPatchError && <span className="error-msg">{heartbeatPatchError}</span>}
+            </div>
+          </div>
+        ) : null}
+
+        <h4>Raw config (read-only)</h4>
         {loading && <p>Loading…</p>}
         {error && <p className="error-msg">{error}</p>}
         {!loading && !error && config !== null && config !== undefined ? (

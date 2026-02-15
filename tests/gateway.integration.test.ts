@@ -128,7 +128,7 @@ async function createGateway(options: {
   });
   const policyLogs = new PolicyDecisionLogger();
   const app = buildGateway({
-    config,
+    getConfig: () => config,
     runtime,
     cronService,
     ...(options.channelHub ? { channelHub: options.channelHub } : {}),
@@ -429,7 +429,7 @@ describe("gateway integration", () => {
       });
       const policyLogs = new PolicyDecisionLogger();
       const app = buildGateway({
-        config,
+        getConfig: () => config,
         runtime,
         cronService: cronDefault,
         auth,
@@ -661,7 +661,7 @@ describe("gateway integration", () => {
       await runStore.load();
       await runStore.markInFlightInterrupted();
       return buildGateway({
-        config,
+        getConfig: () => config,
         runtime,
         cronService,
         runStore,
@@ -1078,7 +1078,7 @@ describe("gateway integration", () => {
       stateFile: join(dir, "cron-state.json")
     });
     const app = buildGateway({
-      config,
+      getConfig: () => config,
       runtime,
       cronService,
       auth: new AuthService({
