@@ -69,6 +69,14 @@ export interface ModelProviderConfig {
   summarizeOldTurnsMaxTokens?: number;
 }
 
+export interface ToolsGhConfig {
+  enabled: boolean;
+  /** When set (e.g. "owner/repo"), every gh call uses --repo so the agent cannot target other repositories. */
+  repoScope?: string | null;
+  /** When true, register gh_pr_write (comment on PR, create PR). Requires tools.gh.enabled. Default false. */
+  allowWrite?: boolean;
+}
+
 export interface ToolsConfig {
   exec: {
     host: "sandbox" | "host";
@@ -83,6 +91,8 @@ export interface ToolsConfig {
     /** Max concurrent exec invocations system-wide. Default 100. No OS-level CPU/memory cap. */
     maxChildProcessesPerTurn?: number;
   };
+  /** Optional GitHub CLI integration: gh_pr_read (list/view PRs) and optionally gh_pr_write (comment, create PR). */
+  gh?: ToolsGhConfig;
 }
 
 export interface MemoryConfig {

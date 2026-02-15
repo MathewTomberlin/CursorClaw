@@ -176,6 +176,9 @@ export function requiredCapabilitiesForApproval(input: CapabilityApprovalInput):
   if (input.tool === "web_search" || input.tool === "mcp_web_search") {
     return ["net.fetch"];
   }
+  if (input.tool === "gh_pr_write") {
+    return ["process.exec", "fs.write", "process.exec.mutate"];
+  }
   if (input.tool !== "exec") {
     return [];
   }

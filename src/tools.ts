@@ -500,6 +500,121 @@ export function createGhPrReadTool(args: {
   };
 }
 
+const GH_PR_WRITE_BODY_MAX_BYTES = 32 * 1024;
+const GH_PR_WRITE_TITLE_MAX_CHARS = 256;
+const GH_PR_WRITE_BODY_MAX_CHARS = GH_PR_WRITE_BODY_MAX_BYTES; // UTF-8 safe for ASCII
+
+function sanitizeGhPrWriteString(s: string, maxChars: number, field: string): string {
+  const noControl = s.replace(/[\x00-\x1f\x7f]/g, " ").trim();
+  if (noControl.length === 0) {
+    throw new Error(`gh_pr_write: ${field} must be non-empty after trimming`);
+  }
+  if (noControl.length > maxChars) {
+    throw new Error(`gh_pr_write: ${field} exceeds ${maxChars} characters`);
+  }
+  return noControl;
+}
+
+/** GitHub PR write tool: comment on PR and create PR. Auth via host `gh auth` or GH_TOKEN in env; no token in args. Requires mutating approval. */
+export function createGhPrWriteTool(args: {
+  approvalGate: ApprovalGate;
+  workspaceCwd: string;
+  repoScope?: string;
+  sandbox?: ExecSandbox;
+  maxBufferBytes?: number;
+}): ToolDefinition {
+  const sandbox: ExecSandbox = args.sandbox ?? new HostExecSandbox();
+  const maxBuffer = args.maxBufferBytes ?? 64 * 1024;
+  const repoFlag = args.repoScope ? ["--repo", args.repoScope] : [];
+
+  return {
+    name: "gh_pr_write",
+    description:
+      "Write to pull requests via GitHub CLI: post a comment on an existing PR or create a new PR. Uses host-configured auth (gh auth login or GH_TOKEN in env). Requires approval (mutating capability). Only comment and create are allowed; no merge.",
+    schema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["comment", "create"] },
+        number: { type: "number", description: "PR number (for action comment)" },
+        body: { type: "string", description: "Comment or PR body (for comment required; for create optional)" },
+        title: { type: "string", description: "PR title (for action create)" },
+        base: { type: "string", description: "Base branch for new PR (optional)" },
+        head: { type: "string", description: "Head branch for new PR (optional; default current branch)" }
+      },
+      required: ["action"],
+      additionalProperties: false
+    },
+    riskLevel: "high",
+    execute: async (rawArgs: unknown, ctx?: ToolExecuteContext) => {
+      const parsed = rawArgs as {
+        action: string;
+        number?: number;
+        body?: string;
+        title?: string;
+        base?: string;
+        head?: string;
+      };
+      if (parsed.action !== "comment" && parsed.action !== "create") {
+        throw new Error("gh_pr_write: action must be comment or create");
+      }
+      let plan: string;
+      let ghArgs: string[];
+      if (parsed.action === "comment") {
+        if (parsed.number == null || !Number.isInteger(parsed.number)) {
+          throw new Error("gh_pr_write: for action comment provide number (PR number)");
+        }
+        const body =
+          typeof parsed.body === "string"
+            ? sanitizeGhPrWriteString(parsed.body, GH_PR_WRITE_BODY_MAX_CHARS, "body")
+            : "";
+        if (!body) {
+          throw new Error("gh_pr_write: for action comment body is required and non-empty");
+        }
+        plan = `comment on PR #${parsed.number}`;
+        ghArgs = ["pr", "comment", ...repoFlag, String(parsed.number), "--body", body];
+      } else {
+        const title =
+          typeof parsed.title === "string"
+            ? sanitizeGhPrWriteString(parsed.title, GH_PR_WRITE_TITLE_MAX_CHARS, "title")
+            : "";
+        if (!title) {
+          throw new Error("gh_pr_write: for action create title is required and non-empty");
+        }
+        plan = "create PR";
+        ghArgs = ["pr", "create", ...repoFlag, "--title", title];
+        if (typeof parsed.body === "string" && parsed.body.trim().length > 0) {
+          const body = sanitizeGhPrWriteString(parsed.body.trim(), GH_PR_WRITE_BODY_MAX_CHARS, "body");
+          ghArgs.push("--body", body);
+        }
+        if (typeof parsed.base === "string" && /^[\w./-]+$/.test(parsed.base)) {
+          ghArgs.push("--base", parsed.base);
+        }
+        if (typeof parsed.head === "string" && /^[\w./-]+$/.test(parsed.head)) {
+          ghArgs.push("--head", parsed.head);
+        }
+      }
+      const approved = await args.approvalGate.approve({
+        tool: "gh_pr_write",
+        intent: "mutating",
+        plan,
+        args: parsed,
+        ...(ctx?.provenance !== undefined && { provenance: ctx.provenance })
+      });
+      if (!approved) {
+        const denial = args.approvalGate.getLastDenial?.();
+        const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
+        throw new Error(`gh_pr_write requires approval${suffix}`);
+      }
+      const result = await sandbox.run("gh", ghArgs, {
+        cwd: args.workspaceCwd,
+        maxBufferBytes: maxBuffer,
+        timeoutMs: 15_000
+      });
+      return { stdout: result.stdout, stderr: result.stderr };
+    }
+  };
+}
+
 export interface WebFetchArgs {
   url: string;
 }
