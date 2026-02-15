@@ -355,6 +355,16 @@ Model object fields:
 - `summarizeOldTurns?: boolean` — Optional (TU.4). When `true` and the prompt is over `maxContextTokens`, the runtime replaces the oldest messages (all but the last) with a single rule-based summary before applying the cap. Off by default; no change to truncation when disabled.
 - `summarizeOldTurnsMaxTokens?: number` — Optional. Max tokens for the summary of earlier turns when `summarizeOldTurns` is true. Default 200.
 
+## 4.15.1 `providerModelResilience` (optional)
+
+Provider and model resilience (PMR): validation store and policies. See `docs/PMR-provider-model-resilience.md`.
+
+- **validationStorePath** — Path to the JSON file storing per-model validation results (no secrets). Default `run/provider-model-validation.json` (relative to process cwd when running the validate-model script).
+- **useOnlyValidatedFallbacks** — When `true`, the fallback chain only includes models that have passed the minimum-capability probe (Phase 3). Default `false`.
+- **runValidationAgainstPaidApis** — When `true`, allow the validation probe to run against paid APIs (Phase 2 cost guardrail). Default `false`.
+
+To validate a model: `npm run validate-model -- --modelId=<id>` (optional `--config=<path>`). Exit code 0 if the probe passed.
+
 ## 4.16 `autonomyBudget`
 
 Limits how many proactive/autonomy actions run per channel per hour and per day. **Scheduled heartbeats are not limited** (they always run on their interval). Other proactive flows (e.g. queued intents) respect this budget.
