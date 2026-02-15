@@ -90,6 +90,12 @@ export class AutonomyBudget {
       );
     }
   }
+
+  /** Clear all timestamps for a channel (e.g. heartbeat after restart so limit applies to current run only). */
+  clearChannel(channelId: string): void {
+    this.hourly.delete(channelId);
+    this.daily.delete(channelId);
+  }
 }
 
 export class HeartbeatRunner {

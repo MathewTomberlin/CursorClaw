@@ -200,6 +200,7 @@ export class AutonomyOrchestrator {
     }
     const state = await this.options.autonomyStateStore.load();
     this.options.budget.importState(state.budget);
+    this.options.budget.clearChannel(this.options.heartbeatChannelId);
     this.pendingProactiveIntents = state.intents.filter((intent) => intent.status === "pending").length;
   }
 

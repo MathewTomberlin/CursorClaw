@@ -638,6 +638,24 @@ async function main(): Promise<void> {
   });
 
   const birthPath = join(workspaceDir, config.substrate?.birthPath ?? "BIRTH.md");
+  const heartbeatPathForStartup = join(workspaceDir, "HEARTBEAT.md");
+  let heartbeatHasSubstantiveContent = false;
+  try {
+    if (existsSync(heartbeatPathForStartup)) {
+      const fc = await readFile(heartbeatPathForStartup, "utf8");
+      const trimmed = fc.trim();
+      heartbeatHasSubstantiveContent = trimmed
+        .split("\n")
+        .some((line) => {
+          const s = line.trim();
+          return s.length > 0 && !s.startsWith("#");
+        });
+    }
+  } catch {
+    /* ignore */
+  }
+  const useShortFirstHeartbeat =
+    existsSync(birthPath) || heartbeatHasSubstantiveContent;
   const orchestrator = new AutonomyOrchestrator({
     cronService,
     heartbeat,
@@ -651,7 +669,7 @@ async function main(): Promise<void> {
     cronTickMs: 1_000,
     integrityScanEveryMs: config.memory.integrityScanEveryMs,
     intentTickMs: 1_000,
-    ...(existsSync(birthPath) ? { firstHeartbeatDelayMs: 10_000 } : {}),
+    ...(useShortFirstHeartbeat ? { firstHeartbeatDelayMs: 10_000 } : {}),
     onCronRun: async (job) => {
       const sessionId = job.isolated ? `cron:${job.id}` : "main";
       await runtime.runTurn({
@@ -697,8 +715,10 @@ async function main(): Promise<void> {
       let content: string;
       if (existsSync(heartbeatPath)) {
         const fileContent = await readFile(heartbeatPath, "utf8");
+        const deliveryNote =
+          "Anything you write before HEARTBEAT_OK will be delivered to the user as a proactive message in the CursorClaw web Chat. So if HEARTBEAT.md asks for an update or message, write it first, then end with HEARTBEAT_OK.";
         content =
-          `Instructions for this heartbeat (from HEARTBEAT.md):\n\n${fileContent.trim()}\n\n${baseInstruction}`;
+          `Instructions for this heartbeat (from HEARTBEAT.md):\n\n${fileContent.trim()}\n\n${deliveryNote}\n\n${baseInstruction}`;
       } else {
         content = `Read HEARTBEAT.md if present. ${baseInstruction}`;
       }
@@ -715,13 +735,29 @@ async function main(): Promise<void> {
         messages: [{ role: "user", content }]
       });
       const reply = result.assistantText.trim();
-      if (reply !== "" && reply !== "HEARTBEAT_OK") {
+      const okMarker = "HEARTBEAT_OK";
+      const okIndex = reply.indexOf(okMarker);
+      const messageToUser =
+        okIndex >= 0 ? reply.slice(0, okIndex).trim() : reply;
+      const hasProactiveContent =
+        messageToUser.length > 0 && reply !== okMarker;
+      const heartbeatHadContent = existsSync(heartbeatPath);
+      if (process.env.NODE_ENV !== "test") {
+        console.warn(
+          "[CursorClaw] heartbeat reply length:",
+          reply.length,
+          "hasProactiveContent:",
+          hasProactiveContent
+        );
+      }
+      if (hasProactiveContent) {
+        const textToDeliver = okIndex >= 0 ? messageToUser : result.assistantText;
         await channelHub.send({
           channelId,
-          text: result.assistantText,
+          text: textToDeliver,
           proactive: true
         });
-        pendingProactiveMessage = result.assistantText;
+        pendingProactiveMessage = textToDeliver;
       } else if (birthPending) {
         // Fallback: model returned HEARTBEAT_OK or empty; still deliver a BIRTH prompt so the user sees a proactive message
         const fallbackMessage =
@@ -732,6 +768,15 @@ async function main(): Promise<void> {
           proactive: true
         });
         pendingProactiveMessage = fallbackMessage;
+      } else if (heartbeatHadContent) {
+        const heartbeatFallback =
+          "Heartbeat ran. No update from the agent this time.";
+        await channelHub.send({
+          channelId,
+          text: heartbeatFallback,
+          proactive: true
+        });
+        pendingProactiveMessage = heartbeatFallback;
       }
       return reply === "" ? "HEARTBEAT_OK" : result.assistantText;
       } catch (err) {
