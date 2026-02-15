@@ -177,7 +177,9 @@ const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
   "heartbeat.getFile": ["local", "remote", "admin"],
   "heartbeat.update": ["local", "remote", "admin"],
   "skills.fetchFromUrl": ["admin", "local"],
-  "skills.list": ["admin", "local"]
+  "skills.list": ["admin", "local"],
+  "skills.analyze": ["admin", "local"],
+  "skills.install": ["admin", "local"]
 };
 
 export function buildGateway(deps: GatewayDependencies): FastifyInstance {
@@ -923,8 +925,27 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         }
         const text = await res.text();
         const { parseSkillMd } = await import("./skills/parser.js");
+        const { analyzeSkillSafety } = await import("./skills/safety.js");
         const definition = parseSkillMd(text);
-        result = { definition, sourceUrl: url };
+        const safety = analyzeSkillSafety(definition, url);
+        result = { definition, sourceUrl: url, safety };
+      } else if (body.method === "skills.analyze") {
+        const definition = body.params?.definition;
+        const sourceUrl = typeof body.params?.sourceUrl === "string" ? body.params.sourceUrl.trim() : "";
+        if (!definition || typeof definition !== "object") {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "definition (object) is required");
+        }
+        const { analyzeSkillSafety } = await import("./skills/safety.js");
+        const safety = analyzeSkillSafety(
+          {
+            description: String(definition.description ?? ""),
+            install: String(definition.install ?? ""),
+            credentials: String(definition.credentials ?? ""),
+            usage: String(definition.usage ?? "")
+          },
+          sourceUrl
+        );
+        result = { safety };
       } else if (body.method === "skills.list") {
         if (!profileCtx.profileRoot) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "profile root not configured");
@@ -932,6 +953,86 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         const { readInstalledManifest } = await import("./skills/store.js");
         const skills = await readInstalledManifest(profileCtx.profileRoot);
         result = { skills };
+      } else if (body.method === "skills.install") {
+        if (!profileCtx.profileRoot) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "profile root not configured");
+        }
+        const {
+          runInstall,
+          readInstalledManifest,
+          writeInstalledManifest,
+          analyzeSkillSafety,
+          parseSkillMd,
+          parseCredentialNames
+        } = await import("./skills/index.js");
+        let definition: import("./skills/types.js").SkillDefinition;
+        let sourceUrl: string;
+        if (typeof body.params?.url === "string" && body.params.url.trim()) {
+          const url = body.params.url.trim();
+          if (!url.startsWith("https://") && !url.startsWith("http://")) {
+            throw new RpcGatewayError(400, "BAD_REQUEST", "url must be http or https");
+          }
+          const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+          if (!res.ok) {
+            throw new RpcGatewayError(502, "UPSTREAM_ERROR", `fetch failed: ${res.status}`);
+          }
+          const text = await res.text();
+          definition = parseSkillMd(text);
+          sourceUrl = url;
+        } else if (
+          body.params?.definition &&
+          typeof body.params?.sourceUrl === "string" &&
+          body.params.sourceUrl.trim()
+        ) {
+          const d = body.params.definition as Record<string, unknown>;
+          definition = {
+            description: String(d.description ?? ""),
+            install: String(d.install ?? ""),
+            credentials: String(d.credentials ?? ""),
+            usage: String(d.usage ?? "")
+          };
+          sourceUrl = body.params.sourceUrl.trim();
+        } else {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "skills.install requires url or (definition + sourceUrl)");
+        }
+        const safety = analyzeSkillSafety(definition, sourceUrl);
+        if (!safety.allowed) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", `Skill safety check failed: ${safety.reason}`);
+        }
+        const skillId =
+          typeof body.params?.skillId === "string" && body.params.skillId.trim()
+            ? body.params.skillId.trim().replace(/[^a-zA-Z0-9_-]/g, "_")
+            : sourceUrl.replace(/\/$/, "").split("/").pop()?.replace(/\.(md|txt)$/i, "") || "skill";
+        const runResult = await runInstall(profileCtx.profileRoot, skillId, definition);
+        if (!runResult.ok) {
+          result = {
+            installed: false,
+            skillId,
+            error: runResult.error ?? `exit code ${runResult.exitCode}`,
+            stdout: runResult.stdout,
+            stderr: runResult.stderr
+          };
+        } else {
+          const credentialNames = parseCredentialNames(definition.credentials);
+          const existing = await readInstalledManifest(profileCtx.profileRoot);
+          const updated = [
+            ...existing.filter((s) => s.id !== skillId),
+            {
+              id: skillId,
+              sourceUrl,
+              installedAt: new Date().toISOString(),
+              credentialNames
+            }
+          ];
+          await writeInstalledManifest(profileCtx.profileRoot, updated);
+          result = {
+            installed: true,
+            skillId,
+            credentialNames,
+            stdout: runResult.stdout,
+            stderr: runResult.stderr
+          };
+        }
       } else if (body.method === "admin.restart") {
         if (!deps.onRestart) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "restart not configured");

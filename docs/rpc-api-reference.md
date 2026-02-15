@@ -43,7 +43,7 @@ Optional trusted identity header enforcement:
 }
 ```
 
-**Profile-scoped RPCs:** For multi-agent setups, `params` may include an optional `profileId` string. When present, the request is executed in the context of that agent profile (substrate, memory, approvals, etc.). When omitted, the gateway uses the default profile. Single-agent deployments ignore this and use the single profile. Profile-scoped methods include: `heartbeat.poll`, `heartbeat.getFile`, `heartbeat.update`, `memory.*`, `substrate.*`, `skills.list`, `approval.*`, `cron.list`/`cron.add`, `workspace.status`/`workspace.semantic_search`, `trace.ingest`, `advisor.file_change`/`advisor.explain_function`, and `incident.bundle`. `agent.run` accepts `session.profileId` to run the turn in that profile's context.
+**Profile-scoped RPCs:** For multi-agent setups, `params` may include an optional `profileId` string. When present, the request is executed in the context of that agent profile (substrate, memory, approvals, etc.). When omitted, the gateway uses the default profile. Single-agent deployments ignore this and use the single profile. Profile-scoped methods include: `heartbeat.poll`, `heartbeat.getFile`, `heartbeat.update`, `memory.*`, `substrate.*`, `skills.list`, `skills.fetchFromUrl`, `skills.analyze`, `skills.install`, `approval.*`, `cron.list`/`cron.add`, `workspace.status`/`workspace.semantic_search`, `trace.ingest`, `advisor.file_change`/`advisor.explain_function`, and `incident.bundle`. `agent.run` accepts `session.profileId` to run the turn in that profile's context.
 
 ### Success response
 
@@ -143,6 +143,8 @@ Method scope rules (`METHOD_SCOPES`):
 - `heartbeat.update`: admin, local
 - `skills.fetchFromUrl`: admin, local
 - `skills.list`: admin, local
+- `skills.analyze`: admin, local
+- `skills.install`: admin, local
 
 ---
 
@@ -533,6 +535,20 @@ Returns `{ ok: true }`. On path traversal or invalid key, returns `BAD_REQUEST`.
 Re-reads all substrate files from disk and replaces the in-memory cache (admin, local). Use when files were edited outside the UI so the next turn uses the new content.
 
 No params. Returns `{ ok: true }`.
+
+---
+
+### 5.23 `skills.install`
+
+Fetches (if URL given) or uses provided definition, runs safety check, then runs the install section in a restricted context (profile `skills/install/<skillId>`). Records the skill in the profile's installed manifest (admin, local). Requires profile root.
+
+`params`:
+
+- **Option A:** `url: string` (required) — fetch skill.md from URL, parse, safety-check, then install.
+- **Option B:** `definition: object` (required) and `sourceUrl: string` (required) — use pre-fetched definition; `definition` must have `description`, `install`, `credentials`, `usage` (strings).
+- `skillId?: string` — optional id for the skill; default derived from URL path or `"skill"`.
+
+If safety check fails, returns `BAD_REQUEST` with reason. If install script fails, returns `result: { installed: false, skillId, error, stdout, stderr }`. On success returns `result: { installed: true, skillId, credentialNames, stdout, stderr }`. Credential names are parsed from the Credentials section (backticked names); the user can set values later via credential store RPCs (see Agent Skills implementation guide).
 
 ## 6) RPC error codes in practice
 

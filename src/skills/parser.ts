@@ -35,3 +35,21 @@ export function parseSkillMd(content: string): SkillDefinition {
     usage
   };
 }
+
+/** Match backticked credential names only (e.g. `API_KEY`, `WEATHER_API_KEY`). */
+const CREDENTIAL_BACKTICK = /`([A-Za-z_][A-Za-z0-9_]{0,63})`/g;
+
+/**
+ * Extract credential names from the Credentials section (no values).
+ * Looks for backticked identifiers (e.g. `API_KEY`). Used to populate
+ * InstalledSkillRecord.credentialNames and to tell the user what to set.
+ */
+export function parseCredentialNames(credentialsSection: string): string[] {
+  const names = new Set<string>();
+  let m: RegExpExecArray | null;
+  const re = new RegExp(CREDENTIAL_BACKTICK.source, "g");
+  while ((m = re.exec(credentialsSection)) !== null) {
+    names.add(m[1]!);
+  }
+  return [...names];
+}
