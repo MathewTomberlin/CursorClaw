@@ -323,6 +323,8 @@ Model object fields:
 - `enabled: boolean`
 - `maxContextTokens?: number` — Optional per-model context token cap. When set, the runtime trims the prompt so the estimated token count does not exceed this value. Estimation is best-effort (~4 characters per token). The last message is always kept. By default, oldest messages are dropped first (TU.2). With `truncationPriority`, drop order is configurable (TU.3).
 - `truncationPriority?: ("system"|"user"|"assistant")[]` — Optional. When set with `maxContextTokens`, roles listed first are dropped first when over the cap (e.g. `["assistant","user","system"]` drops assistant messages first, then user, then system). Omit for oldest-first behavior.
+- `summarizeOldTurns?: boolean` — Optional (TU.4). When `true` and the prompt is over `maxContextTokens`, the runtime replaces the oldest messages (all but the last) with a single rule-based summary before applying the cap. Off by default; no change to truncation when disabled.
+- `summarizeOldTurnsMaxTokens?: number` — Optional. Max tokens for the summary of earlier turns when `summarizeOldTurns` is true. Default 200.
 
 ## 4.15 `autonomyBudget`
 

@@ -3,7 +3,11 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { getDefaultProfileId, getModelIdForProfile, type CursorClawConfig } from "./config.js";
-import { applyMaxContextTokens } from "./max-context-tokens.js";
+import {
+  applyMaxContextTokens,
+  estimateTokens,
+  summarizePrefix
+} from "./max-context-tokens.js";
 import type { DecisionJournal } from "./decision-journal.js";
 import type { MemoryStore } from "./memory.js";
 import type { CursorAgentModelAdapter } from "./model-adapter.js";
@@ -399,11 +403,34 @@ export class AgentRuntime {
           const modelId = getModelIdForProfile(this.options.config, profileId);
           const modelConfig = this.options.config.models[modelId];
           if (modelConfig?.maxContextTokens !== undefined && modelConfig.maxContextTokens > 0) {
-            promptMessages = applyMaxContextTokens(
-              promptMessages,
-              modelConfig.maxContextTokens,
-              modelConfig.truncationPriority
+            const cap = modelConfig.maxContextTokens;
+            const totalTokens = promptMessages.reduce(
+              (sum, m) => sum + estimateTokens(m.content),
+              0
             );
+            const summarize =
+              modelConfig.summarizeOldTurns === true &&
+              totalTokens > cap &&
+              promptMessages.length > 1;
+            if (summarize) {
+              const maxSummaryTokens =
+                modelConfig.summarizeOldTurnsMaxTokens ?? 200;
+              const { summaryMessage, remainingMessages } = summarizePrefix(
+                promptMessages,
+                maxSummaryTokens
+              );
+              promptMessages = applyMaxContextTokens(
+                [summaryMessage, ...remainingMessages],
+                cap,
+                modelConfig.truncationPriority
+              );
+            } else {
+              promptMessages = applyMaxContextTokens(
+                promptMessages,
+                cap,
+                modelConfig.truncationPriority
+              );
+            }
           }
           const lastUserContent =
             request.messages.filter((m) => m.role === "user").pop()?.content ?? "";
@@ -835,6 +862,19 @@ export class AgentRuntime {
         role: "system",
         content: this.scrubText(
           `Planning (ROADMAP):\n\n${substrate.roadmap.trim()}`,
+          scopeId
+        )
+      });
+    }
+
+    // Formal planning and agency: native support for milestones, roadmaps, and user prioritization.
+    // Injected when substrate is used (agents or roadmap) so the agent is natively good at planning and automating work.
+    const hasPlanningContext = (substrate.agents?.trim() ?? "") !== "" || (substrate.roadmap?.trim() ?? "") !== "";
+    if (hasPlanningContext) {
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(
+          "Planning and automation: You have a planning file (e.g. ROADMAP.md) for milestones, roadmaps, and backlogs. Create or update it when the user or context implies goals; break work into concrete steps and priorities. During heartbeats (when no user message is pending), read the planning file and HEARTBEAT.md and make progress on the next item when appropriate—implement a small piece, run a check, or update status. User messages always take priority: the system will interrupt any in-flight heartbeat work when the user sends a message, let you respond to the user fully, then the next heartbeat tick continues from the planning file and HEARTBEAT checklist. Plan in ROADMAP, advance it on heartbeats, and stay responsive to the user.",
           scopeId
         )
       });

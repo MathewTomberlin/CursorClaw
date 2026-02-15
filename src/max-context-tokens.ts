@@ -1,11 +1,53 @@
 /**
  * Per-model maxContextTokens: best-effort token estimation and message trimming.
  * Used by runtime when a model config sets maxContextTokens (TU.2).
+ * TU.4: optional summarization of old turns before trimming.
  */
+
+const SUMMARY_PREFIX = "Summary of earlier turns:\n";
 
 /** Best-effort token estimate (~4 chars per token). */
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
+}
+
+export interface SummarizePrefixResult {
+  summaryMessage: { role: string; content: string };
+  remainingMessages: Array<{ role: string; content: string }>;
+}
+
+/**
+ * Replaces a contiguous prefix of messages (all but the last) with a single system summary message.
+ * Rule-based: concatenates "User: … Assistant: …" per turn, then truncates to maxSummaryTokens.
+ * Use when over cap and summarizeOldTurns is enabled (TU.4).
+ */
+export function summarizePrefix(
+  messages: Array<{ role: string; content: string }>,
+  maxSummaryTokens: number
+): SummarizePrefixResult {
+  if (messages.length <= 1) {
+    return {
+      summaryMessage: { role: "system", content: SUMMARY_PREFIX + "(none)" },
+      remainingMessages: messages.length === 1 ? [messages[0]!] : []
+    };
+  }
+  const prefix = messages.slice(0, -1);
+  const lastMessage = messages[messages.length - 1]!;
+  const parts: string[] = [];
+  for (const m of prefix) {
+    const label = m.role === "user" ? "User" : m.role === "assistant" ? "Assistant" : "System";
+    parts.push(`${label}: ${m.content}`);
+  }
+  let text = parts.join("\n\n");
+  const maxChars = Math.max(0, maxSummaryTokens * 4);
+  if (estimateTokens(text) > maxSummaryTokens && text.length > maxChars) {
+    text = text.slice(0, maxChars);
+  }
+  const summaryMessage: { role: string; content: string } = {
+    role: "system",
+    content: SUMMARY_PREFIX + text
+  };
+  return { summaryMessage, remainingMessages: [lastMessage] };
 }
 
 /**
