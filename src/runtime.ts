@@ -839,6 +839,16 @@ export class AgentRuntime {
         )
       });
     }
+    const allowSoulIdentityEvolution = this.options.config.substrate?.allowSoulIdentityEvolution === true;
+    if (allowSoulIdentityEvolution && isMainSession) {
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(
+          "When you infer a lasting change in how you want to be or how you present in this workspace, you may propose an update to SOUL.md or IDENTITY.md via the propose_soul_identity_update tool. The tool does not write to disk; it returns a diff/draft for the user to review and apply. State what you changed when you propose (e.g. \"Proposed change to IDENTITY.md: …\").",
+          scopeId
+        )
+      });
+    }
 
     if (freshness.summaryLine) {
       systemMessages.push({
