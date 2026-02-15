@@ -197,6 +197,8 @@ export interface ContinuityConfig {
   memoryMaxChars?: number;
   /** When rolling window is enabled, trimmed lines can be appended here (e.g. "memory/MEMORY-archive.md"). Omit to drop without archiving. */
   memoryArchivePath?: string;
+  /** Number of recent decision journal entries to replay into the system prompt (default 5, clamped 1–100). */
+  decisionJournalReplayCount?: number;
 }
 
 export interface CursorClawConfig {
@@ -380,7 +382,8 @@ export const DEFAULT_CONFIG: CursorClawConfig = {
     memoryEmbeddingsEnabled: false,
     memoryEmbeddingsMaxRecords: 3_000,
     memorySizeWarnChars: 28_800,
-    substrateSizeWarnChars: 60_000
+    substrateSizeWarnChars: 60_000,
+    decisionJournalReplayCount: 5
   }
 };
 

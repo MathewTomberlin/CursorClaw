@@ -883,7 +883,11 @@ export class AgentRuntime {
     }
 
     if (this.options.decisionJournal) {
-      const recentDecisions = await this.options.decisionJournal.readRecent(5);
+      const limit = Math.min(
+        100,
+        Math.max(1, this.options.config.continuity?.decisionJournalReplayCount ?? 5)
+      );
+      const recentDecisions = await this.options.decisionJournal.readRecent(limit);
       if (recentDecisions.length > 0) {
         systemMessages.push({
           role: "system",
