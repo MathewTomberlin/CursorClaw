@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
-import type { CursorClawConfig } from "./config.js";
+import { getDefaultProfileId, getModelIdForProfile, type CursorClawConfig } from "./config.js";
 import type { DecisionJournal } from "./decision-journal.js";
 import type { MemoryStore } from "./memory.js";
 import type { CursorAgentModelAdapter } from "./model-adapter.js";
@@ -184,7 +184,7 @@ export class AgentRuntime {
   private readonly queue: SessionQueue;
   private readonly promptPluginHost: PluginHost;
   private readonly decisionLogs: PolicyDecisionLog[] = [];
-  private readonly sessionHandles = new Map<string, string>();
+  private readonly sessionHandles = new Map<string, { id: string; model: string; authProfile?: string }>();
   private readonly metrics = {
     turnsStarted: 0,
     turnsCompleted: 0,
@@ -609,24 +609,16 @@ export class AgentRuntime {
   }
 
   private async ensureModelSession(context: SessionContext) {
-    const existingId = this.sessionHandles.get(context.sessionId);
-    if (existingId) {
-      const handle: {
-        id: string;
-        model: string;
-        authProfile?: string;
-      } = {
-        id: existingId,
-        model: this.options.config.defaultModel
-      };
-      const profile = this.options.config.models[this.options.config.defaultModel]?.authProfiles[0];
-      if (profile !== undefined) {
-        handle.authProfile = profile;
-      }
-      return handle;
-    }
-    const handle = await this.options.adapter.createSession(context);
-    this.sessionHandles.set(context.sessionId, handle.id);
+    const stored = this.sessionHandles.get(context.sessionId);
+    if (stored) return stored;
+    const profileId = context.profileId ?? getDefaultProfileId(this.options.config);
+    const modelId = getModelIdForProfile(this.options.config, profileId);
+    const handle = await this.options.adapter.createSession(context, { modelId });
+    this.sessionHandles.set(context.sessionId, {
+      id: handle.id,
+      model: handle.model,
+      ...(handle.authProfile !== undefined ? { authProfile: handle.authProfile } : {})
+    });
     return handle;
   }
 

@@ -8,6 +8,7 @@ import {
   type ReactNode
 } from "react";
 import { rpc, mapRpcError, openStream } from "../api";
+import { useProfile } from "./ProfileContext";
 
 export type ChannelKind = "dm" | "group" | "web" | "mobile";
 
@@ -84,6 +85,7 @@ interface ChatProviderProps {
 }
 
 export function ChatProvider({ children }: ChatProviderProps) {
+  const { selectedProfileId } = useProfile();
   const [sessionId, setSessionId] = useState("demo-session");
   const [channelId, setChannelId] = useState("dm:demo-session");
   const [channelKind, setChannelKind] = useState<ChannelKind>("dm");
@@ -170,7 +172,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
           .map((m) => ({ role: m.role, content: m.content }));
 
         const runRes = await rpc<{ runId: string }>("agent.run", {
-          session: { sessionId: sessionId.trim(), channelId: channelId.trim(), channelKind },
+          session: { sessionId: sessionId.trim(), channelId: channelId.trim(), channelKind, profileId: selectedProfileId },
           messages: apiMessages
         });
         const runId = runRes.result?.runId;
@@ -199,7 +201,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
         setCurrentRunId(null);
       }
     },
-    [sessionId, channelId, channelKind, messages]
+    [sessionId, channelId, channelKind, messages, selectedProfileId]
   );
 
   const clearThread = useCallback(() => {

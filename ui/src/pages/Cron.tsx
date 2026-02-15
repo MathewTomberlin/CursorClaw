@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { rpc, mapRpcError } from "../api";
+import { rpcWithProfile, mapRpcError } from "../api";
+import { useProfile } from "../contexts/ProfileContext";
 
 interface CronJob {
   id: string;
@@ -12,6 +13,7 @@ interface CronJob {
 }
 
 export default function Cron() {
+  const { selectedProfileId } = useProfile();
   const [type, setType] = useState<"at" | "every" | "cron">("every");
   const [expression, setExpression] = useState("30m");
   const [isolated, setIsolated] = useState(true);
@@ -24,7 +26,7 @@ export default function Cron() {
   const loadJobs = async () => {
     setListLoading(true);
     try {
-      const res = await rpc<{ jobs: CronJob[] }>("cron.list");
+      const res = await rpcWithProfile<{ jobs: CronJob[] }>("cron.list", undefined, selectedProfileId);
       setJobs(res.result?.jobs ?? []);
     } catch {
       setJobs([]);
@@ -35,14 +37,14 @@ export default function Cron() {
 
   useEffect(() => {
     loadJobs();
-  }, []);
+  }, [selectedProfileId]);
 
   const addJob = async () => {
     setError(null);
     setSuccess(false);
     setLoading(true);
     try {
-      await rpc("cron.add", { type, expression, isolated });
+      await rpcWithProfile("cron.add", { type, expression, isolated }, selectedProfileId);
       setSuccess(true);
       await loadJobs();
     } catch (e) {

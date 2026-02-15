@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { rpc, mapRpcError, heartbeatPoll } from "../api";
 import { useChat } from "../contexts/ChatContext";
+import { useProfile } from "../contexts/ProfileContext";
 import type { StreamEvent } from "../contexts/ChatContext";
 
 function formatStreamEventLabel(ev: StreamEvent): string {
@@ -29,6 +30,7 @@ function formatStreamEventLabel(ev: StreamEvent): string {
 }
 
 export default function Chat() {
+  const { selectedProfileId } = useProfile();
   const {
     sessionId,
     setSessionId,
@@ -67,11 +69,11 @@ export default function Chat() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "auto" });
   }, [messages, streamEvents]);
 
-  // Poll for proactive messages from heartbeat (e.g. BIRTH); append to thread when one arrives
+  // Poll for proactive messages from heartbeat (e.g. BIRTH) for the selected profile; append to thread when one arrives
   useEffect(() => {
     const poll = async () => {
       try {
-        const { proactiveMessage } = await heartbeatPoll();
+        const { proactiveMessage } = await heartbeatPoll(selectedProfileId);
         if (proactiveMessage?.trim()) {
           setMessages((prev) => [
             ...prev,
@@ -98,7 +100,7 @@ export default function Chat() {
       clearInterval(t);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [setMessages]);
+  }, [selectedProfileId, setMessages]);
 
   const runTurn = async () => {
     const text = input.trim();

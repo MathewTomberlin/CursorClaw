@@ -1,6 +1,7 @@
 import type { HeartbeatConfig } from "./types.js";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { writeFile } from "node:fs/promises";
+import { dirname, join, resolve, sep } from "node:path";
 
 export interface GatewayConfig {
   bind: "loopback" | "0.0.0.0";
@@ -132,6 +133,14 @@ export interface MetricsConfig {
   intervalSeconds?: number;
 }
 
+/** Optional per-agent profile: isolated root for substrate, memory, heartbeat, cron, etc. */
+export interface AgentProfileConfig {
+  id: string;
+  root: string;
+  /** Optional model id for this profile; must exist in config.models. When absent, config.defaultModel is used. */
+  modelId?: string;
+}
+
 /** Optional substrate file paths (workspace-relative). Defaults: AGENTS.md, IDENTITY.md, SOUL.md, BIRTH.md, CAPABILITIES.md, USER.md, TOOLS.md in workspace root. */
 export interface SubstrateConfig {
   agentsPath?: string;
@@ -169,6 +178,8 @@ export interface CursorClawConfig {
   };
   /** Optional. When present, substrate files (Identity, Soul, Birth, etc.) are loaded from workspace and injected into the prompt. */
   substrate?: SubstrateConfig;
+  /** Optional. When set, each agent has an isolated profile directory. When absent, workspaceDir is the single profile root. */
+  profiles?: AgentProfileConfig[];
 }
 
 export type DeepPartial<T> = {
@@ -344,6 +355,52 @@ export function loadConfig(raw?: DeepPartial<CursorClawConfig>): CursorClawConfi
   return config;
 }
 
+/** Default profile id when no profiles are configured, or the first profile id when they are. */
+export function getDefaultProfileId(config: CursorClawConfig): string {
+  const list = config.profiles;
+  if (!list?.length) return "default";
+  const first = list[0];
+  return first?.id ?? "default";
+}
+
+/**
+ * Resolve the model id to use for a given profile.
+ * When no profiles are configured, returns config.defaultModel.
+ * When the profile has modelId set (and it exists in config.models), returns that; otherwise config.defaultModel.
+ */
+export function getModelIdForProfile(config: CursorClawConfig, profileId: string): string {
+  const list = config.profiles;
+  if (!list?.length) return config.defaultModel;
+  const profile = list.find((p) => p.id === profileId) ?? list[0];
+  const modelId = profile?.modelId ?? config.defaultModel;
+  if (config.models[modelId]) return modelId;
+  return config.defaultModel;
+}
+
+/**
+ * Resolve the absolute profile root for the given profile.
+ * When no profiles are configured, returns workspaceDir (single-agent mode).
+ * Profile root is always resolved under workspaceDir to prevent path traversal.
+ */
+export function resolveProfileRoot(
+  workspaceDir: string,
+  config: CursorClawConfig,
+  profileId?: string
+): string {
+  const list = config.profiles;
+  if (!list?.length) return resolve(workspaceDir);
+  const id = profileId ?? getDefaultProfileId(config);
+  const profile = list.find((p) => p.id === id) ?? list[0];
+  if (!profile) throw new Error("profiles configured but no profile found");
+  const base = resolve(workspaceDir);
+  const candidate = resolve(base, profile.root);
+  const prefix = base.endsWith(sep) ? base : base + sep;
+  if (candidate !== base && !candidate.startsWith(prefix)) {
+    throw new Error(`profile root must be under workspace: ${profile.root}`);
+  }
+  return candidate;
+}
+
 export interface LoadConfigFromDiskOptions {
   configPath?: string;
   cwd?: string;
@@ -402,4 +459,26 @@ export function validateStartupConfig(
 
 export function isDevMode(env: NodeJS.ProcessEnv = process.env): boolean {
   return /^(1|true|yes)$/i.test(env.CURSORCLAW_DEV_MODE ?? "");
+}
+
+/**
+ * Writes config to disk at resolveConfigPath(options).
+ * Uses atomic write (temp file then rename). Ensures parent directory exists.
+ */
+export async function writeConfigToDisk(
+  config: CursorClawConfig,
+  options: LoadConfigFromDiskOptions = {}
+): Promise<string> {
+  const configPath = resolveConfigPath(options);
+  const dir = dirname(configPath);
+  if (!existsSync(dir)) {
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(dir, { recursive: true });
+  }
+  const tmpPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
+  const json = JSON.stringify(config, null, 2);
+  await writeFile(tmpPath, json, "utf8");
+  const { rename } = await import("node:fs/promises");
+  await rename(tmpPath, configPath);
+  return configPath;
 }

@@ -52,6 +52,8 @@ export interface SessionContext {
   channelId: string;
   userId?: string;
   channelKind: ChannelKind;
+  /** When set, used to resolve per-profile model (and future profile-scoped state). */
+  profileId?: string;
 }
 
 export type LifecycleEventType =
@@ -100,8 +102,13 @@ export interface SendTurnOptions {
   timeoutMs?: number;
 }
 
+export interface CreateSessionOptions {
+  /** Override model id for this session (e.g. from profile); must exist in config.models. */
+  modelId?: string;
+}
+
 export interface ModelAdapter {
-  createSession(context: SessionContext): Promise<ModelSessionHandle>;
+  createSession(context: SessionContext, options?: CreateSessionOptions): Promise<ModelSessionHandle>;
   sendTurn(
     session: ModelSessionHandle,
     messages: Array<{ role: string; content: string }>,

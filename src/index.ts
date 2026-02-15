@@ -9,7 +9,7 @@ import {
   type SlackAdapterConfig
 } from "./channels.js";
 import { AutonomyStateStore } from "./autonomy-state.js";
-import { buildGateway } from "./gateway.js";
+import { buildGateway, type ProfileContext } from "./gateway.js";
 import { DecisionJournal } from "./decision-journal.js";
 import { InMemoryLifecycleStream } from "./lifecycle-stream/in-memory-stream.js";
 import { ContextIndexService } from "./context/context-index-service.js";
@@ -68,7 +68,8 @@ import {
   createWebFetchTool,
   createWebSearchTool
 } from "./tools.js";
-import { isDevMode, loadConfigFromDisk, validateStartupConfig, resolveConfigPath } from "./config.js";
+import type { CursorClawConfig } from "./config.js";
+import { getDefaultProfileId, isDevMode, loadConfigFromDisk, validateStartupConfig, resolveConfigPath, resolveProfileRoot } from "./config.js";
 import { AutonomyOrchestrator } from "./orchestrator.js";
 import { loadSubstrate, SubstrateStore } from "./substrate/index.js";
 import type { SubstrateContent } from "./substrate/index.js";
@@ -96,6 +97,53 @@ function resolveAllowedExecBins(args: {
   return strictBins;
 }
 
+/** Build one profile context (substrate, approvals, cron) for a given profile root. Used for single-profile and multi-profile. */
+async function buildProfileContext(
+  profileRoot: string,
+  config: CursorClawConfig,
+  options: { isDefault: boolean; pendingProactiveRef?: { current: string | null } }
+): Promise<ProfileContext> {
+  const substrateStore = new SubstrateStore();
+  try {
+    await substrateStore.reload(profileRoot, config.substrate);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn("[CursorClaw] substrate load failed for profile root, continuing with empty:", (err as Error).message);
+  }
+  const approvalsDir = join(profileRoot, "tmp", "approvals");
+  const capabilityStore = new CapabilityStore({ stateDir: approvalsDir });
+  await capabilityStore.load();
+  const approvalWorkflow = new ApprovalWorkflow({
+    capabilityStore,
+    defaultGrantTtlMs: 10 * 60_000,
+    defaultGrantUses: 1,
+    stateDir: approvalsDir
+  });
+  await approvalWorkflow.load();
+  const cronService = new CronService({
+    maxConcurrentRuns: 4,
+    stateFile: join(profileRoot, "tmp", "cron-state.json")
+  });
+  await cronService.loadState();
+  const ctx: ProfileContext = {
+    profileRoot,
+    substrateStore,
+    approvalWorkflow,
+    capabilityStore,
+    cronService
+  };
+  if (options.isDefault && options.pendingProactiveRef) {
+    const ref = options.pendingProactiveRef;
+    ctx.getPendingProactiveMessage = () => ref.current;
+    ctx.takePendingProactiveMessage = () => {
+      const v = ref.current;
+      ref.current = null;
+      return v;
+    };
+  }
+  return ctx;
+}
+
 async function main(): Promise<void> {
   const workspaceDir = process.cwd();
   const configPath = resolveConfigPath({ cwd: workspaceDir });
@@ -107,6 +155,27 @@ async function main(): Promise<void> {
   validateStartupConfig(config, {
     allowInsecureDefaults: devMode
   });
+
+  const pendingProactiveRef = { current: null as string | null };
+  const defaultProfileId = getDefaultProfileId(config);
+  const profileList = config.profiles;
+  let profileContextMap: Map<string, ProfileContext>;
+  let defaultCtx: ProfileContext;
+  if (profileList?.length) {
+    profileContextMap = new Map();
+    for (const p of profileList) {
+      const root = resolveProfileRoot(workspaceDir, config, p.id);
+      const isDefault = p.id === defaultProfileId;
+      profileContextMap.set(p.id, await buildProfileContext(root, config, { isDefault, pendingProactiveRef }));
+    }
+    defaultCtx = profileContextMap.get(defaultProfileId)!;
+  } else {
+    const singleProfileRoot = resolveProfileRoot(workspaceDir, config);
+    defaultCtx = await buildProfileContext(singleProfileRoot, config, { isDefault: true, pendingProactiveRef });
+    profileContextMap = new Map([["default", defaultCtx]]);
+  }
+  const profileRoot = defaultCtx.profileRoot;
+
   if (
     !devMode &&
     config.tools.exec.profile === "developer"
@@ -130,12 +199,12 @@ async function main(): Promise<void> {
   }
   const incidentCommander = new IncidentCommander();
   const decisionJournal = new DecisionJournal({
-    path: join(workspaceDir, "CLAW_HISTORY.log"),
+    path: join(profileRoot, "CLAW_HISTORY.log"),
     maxBytes: 5 * 1024 * 1024
   });
   const observationStore = new RuntimeObservationStore({
     maxEvents: 5_000,
-    stateFile: join(workspaceDir, "tmp", "observations.json")
+    stateFile: join(profileRoot, "tmp", "observations.json")
   });
   await observationStore.load();
   const workspaceCatalog = new WorkspaceCatalog({
@@ -145,19 +214,19 @@ async function main(): Promise<void> {
         : [
             {
               id: "primary",
-              path: workspaceDir,
+              path: profileRoot,
               priority: 0,
               enabled: true
             }
           ]
   });
   const summaryCache = new SemanticSummaryCache({
-    stateFile: join(workspaceDir, "tmp", "context-summary.json"),
+    stateFile: join(profileRoot, "tmp", "context-summary.json"),
     maxEntries: config.contextCompression.summaryCacheMaxEntries
   });
   await summaryCache.load();
   const embeddingIndex = new LocalEmbeddingIndex({
-    stateFile: join(workspaceDir, "tmp", "context-embeddings.json"),
+    stateFile: join(profileRoot, "tmp", "context-embeddings.json"),
     maxChunks: config.contextCompression.embeddingMaxChunks
   });
   await embeddingIndex.load();
@@ -174,14 +243,14 @@ async function main(): Promise<void> {
     workspaceCatalog,
     retriever,
     indexer: multiRootIndexer,
-    stateFile: join(workspaceDir, "tmp", "context-index-state.json"),
+    stateFile: join(profileRoot, "tmp", "context-index-state.json"),
     refreshEveryMs: config.contextCompression.refreshEveryMs
   });
   if (config.contextCompression.semanticRetrievalEnabled) {
     await contextIndexService.ensureFreshIndex();
   }
 
-  const memory = new MemoryStore({ workspaceDir });
+  const memory = new MemoryStore({ workspaceDir: profileRoot });
   const configuredDetectors = config.privacy.detectors.filter(
     (detector): detector is SecretDetectorName => VALID_SECRET_DETECTORS.has(detector as SecretDetectorName)
   );
@@ -231,16 +300,10 @@ async function main(): Promise<void> {
   localMcpServer.defineTool("echo", async (args) => ({ echoed: args }));
   mcpRegistry.register(localMcpServer);
 
-  const capabilityStore = new CapabilityStore();
-  const approvalWorkflow = new ApprovalWorkflow({
-    capabilityStore,
-    defaultGrantTtlMs: 10 * 60_000,
-    defaultGrantUses: 1
-  });
   const approvalGate = new CapabilityApprovalGate({
     devMode,
-    approvalWorkflow,
-    capabilityStore,
+    approvalWorkflow: defaultCtx.approvalWorkflow!,
+    capabilityStore: defaultCtx.capabilityStore!,
     allowReadOnlyWithoutGrant: config.tools.exec.ask !== "always"
   });
   const allowedExecBins = resolveAllowedExecBins({
@@ -276,7 +339,7 @@ async function main(): Promise<void> {
 
   const confidenceModel = new ConfidenceModel();
   const deepScanService = new DeepScanService({
-    workspaceDir,
+    workspaceDir: profileRoot,
     maxFiles: 600,
     maxDurationMs: 7_000
   });
@@ -285,14 +348,7 @@ async function main(): Promise<void> {
   });
   let recentBackgroundTestsPassing = false;
 
-  const substrateStore = new SubstrateStore();
-  try {
-    await substrateStore.reload(workspaceDir, config.substrate);
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.warn("[CursorClaw] substrate load failed, continuing with empty:", (err as Error).message);
-  }
-  const getSubstrate = (): SubstrateContent => substrateStore.get();
+  const getSubstrate = (): SubstrateContent => defaultCtx.substrateStore!.get();
 
   const lifecycleStream = new InMemoryLifecycleStream();
   const runtime = new AgentRuntime({
@@ -314,7 +370,7 @@ async function main(): Promise<void> {
     ...(config.reliability.checkpoint.enabled
       ? {
           gitCheckpointManager: new GitCheckpointManager({
-            workspaceDir,
+            workspaceDir: profileRoot,
             reliabilityCheckCommands: config.reliability.checkpoint.reliabilityCommands,
             commandTimeoutMs: config.reliability.checkpoint.commandTimeoutMs,
             decisionJournal
@@ -323,17 +379,12 @@ async function main(): Promise<void> {
       : {}),
     privacyScrubber,
     lifecycleStream,
-    snapshotDir: join(workspaceDir, "tmp", "snapshots"),
+    snapshotDir: join(profileRoot, "tmp", "snapshots"),
     getSubstrate
   });
 
-  const cronService = new CronService({
-    maxConcurrentRuns: 4,
-    stateFile: join(workspaceDir, "tmp", "cron-state.json")
-  });
-  await cronService.loadState();
   const runStore = new RunStore({
-    stateFile: join(workspaceDir, "tmp", "run-store.json"),
+    stateFile: join(profileRoot, "tmp", "run-store.json"),
     maxCompletedRuns: 10_000
   });
   await runStore.load();
@@ -341,7 +392,7 @@ async function main(): Promise<void> {
 
   const heartbeat = new HeartbeatRunner(config.heartbeat);
   const budget = new AutonomyBudget(config.autonomyBudget);
-  const workflow = new WorkflowRuntime(join(workspaceDir, "tmp", "workflow-state"));
+  const workflow = new WorkflowRuntime(join(profileRoot, "tmp", "workflow-state"));
 
   const policyLogs = new PolicyDecisionLogger();
   const authOptions: {
@@ -391,7 +442,7 @@ async function main(): Promise<void> {
   channelHub.register(new LocalEchoChannelAdapter());
   const suggestionEngine = new ProactiveSuggestionEngine();
   const functionExplainer = new FunctionExplainer({
-    workspaceDir
+    workspaceDir: profileRoot
   });
   const networkTraceCollector = new NetworkTraceCollector({
     enabled: config.networkTrace.enabled,
@@ -413,7 +464,7 @@ async function main(): Promise<void> {
   let pendingProactiveMessage: string | null = null;
   if (config.reflection.enabled) {
     const speculativeTestRunner = new SpeculativeTestRunner({
-      workspaceDir,
+      workspaceDir: profileRoot,
       command: config.reflection.flakyTestCommand,
       runs: config.reflection.flakyRuns,
       timeoutMs: config.reflection.maxJobMs
@@ -476,19 +527,22 @@ async function main(): Promise<void> {
   const gateway = buildGateway({
     config,
     runtime,
-    cronService,
-    runStore,
-    channelHub,
+    cronService: defaultCtx.cronService,
+    ...(runStore !== undefined ? { runStore } : {}),
+    ...(channelHub !== undefined ? { channelHub } : {}),
     auth,
     rateLimiter,
     policyLogs,
     incidentCommander,
-    behavior,
-    approvalWorkflow,
-    capabilityStore,
+    ...(behavior !== undefined ? { behavior } : {}),
+    ...(defaultCtx.approvalWorkflow !== undefined ? { approvalWorkflow: defaultCtx.approvalWorkflow } : {}),
+    ...(defaultCtx.capabilityStore !== undefined ? { capabilityStore: defaultCtx.capabilityStore } : {}),
+    defaultProfileId: getDefaultProfileId(config),
+    getProfileContext: (profileId) => profileContextMap.get(profileId),
     lifecycleStream,
-    workspaceDir,
-    substrateStore,
+    workspaceDir: profileRoot,
+    workspaceRoot: workspaceDir,
+    ...(defaultCtx.substrateStore !== undefined ? { substrateStore: defaultCtx.substrateStore } : {}),
     ...(existsSync(uiDist) ? { uiDistPath: uiDist } : {}),
     onRestart: async () => {
       // Exit with RESTART_EXIT_CODE so run-with-restart wrapper runs build then start in the same terminal.
@@ -612,12 +666,6 @@ async function main(): Promise<void> {
         }
       };
     },
-    getPendingProactiveMessage: () => pendingProactiveMessage,
-    takePendingProactiveMessage: () => {
-      const msg = pendingProactiveMessage;
-      pendingProactiveMessage = null;
-      return msg;
-    }
   });
 
   if (existsSync(uiDist)) {
@@ -637,8 +685,8 @@ async function main(): Promise<void> {
     port
   });
 
-  const birthPath = join(workspaceDir, config.substrate?.birthPath ?? "BIRTH.md");
-  const heartbeatPathForStartup = join(workspaceDir, "HEARTBEAT.md");
+  const birthPath = join(profileRoot, config.substrate?.birthPath ?? "BIRTH.md");
+  const heartbeatPathForStartup = join(profileRoot, "HEARTBEAT.md");
   let heartbeatHasSubstantiveContent = false;
   try {
     if (existsSync(heartbeatPathForStartup)) {
@@ -657,13 +705,13 @@ async function main(): Promise<void> {
   const useShortFirstHeartbeat =
     existsSync(birthPath) || heartbeatHasSubstantiveContent;
   const orchestrator = new AutonomyOrchestrator({
-    cronService,
+    cronService: defaultCtx.cronService,
     heartbeat,
     budget,
     workflow,
     memory,
     autonomyStateStore: new AutonomyStateStore({
-      stateFile: join(workspaceDir, "tmp", "autonomy-state.json")
+      stateFile: join(profileRoot, "tmp", "autonomy-state.json")
     }),
     heartbeatChannelId: "heartbeat:main",
     cronTickMs: 1_000,
@@ -687,7 +735,7 @@ async function main(): Promise<void> {
       });
     },
     onHeartbeatTurn: async (channelId) => {
-      const heartbeatPath = join(workspaceDir, "HEARTBEAT.md");
+      const heartbeatPath = join(profileRoot, "HEARTBEAT.md");
       const birthPending = existsSync(birthPath);
       const fallbackMessage =
         "Hi — BIRTH is pending for this workspace. I'm here to help you set up: who you are (USER.md), who I am here (IDENTITY.md), and how you want to use this agent. What's your main use case, and what would you like to call me?";
@@ -730,7 +778,8 @@ async function main(): Promise<void> {
         session: {
           sessionId: "heartbeat:main",
           channelId,
-          channelKind: "web"
+          channelKind: "web",
+          profileId: getDefaultProfileId(config)
         },
         messages: [{ role: "user", content }]
       });
@@ -758,6 +807,7 @@ async function main(): Promise<void> {
           proactive: true
         });
         pendingProactiveMessage = textToDeliver;
+        pendingProactiveRef.current = textToDeliver;
       } else if (birthPending) {
         // Fallback: model returned HEARTBEAT_OK or empty; still deliver a BIRTH prompt so the user sees a proactive message
         const fallbackMessage =
@@ -768,6 +818,7 @@ async function main(): Promise<void> {
           proactive: true
         });
         pendingProactiveMessage = fallbackMessage;
+        pendingProactiveRef.current = fallbackMessage;
       } else if (heartbeatHadContent) {
         const heartbeatFallback =
           "Heartbeat ran. No update from the agent this time.";
@@ -777,12 +828,14 @@ async function main(): Promise<void> {
           proactive: true
         });
         pendingProactiveMessage = heartbeatFallback;
+        pendingProactiveRef.current = heartbeatFallback;
       }
       return reply === "" ? "HEARTBEAT_OK" : result.assistantText;
       } catch (err) {
         console.error("[CursorClaw] heartbeat turn error:", err);
         if (birthPending) {
           pendingProactiveMessage = fallbackMessage;
+          pendingProactiveRef.current = fallbackMessage;
         }
         return "HEARTBEAT_OK";
       }

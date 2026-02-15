@@ -1,7 +1,9 @@
 import { useState } from "react";
-import { rpc, mapRpcError } from "../api";
+import { rpcWithProfile, mapRpcError } from "../api";
+import { useProfile } from "../contexts/ProfileContext";
 
 export default function Incidents() {
+  const { selectedProfileId } = useProfile();
   const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -16,7 +18,7 @@ export default function Incidents() {
     setResult(null);
     setLoading(true);
     try {
-      const res = await rpc("incident.bundle");
+      const res = await rpcWithProfile("incident.bundle", undefined, selectedProfileId);
       setResult(res.result);
     } catch (e) {
       setError(e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } }));

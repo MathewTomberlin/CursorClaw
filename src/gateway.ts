@@ -1,10 +1,15 @@
-import { readdir, readFile, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { join, resolve, sep } from "node:path";
 
 import Fastify, { type FastifyInstance } from "fastify";
 
 import type { ChannelHub } from "./channels.js";
-import type { CursorClawConfig } from "./config.js";
+import {
+  type CursorClawConfig,
+  getDefaultProfileId,
+  resolveProfileRoot,
+  writeConfigToDisk
+} from "./config.js";
 import type { BehaviorPolicyEngine } from "./responsiveness.js";
 import type { RunStore } from "./run-store.js";
 import type { AgentRuntime, TurnResult } from "./runtime.js";
@@ -40,6 +45,17 @@ class RpcGatewayError extends Error {
   }
 }
 
+/** Per-profile context for profile-scoped RPCs (substrate, memory, heartbeat, approval, cron). */
+export interface ProfileContext {
+  profileRoot: string;
+  substrateStore?: SubstrateStore;
+  approvalWorkflow?: ApprovalWorkflow;
+  capabilityStore?: CapabilityStore;
+  cronService: CronService;
+  getPendingProactiveMessage?: () => string | null;
+  takePendingProactiveMessage?: () => string | null;
+}
+
 export interface GatewayDependencies {
   config: CursorClawConfig;
   runtime: AgentRuntime;
@@ -53,6 +69,8 @@ export interface GatewayDependencies {
   behavior?: BehaviorPolicyEngine;
   approvalWorkflow?: ApprovalWorkflow;
   capabilityStore?: CapabilityStore;
+  /** When set, profile-scoped RPCs use this context for the resolved profileId. Single-profile mode: omit or return one context for "default". */
+  getProfileContext?: (profileId: string) => ProfileContext | undefined;
   onFileChangeSuggestions?: (args: {
     channelId: string;
     files: string[];
@@ -90,14 +108,33 @@ export interface GatewayDependencies {
   uiDistPath?: string;
   /** When admin.restart is called, exit with RESTART_EXIT_CODE so the start:watch wrapper runs build then start. */
   onRestart?: () => Promise<{ buildRan?: boolean } | void>;
+  /** Default agent profile id when no profileId is supplied in the RPC. Enables profile-scoped RPCs when multiple profiles exist. */
+  defaultProfileId?: string;
   /** Workspace root (for substrate.update path resolution). */
   workspaceDir?: string;
+  /** Process workspace root (cwd); required for profile.create/delete and path validation. */
+  workspaceRoot?: string;
   /** When substrate config is present, store for list/get/update/reload. */
   substrateStore?: SubstrateStore;
   /** If set, used by heartbeat.poll and /status to expose proactive messages from heartbeat turns. */
   getPendingProactiveMessage?: () => string | null;
   /** If set, heartbeat.poll calls this to return and clear the pending proactive message. */
   takePendingProactiveMessage?: () => string | null;
+}
+
+/** Resolve profile context for profile-scoped RPCs. Uses getProfileContext when present, otherwise builds a one-off context from deps (single-profile). */
+function getEffectiveProfileContext(deps: GatewayDependencies, resolvedProfileId: string): ProfileContext {
+  const fromGetter = deps.getProfileContext?.(resolvedProfileId);
+  if (fromGetter) return fromGetter;
+  return {
+    profileRoot: deps.workspaceDir ?? "",
+    ...(deps.substrateStore !== undefined ? { substrateStore: deps.substrateStore } : {}),
+    ...(deps.approvalWorkflow !== undefined ? { approvalWorkflow: deps.approvalWorkflow } : {}),
+    ...(deps.capabilityStore !== undefined ? { capabilityStore: deps.capabilityStore } : {}),
+    cronService: deps.cronService,
+    ...(deps.getPendingProactiveMessage !== undefined ? { getPendingProactiveMessage: deps.getPendingProactiveMessage } : {}),
+    ...(deps.takePendingProactiveMessage !== undefined ? { takePendingProactiveMessage: deps.takePendingProactiveMessage } : {})
+  };
 }
 
 const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
@@ -116,6 +153,9 @@ const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
   "trace.ingest": ["local", "remote", "admin"],
   "advisor.explain_function": ["local", "remote", "admin"],
   "config.get": ["admin", "local"],
+  "profile.list": ["admin", "local"],
+  "profile.create": ["admin", "local"],
+  "profile.delete": ["admin", "local"],
   "admin.restart": ["admin", "local"],
   "substrate.list": ["admin", "local"],
   "substrate.get": ["admin", "local"],
@@ -207,27 +247,35 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
   });
 
   app.get("/status", async () => {
+    const profiles =
+      (deps.config.profiles?.length ?? 0) > 0
+        ? deps.config.profiles!.map((p) => ({ id: p.id, root: p.root, modelId: p.modelId }))
+        : [{ id: "default", root: "." }];
+    const defaultProfileId = deps.defaultProfileId ?? getDefaultProfileId(deps.config);
+    const defaultCtx = getEffectiveProfileContext(deps, defaultProfileId);
     const base = {
       gateway: "ok",
       defaultModel: deps.config.defaultModel,
+      profiles,
+      defaultProfileId,
       queueWarnings: deps.runtime.getQueueWarnings(),
       runtimeMetrics: deps.runtime.getMetrics(),
       reliability: {
         multiPathResolutionsLast24h: deps.runtime.getMultiPathResolutionsLast24h()
       },
       adapterMetrics: deps.runtime.getAdapterMetrics() ?? {},
-      schedulerBacklog: deps.cronService.listJobs().length,
+      schedulerBacklog: defaultCtx.cronService.listJobs().length,
       policyDecisions: deps.policyLogs.getAll().length,
       approvals: {
-        pending: deps.approvalWorkflow?.listRequests({ status: "pending" }).length ?? 0,
-        activeCapabilities: deps.capabilityStore?.listActive().length ?? 0
+        pending: defaultCtx.approvalWorkflow?.listRequests({ status: "pending" }).length ?? 0,
+        activeCapabilities: defaultCtx.capabilityStore?.listActive().length ?? 0
       },
       incident: {
         proactiveSendsDisabled: deps.incidentCommander.isProactiveSendsDisabled(),
         toolIsolationEnabled: deps.incidentCommander.isToolIsolationEnabled()
       }
     };
-    const pendingProactive = deps.getPendingProactiveMessage?.() ?? null;
+    const pendingProactive = defaultCtx.getPendingProactiveMessage?.() ?? null;
     return pendingProactive !== null ? { ...base, pendingProactiveMessage: pendingProactive } : base;
   });
 
@@ -303,10 +351,16 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
       return reply.code(400).send(errorResponse(body.id, auditId, "RISK_BLOCKED", "Request risk score too high"));
     }
 
+    // Resolve profile for profile-scoped RPCs. When absent, use default (backward compatible).
+    const resolvedProfileId =
+      body.params?.profileId != null ? String(body.params.profileId) : (deps.defaultProfileId ?? "default");
+    const profileCtx = getEffectiveProfileContext(deps, resolvedProfileId);
+
     try {
       let result: unknown;
       if (body.method === "agent.run") {
         const session = parseSessionContext(body.params?.session);
+        session.profileId = resolvedProfileId;
         const messages = parseMessages(
           body.params?.messages,
           deps.config.session.maxMessagesPerTurn,
@@ -381,7 +435,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         const type = String(body.params?.type ?? "every") as "at" | "every" | "cron";
         const expression = String(body.params?.expression ?? "30m");
         const isolated = Boolean(body.params?.isolated ?? true);
-        const job = deps.cronService.addJob({
+        const job = profileCtx.cronService.addJob({
           type,
           expression,
           isolated,
@@ -390,7 +444,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         });
         result = { job };
       } else if (body.method === "cron.list") {
-        result = { jobs: deps.cronService.listJobs() };
+        result = { jobs: profileCtx.cronService.listJobs() };
       } else if (body.method === "chat.send") {
         const channelId = String(body.params?.channelId ?? "unknown");
         const proactive = Boolean(body.params?.proactive ?? false);
@@ -459,7 +513,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         deps.incidentCommander.isolateToolHosts();
         result = deps.incidentCommander.exportForensicLog(deps.policyLogs);
       } else if (body.method === "approval.list") {
-        if (!deps.approvalWorkflow) {
+        if (!profileCtx.approvalWorkflow) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "approval workflow not configured");
         }
         const status = body.params?.status;
@@ -467,12 +521,12 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           throw new RpcGatewayError(400, "BAD_REQUEST", "invalid approval status filter");
         }
         result = {
-          requests: deps.approvalWorkflow.listRequests(
+          requests: profileCtx.approvalWorkflow.listRequests(
             status !== undefined ? { status: String(status) as "pending" | "approved" | "denied" | "expired" } : undefined
           )
         };
       } else if (body.method === "approval.resolve") {
-        if (!deps.approvalWorkflow) {
+        if (!profileCtx.approvalWorkflow) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "approval workflow not configured");
         }
         const requestId = String(body.params?.requestId ?? "");
@@ -487,7 +541,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         const grantUses = parseOptionalPositiveInteger(body.params?.grantUses, "grantUses");
         const reason = body.params?.reason !== undefined ? String(body.params.reason) : undefined;
         result = {
-          request: deps.approvalWorkflow.resolve({
+          request: profileCtx.approvalWorkflow.resolve({
             requestId,
             decision: decision as "approve" | "deny",
             ...(reason !== undefined ? { reason } : {}),
@@ -496,11 +550,11 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           })
         };
       } else if (body.method === "approval.capabilities") {
-        if (!deps.capabilityStore) {
+        if (!profileCtx.capabilityStore) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "capability store not configured");
         }
         result = {
-          grants: deps.capabilityStore.listActive()
+          grants: profileCtx.capabilityStore.listActive()
         };
       } else if (body.method === "advisor.file_change") {
         if (!deps.onFileChangeSuggestions) {
@@ -590,26 +644,102 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
             }
           }
         };
+      } else if (body.method === "profile.list") {
+        const list = deps.config.profiles;
+        const profiles =
+          (list?.length ?? 0) > 0
+            ? list!.map((p) => ({ id: p.id, root: p.root, modelId: p.modelId }))
+            : [{ id: "default", root: "." }];
+        result = {
+          profiles,
+          defaultProfileId: deps.defaultProfileId ?? getDefaultProfileId(deps.config)
+        };
+      } else if (body.method === "profile.create") {
+        if (!deps.workspaceRoot) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "workspace root not configured");
+        }
+        const id = typeof body.params?.id === "string" ? body.params.id.trim() : "";
+        const root = typeof body.params?.root === "string" ? body.params.root.trim() : "";
+        if (!id) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "profile id is required");
+        }
+        if (!root) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "profile root is required");
+        }
+        const list = deps.config.profiles ?? [];
+        if (list.some((p) => p.id === id)) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "profile id already exists");
+        }
+        let profileRootPath: string;
+        try {
+          profileRootPath = resolveProfileRoot(deps.workspaceRoot, { ...deps.config, profiles: [...list, { id, root }] }, id);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "profile root must be under workspace";
+          throw new RpcGatewayError(400, "BAD_REQUEST", msg);
+        }
+        const newProfiles =
+          list.length === 0 ? [{ id: "default", root: "." }, { id, root }] : [...list, { id, root }];
+        (deps.config as CursorClawConfig).profiles = newProfiles;
+        await mkdir(profileRootPath, { recursive: true });
+        const configPath = await writeConfigToDisk(deps.config, { cwd: deps.workspaceRoot });
+        result = { profile: { id, root }, configPath };
+      } else if (body.method === "profile.delete") {
+        if (!deps.workspaceRoot) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "workspace root not configured");
+        }
+        const id = typeof body.params?.id === "string" ? body.params.id.trim() : "";
+        if (!id) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "profile id is required");
+        }
+        const list = deps.config.profiles ?? [];
+        if (list.length === 0) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "no profiles to delete (single default profile)");
+        }
+        const idx = list.findIndex((p) => p.id === id);
+        if (idx < 0) {
+          throw new RpcGatewayError(404, "NOT_FOUND", "profile not found");
+        }
+        if (list.length === 1) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "cannot delete the only profile");
+        }
+        const removeDirectory = body.params?.removeDirectory === true;
+        const removed = list[idx]!;
+        const newProfiles = list.filter((p) => p.id !== id);
+        (deps.config as CursorClawConfig).profiles = newProfiles;
+        await writeConfigToDisk(deps.config, { cwd: deps.workspaceRoot });
+        if (removeDirectory) {
+          try {
+            const dirPath = resolveProfileRoot(deps.workspaceRoot, { ...deps.config, profiles: [removed] }, id);
+            const base = resolve(deps.workspaceRoot);
+            const prefix = base.endsWith(sep) ? base : base + sep;
+            if (dirPath !== base && dirPath.startsWith(prefix)) {
+              await rm(dirPath, { recursive: true, force: true });
+            }
+          } catch {
+            // ignore cleanup errors
+          }
+        }
+        result = { ok: true };
       } else if (body.method === "heartbeat.poll") {
-        const message = deps.takePendingProactiveMessage?.() ?? null;
+        const message = profileCtx.takePendingProactiveMessage?.() ?? null;
         result = message !== null ? { result: "ok", proactiveMessage: message } : { result: "ok" };
       } else if (body.method === "heartbeat.getFile") {
-        if (!deps.workspaceDir) {
+        if (!profileCtx.profileRoot) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "workspace not configured");
         }
-        const heartbeatPath = join(deps.workspaceDir, "HEARTBEAT.md");
+        const heartbeatPath = join(profileCtx.profileRoot, "HEARTBEAT.md");
         const content = await readFile(heartbeatPath, "utf8").catch(() => "");
         result = { content };
       } else if (body.method === "heartbeat.update") {
-        if (!deps.workspaceDir) {
+        if (!profileCtx.profileRoot) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "workspace not configured");
         }
         const content = typeof body.params?.content === "string" ? body.params.content : String(body.params?.content ?? "");
-        const heartbeatPath = join(deps.workspaceDir, "HEARTBEAT.md");
+        const heartbeatPath = join(profileCtx.profileRoot, "HEARTBEAT.md");
         await writeFile(heartbeatPath, content, "utf8");
         result = { ok: true };
       } else if (body.method === "substrate.list") {
-        if (!deps.substrateStore) {
+        if (!profileCtx.substrateStore) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "substrate not configured");
         }
         const pathKeys: Record<string, string> = { ...DEFAULT_SUBSTRATE_PATHS };
@@ -627,7 +757,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           keys: SUBSTRATE_KEYS.map((key) => {
             const pathKey = `${key}Path`;
             const path = pathKeys[pathKey];
-            const content = deps.substrateStore!.get();
+            const content = profileCtx.substrateStore!.get();
             return {
               key,
               path: path ?? DEFAULT_SUBSTRATE_PATHS[pathKey as keyof typeof DEFAULT_SUBSTRATE_PATHS],
@@ -636,11 +766,11 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           })
         };
       } else if (body.method === "substrate.get") {
-        if (!deps.substrateStore) {
+        if (!profileCtx.substrateStore) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "substrate not configured");
         }
         const key = body.params?.key !== undefined ? String(body.params.key) : undefined;
-        const content = deps.substrateStore.get();
+        const content = profileCtx.substrateStore.get();
         const withDefaults = (c: Record<string, string | undefined>) => {
           const out: Record<string, string> = {};
           for (const k of SUBSTRATE_KEYS) {
@@ -660,7 +790,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           result = withDefaults(content as Record<string, string | undefined>);
         }
       } else if (body.method === "substrate.update") {
-        if (!deps.substrateStore || !deps.workspaceDir) {
+        if (!profileCtx.substrateStore || !profileCtx.profileRoot) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "substrate not configured");
         }
         const key = String(body.params?.key ?? "").trim();
@@ -669,8 +799,8 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           throw new RpcGatewayError(400, "BAD_REQUEST", "key is required");
         }
         try {
-          await deps.substrateStore.writeKey(
-            deps.workspaceDir,
+          await profileCtx.substrateStore.writeKey(
+            profileCtx.profileRoot,
             deps.config.substrate,
             key,
             content
@@ -684,17 +814,17 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           throw err;
         }
       } else if (body.method === "substrate.reload") {
-        if (!deps.substrateStore || !deps.workspaceDir) {
+        if (!profileCtx.substrateStore || !profileCtx.profileRoot) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "substrate not configured");
         }
-        await deps.substrateStore.reload(deps.workspaceDir, deps.config.substrate);
-        await deps.substrateStore.ensureDefaults(deps.workspaceDir, deps.config.substrate);
+        await profileCtx.substrateStore.reload(profileCtx.profileRoot, deps.config.substrate);
+        await profileCtx.substrateStore.ensureDefaults(profileCtx.profileRoot, deps.config.substrate);
         result = { ok: true };
       } else if (body.method === "memory.listLogs") {
-        if (!deps.workspaceDir) {
+        if (!profileCtx.profileRoot) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "workspace not configured");
         }
-        const memoryDir = join(deps.workspaceDir, "memory");
+        const memoryDir = join(profileCtx.profileRoot, "memory");
         const entries = await readdir(memoryDir, { withFileTypes: true }).catch(() => []);
         const files = entries
           .filter((e) => e.isFile() && e.name.endsWith(".md") && /^\d{4}-\d{2}-\d{2}\.md$/.test(e.name))
@@ -702,7 +832,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           .sort((a, b) => b.name.localeCompare(a.name));
         result = { files };
       } else if (body.method === "memory.getFile") {
-        if (!deps.workspaceDir) {
+        if (!profileCtx.profileRoot) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "workspace not configured");
         }
         const pathParam = String(body.params?.path ?? "").trim();
@@ -713,15 +843,15 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         if (!allowed) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "path must be MEMORY.md or memory/YYYY-MM-DD.md");
         }
-        const fullPath = resolve(deps.workspaceDir, pathParam);
-        const workspaceResolved = resolve(deps.workspaceDir);
+        const fullPath = resolve(profileCtx.profileRoot, pathParam);
+        const workspaceResolved = resolve(profileCtx.profileRoot);
         if (!fullPath.startsWith(workspaceResolved) || fullPath === workspaceResolved) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "invalid path");
         }
         const content = await readFile(fullPath, "utf8").catch(() => "");
         result = { path: pathParam, content };
       } else if (body.method === "memory.writeFile") {
-        if (!deps.workspaceDir) {
+        if (!profileCtx.profileRoot) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "workspace not configured");
         }
         const pathParam = String(body.params?.path ?? "").trim();
@@ -733,14 +863,14 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         if (!allowed) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "path must be MEMORY.md or memory/YYYY-MM-DD.md");
         }
-        const fullPath = resolve(deps.workspaceDir, pathParam);
-        const workspaceResolved = resolve(deps.workspaceDir);
+        const fullPath = resolve(profileCtx.profileRoot, pathParam);
+        const workspaceResolved = resolve(profileCtx.profileRoot);
         if (!fullPath.startsWith(workspaceResolved) || fullPath === workspaceResolved) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "invalid path");
         }
         const { mkdir } = await import("node:fs/promises");
         if (pathParam.startsWith("memory/")) {
-          await mkdir(join(deps.workspaceDir, "memory"), { recursive: true });
+          await mkdir(join(profileCtx.profileRoot, "memory"), { recursive: true });
         }
         await writeFile(fullPath, content, "utf8");
         result = { ok: true };

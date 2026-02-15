@@ -43,6 +43,8 @@ Optional trusted identity header enforcement:
 }
 ```
 
+**Profile-scoped RPCs:** For multi-agent setups, `params` may include an optional `profileId` string. When present, the request is executed in the context of that agent profile (substrate, memory, approvals, etc.). When omitted, the gateway uses the default profile. Single-agent deployments ignore this and use the single profile. Profile-scoped methods include: `heartbeat.poll`, `heartbeat.getFile`, `heartbeat.update`, `memory.*`, `substrate.*`, `approval.*`, `cron.list`/`cron.add`, `workspace.status`/`workspace.semantic_search`, `trace.ingest`, `advisor.file_change`/`advisor.explain_function`, and `incident.bundle`. `agent.run` accepts `session.profileId` to run the turn in that profile's context.
+
 ### Success response
 
 ```json
@@ -99,6 +101,8 @@ Returns operational snapshot including:
 
 - `gateway`
 - `defaultModel`
+- `profiles` — array of `{ id, root, modelId? }`; when no profiles are configured, `[{ id: "default", root: "." }]`
+- `defaultProfileId` — id of the default profile
 - `queueWarnings`
 - `runtimeMetrics`
 - `schedulerBacklog`
@@ -127,6 +131,9 @@ Method scope rules (`METHOD_SCOPES`):
 - `trace.ingest`: local, remote, admin
 - `advisor.explain_function`: local, remote, admin
 - `config.get`: admin, local
+- `profile.list`: admin, local
+- `profile.create`: admin, local
+- `profile.delete`: admin, local
 - `substrate.list`: admin, local
 - `substrate.get`: admin, local
 - `substrate.update`: admin, local
@@ -403,11 +410,56 @@ Returns current runtime config with secrets redacted (admin, local).
 
 No params.
 
-Returns the same shape as [Configuration Reference](configuration-reference.md); `gateway.auth.token` and `gateway.auth.password` are replaced with `{ redacted: true, length?: number }`.
+Returns the same shape as [Configuration Reference](configuration-reference.md); `gateway.auth.token` and `gateway.auth.password` are replaced with `{ redacted: true, length?: number }`. Includes `profiles` when present.
 
 ---
 
-### 5.16 `substrate.list`
+### 5.16 `profile.list`
+
+Returns the list of agent profiles and the default profile id (admin, local).
+
+No params.
+
+Returns:
+
+```json
+{
+  "profiles": [ { "id": "default", "root": "." }, { "id": "assistant", "root": "profiles/assistant", "modelId": null } ],
+  "defaultProfileId": "default"
+}
+```
+
+When no profiles are configured, returns `profiles: [{ id: "default", root: "." }]` and `defaultProfileId: "default"`.
+
+---
+
+### 5.17 `profile.create`
+
+Creates a new agent profile and persists config (admin, local). Requires `workspaceRoot` to be configured on the gateway.
+
+`params`:
+
+- `id: string` (required) — unique profile id
+- `root: string` (required) — workspace-relative path for the profile root; must resolve under workspace (no path traversal)
+
+Creates the profile root directory (mkdir -p). If no profiles exist yet, adds a default profile plus the new one. Returns `{ profile: { id, root }, configPath }`. Fails with `BAD_REQUEST` if id is empty, duplicate, or root is outside workspace.
+
+---
+
+### 5.18 `profile.delete`
+
+Deletes an agent profile and persists config (admin, local). Requires `workspaceRoot` to be configured.
+
+`params`:
+
+- `id: string` (required) — profile id to remove
+- `removeDirectory?: boolean` — if true, deletes the profile root directory (only if under workspace)
+
+Returns `{ ok: true }`. Fails with `BAD_REQUEST` if there are no profiles (single default mode) or if deleting the only profile. Fails with `NOT_FOUND` if the profile id does not exist.
+
+---
+
+### 5.19 `substrate.list`
 
 Returns which substrate files exist and their workspace-relative paths (admin, local). Requires substrate config to be present.
 
@@ -426,7 +478,7 @@ Returns:
 
 ---
 
-### 5.17 `substrate.get`
+### 5.20 `substrate.get`
 
 Returns substrate content for the UI. If `key` is omitted, returns full `SubstrateContent`; if `key` is provided, returns `{ [key]: string | undefined }` (admin, local).
 
@@ -438,7 +490,7 @@ Edits take effect on the next agent turn without restart (runtime reads from sto
 
 ---
 
-### 5.18 `substrate.update`
+### 5.21 `substrate.update`
 
 Writes content for one substrate key to the workspace file and updates the in-memory cache (admin, local). Path is resolved from config; must be under workspace root. Only allowed keys: agents, identity, soul, birth, capabilities, user, tools.
 
@@ -451,7 +503,7 @@ Returns `{ ok: true }`. On path traversal or invalid key, returns `BAD_REQUEST`.
 
 ---
 
-### 5.19 `substrate.reload`
+### 5.22 `substrate.reload`
 
 Re-reads all substrate files from disk and replaces the in-memory cache (admin, local). Use when files were edited outside the UI so the next turn uses the new content.
 

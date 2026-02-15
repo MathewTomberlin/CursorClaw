@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import { rpc, mapRpcError } from "../api";
+import { rpcWithProfile, mapRpcError } from "../api";
+import { useProfile } from "../contexts/ProfileContext";
 
 interface LogFile {
   name: string;
@@ -7,6 +8,7 @@ interface LogFile {
 }
 
 export default function Memory() {
+  const { selectedProfileId } = useProfile();
   const [memoryContent, setMemoryContent] = useState("");
   const [memoryDirty, setMemoryDirty] = useState(false);
   const [memoryLoading, setMemoryLoading] = useState(true);
@@ -24,7 +26,7 @@ export default function Memory() {
   const loadMemoryFile = useCallback(async () => {
     setError(null);
     try {
-      const res = await rpc("memory.getFile", { path: "MEMORY.md" });
+      const res = await rpcWithProfile("memory.getFile", { path: "MEMORY.md" }, selectedProfileId);
       const result = res.result as { path: string; content: string } | undefined;
       setMemoryContent(result?.content ?? "");
       setMemoryDirty(false);
@@ -34,12 +36,12 @@ export default function Memory() {
     } finally {
       setMemoryLoading(false);
     }
-  }, []);
+  }, [selectedProfileId]);
 
   const loadLogList = useCallback(async () => {
     setError(null);
     try {
-      const res = await rpc("memory.listLogs");
+      const res = await rpcWithProfile("memory.listLogs", undefined, selectedProfileId);
       const result = res.result as { files: LogFile[] } | undefined;
       setLogFiles(result?.files ?? []);
     } catch (e) {
@@ -48,21 +50,21 @@ export default function Memory() {
     } finally {
       setLogFilesLoading(false);
     }
-  }, []);
+  }, [selectedProfileId]);
 
   const loadLogFile = useCallback(async (path: string) => {
     setSelectedLogPath(path);
     setError(null);
     setLogDirty(false);
     try {
-      const res = await rpc("memory.getFile", { path });
+      const res = await rpcWithProfile("memory.getFile", { path }, selectedProfileId);
       const result = res.result as { path: string; content: string } | undefined;
       setLogContent(result?.content ?? "");
     } catch (e) {
       setError(e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } }));
       setLogContent("");
     }
-  }, []);
+  }, [selectedProfileId]);
 
   useEffect(() => {
     loadMemoryFile();
@@ -76,7 +78,7 @@ export default function Memory() {
     setMemorySaving(true);
     setError(null);
     try {
-      await rpc("memory.writeFile", { path: "MEMORY.md", content: memoryContent });
+      await rpcWithProfile("memory.writeFile", { path: "MEMORY.md", content: memoryContent }, selectedProfileId);
       setMemoryDirty(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } }));
@@ -90,7 +92,7 @@ export default function Memory() {
     setLogSaving(true);
     setError(null);
     try {
-      await rpc("memory.writeFile", { path: selectedLogPath, content: logContent });
+      await rpcWithProfile("memory.writeFile", { path: selectedLogPath, content: logContent }, selectedProfileId);
       setLogDirty(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } }));

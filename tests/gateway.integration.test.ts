@@ -1,12 +1,13 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { loadConfig } from "../src/config.js";
-import { buildGateway } from "../src/gateway.js";
+import { getDefaultProfileId, loadConfig } from "../src/config.js";
+import { buildGateway, type ProfileContext } from "../src/gateway.js";
 import type { ChannelHub } from "../src/channels.js";
+import { SubstrateStore } from "../src/substrate/index.js";
 import { InMemoryLifecycleStream } from "../src/lifecycle-stream/in-memory-stream.js";
 import { MemoryStore } from "../src/memory.js";
 import { CursorAgentModelAdapter } from "../src/model-adapter.js";
@@ -61,6 +62,8 @@ async function createGateway(options: {
   onBeforeSend?: (channelId: string, text: string) => Promise<boolean>;
   getPendingProactiveMessage?: () => string | null;
   takePendingProactiveMessage?: () => string | null;
+  /** Override gateway config (e.g. bodyLimitBytes for oversized-payload tests). */
+  gatewayOverrides?: { bodyLimitBytes?: number };
 } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "cursorclaw-gw-"));
   cleanupPaths.push(dir);
@@ -69,7 +72,8 @@ async function createGateway(options: {
       auth: { mode: "token", token: "test-token" },
       protocolVersion: "2.0",
       bind: "loopback",
-      trustedProxyIps: []
+      trustedProxyIps: [],
+      ...options.gatewayOverrides
     },
     defaultModel: "fallback",
     models: {
@@ -117,7 +121,10 @@ async function createGateway(options: {
   const rateLimiter = new MethodRateLimiter(10, 60_000, {
     "agent.run": 5,
     "chat.send": 5,
-    "cron.add": 2
+    "cron.add": 2,
+    "profile.list": 20,
+    "profile.create": 10,
+    "profile.delete": 10
   });
   const policyLogs = new PolicyDecisionLogger();
   const app = buildGateway({
@@ -140,7 +147,10 @@ async function createGateway(options: {
     auth,
     rateLimiter,
     policyLogs,
-    incidentCommander
+    incidentCommander,
+    defaultProfileId: getDefaultProfileId(config),
+    workspaceDir: dir,
+    workspaceRoot: dir
   });
   return app;
 }
@@ -153,14 +163,17 @@ describe("gateway integration", () => {
       url: "/status"
     });
     expect(status.statusCode).toBe(200);
-    expect(status.json().runtimeMetrics).toBeDefined();
-    expect(status.json().adapterMetrics).toBeDefined();
-    expect(status.json().reliability).toBeDefined();
-    expect(status.json().reliability.multiPathResolutionsLast24h).toEqual({ success: 0, failure: 0 });
-    expect(status.json().incident).toMatchObject({
+    const json = status.json();
+    expect(json.runtimeMetrics).toBeDefined();
+    expect(json.adapterMetrics).toBeDefined();
+    expect(json.reliability).toBeDefined();
+    expect(json.reliability.multiPathResolutionsLast24h).toEqual({ success: 0, failure: 0 });
+    expect(json.incident).toMatchObject({
       proactiveSendsDisabled: false,
       toolIsolationEnabled: false
     });
+    expect(json.profiles).toEqual([{ id: "default", root: "." }]);
+    expect(json.defaultProfileId).toBe("default");
     await app.close();
   });
 
@@ -217,6 +230,250 @@ describe("gateway integration", () => {
     });
     expect(res.statusCode).toBe(401);
     await app.close();
+  });
+
+  describe("profile RPCs", () => {
+    const rpc = (app: Awaited<ReturnType<typeof createGateway>>, method: string, params?: object) =>
+      app.inject({
+        method: "POST",
+        url: "/rpc",
+        headers: { authorization: "Bearer test-token" },
+        payload: { version: "2.0", method, params: params ?? {} }
+      });
+
+    it("profile.list returns default profile when no profiles configured", async () => {
+      const app = await createGateway();
+      const res = await rpc(app, "profile.list");
+      expect(res.statusCode).toBe(200);
+      expect(res.json().result).toMatchObject({
+        profiles: [{ id: "default", root: "." }],
+        defaultProfileId: "default"
+      });
+      await app.close();
+    });
+
+    it("profile.create adds profile and creates directory", async () => {
+      const app = await createGateway();
+      const res = await rpc(app, "profile.create", { id: "assistant", root: "profiles/assistant" });
+      expect(res.statusCode).toBe(200);
+      const data = res.json().result;
+      expect(data.profile).toEqual({ id: "assistant", root: "profiles/assistant" });
+      expect(data.configPath).toBeDefined();
+      const listRes = await rpc(app, "profile.list");
+      expect(listRes.statusCode).toBe(200);
+      expect(listRes.json().result.profiles).toHaveLength(2);
+      expect(listRes.json().result.profiles).toContainEqual({
+        id: "default",
+        root: "."
+      });
+      expect(listRes.json().result.profiles).toContainEqual({
+        id: "assistant",
+        root: "profiles/assistant",
+        modelId: undefined
+      });
+      await app.close();
+    });
+
+    it("profile.create rejects duplicate id", async () => {
+      const app = await createGateway();
+      await rpc(app, "profile.create", { id: "dup", root: "profiles/dup" });
+      const res = await rpc(app, "profile.create", { id: "dup", root: "profiles/other" });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().ok).toBe(false);
+      expect(res.json().error?.code).toBe("BAD_REQUEST");
+      expect(res.json().error?.message).toMatch(/already exists/i);
+      await app.close();
+    });
+
+    it("profile.create rejects root outside workspace", async () => {
+      const app = await createGateway();
+      const res = await rpc(app, "profile.create", { id: "evil", root: "../../../etc" });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().ok).toBe(false);
+      expect(res.json().error?.code).toBe("BAD_REQUEST");
+      expect(res.json().error?.message).toMatch(/under workspace/i);
+      await app.close();
+    });
+
+    it("profile.delete removes profile and persists config", async () => {
+      const app = await createGateway();
+      await rpc(app, "profile.create", { id: "to-delete", root: "profiles/to-delete" });
+      const res = await rpc(app, "profile.delete", { id: "to-delete" });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().result).toEqual({ ok: true });
+      const listRes = await rpc(app, "profile.list");
+      expect(listRes.json().result.profiles).toHaveLength(1);
+      expect(listRes.json().result.profiles[0].id).toBe("default");
+      await app.close();
+    });
+
+    it("profile.delete rejects when only one profile", async () => {
+      const app = await createGateway();
+      const res = await rpc(app, "profile.delete", { id: "default" });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().ok).toBe(false);
+      expect(res.json().error?.code).toBe("BAD_REQUEST");
+      expect(res.json().error?.message).toMatch(/only profile|cannot delete|no profiles to delete/i);
+      await app.close();
+    });
+  });
+
+  describe("multi-profile gateway", () => {
+    it("profile-scoped RPCs use correct profile root when profileId is passed", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "cursorclaw-multiprofile-"));
+      cleanupPaths.push(dir);
+      const dirAssistant = join(dir, "profiles", "assistant");
+      await mkdir(dirAssistant, { recursive: true });
+      const config = loadConfig({
+        gateway: {
+          auth: { mode: "token", token: "test-token" },
+          protocolVersion: "2.0",
+          bind: "loopback",
+          trustedProxyIps: []
+        },
+        defaultModel: "fallback",
+        models: {
+          fallback: {
+            provider: "fallback-model",
+            timeoutMs: 10_000,
+            authProfiles: ["default"],
+            fallbackModels: [],
+            enabled: true
+          }
+        },
+        profiles: [
+          { id: "default", root: "." },
+          { id: "assistant", root: "profiles/assistant" }
+        ]
+      });
+      const cronDefault = new CronService({
+        maxConcurrentRuns: 2,
+        stateFile: join(dir, "cron-state.json")
+      });
+      await cronDefault.loadState();
+      const cronAssistant = new CronService({
+        maxConcurrentRuns: 2,
+        stateFile: join(dirAssistant, "tmp", "cron-state.json")
+      });
+      await cronAssistant.loadState();
+      const approvalsDirDefault = join(dir, "tmp", "approvals");
+      const approvalsDirAssistant = join(dirAssistant, "tmp", "approvals");
+      await mkdir(approvalsDirDefault, { recursive: true });
+      await mkdir(approvalsDirAssistant, { recursive: true });
+      const capabilityDefault = new CapabilityStore({ stateDir: approvalsDirDefault });
+      await capabilityDefault.load();
+      const capabilityAssistant = new CapabilityStore({ stateDir: approvalsDirAssistant });
+      await capabilityAssistant.load();
+      const approvalDefault = new ApprovalWorkflow({
+        capabilityStore: capabilityDefault,
+        defaultGrantTtlMs: 10 * 60_000,
+        defaultGrantUses: 1,
+        stateDir: approvalsDirDefault
+      });
+      await approvalDefault.load();
+      const approvalAssistant = new ApprovalWorkflow({
+        capabilityStore: capabilityAssistant,
+        defaultGrantTtlMs: 10 * 60_000,
+        defaultGrantUses: 1,
+        stateDir: approvalsDirAssistant
+      });
+      await approvalAssistant.load();
+      const substrateDefault = new SubstrateStore();
+      await substrateDefault.reload(dir, config.substrate);
+      const substrateAssistant = new SubstrateStore();
+      await substrateAssistant.reload(dirAssistant, config.substrate);
+      const ctxDefault: ProfileContext = {
+        profileRoot: dir,
+        substrateStore: substrateDefault,
+        approvalWorkflow: approvalDefault,
+        capabilityStore: capabilityDefault,
+        cronService: cronDefault
+      };
+      const ctxAssistant: ProfileContext = {
+        profileRoot: dirAssistant,
+        substrateStore: substrateAssistant,
+        approvalWorkflow: approvalAssistant,
+        capabilityStore: capabilityAssistant,
+        cronService: cronAssistant
+      };
+      const profileContextMap = new Map<string, ProfileContext>([
+        ["default", ctxDefault],
+        ["assistant", ctxAssistant]
+      ]);
+      const memory = new MemoryStore({ workspaceDir: dir });
+      const adapter = new CursorAgentModelAdapter({ defaultModel: "fallback", models: config.models });
+      const gate = new AlwaysAllowApprovalGate();
+      const toolRouter = new ToolRouter({ approvalGate: gate, allowedExecBins: ["echo"] });
+      toolRouter.register(createExecTool({ allowedBins: ["echo"], approvalGate: gate }));
+      const runtime = new AgentRuntime({
+        config,
+        adapter,
+        toolRouter,
+        memory,
+        snapshotDir: join(dir, "snapshots")
+      });
+      const incidentCommander = new IncidentCommander();
+      const auth = new AuthService({
+        mode: "token",
+        token: "test-token",
+        trustedProxyIps: [],
+        isTokenRevoked: (t: string) => incidentCommander.isTokenRevoked(t)
+      });
+      const rateLimiter = new MethodRateLimiter(10, 60_000, {
+        "agent.run": 5,
+        "chat.send": 5,
+        "cron.add": 2,
+        "profile.list": 20,
+        "profile.create": 10,
+        "profile.delete": 10
+      });
+      const policyLogs = new PolicyDecisionLogger();
+      const app = buildGateway({
+        config,
+        runtime,
+        cronService: cronDefault,
+        auth,
+        rateLimiter,
+        policyLogs,
+        incidentCommander,
+        defaultProfileId: "default",
+        workspaceDir: dir,
+        workspaceRoot: dir,
+        getProfileContext: (profileId) => profileContextMap.get(profileId)
+      });
+
+      const rpc = (method: string, params?: object) =>
+        app.inject({
+          method: "POST",
+          url: "/rpc",
+          headers: { authorization: "Bearer test-token" },
+          payload: { version: "2.0", method, params }
+        });
+
+      const listDefaultBefore = await rpc("memory.listLogs", { profileId: "default" });
+      expect(listDefaultBefore.statusCode).toBe(200);
+      expect(listDefaultBefore.json().result.files).toEqual([]);
+
+      await mkdir(join(dir, "memory"), { recursive: true });
+      await writeFile(join(dir, "memory", "2025-02-15.md"), "# default profile memory", "utf8");
+      const listDefaultAfter = await rpc("memory.listLogs", { profileId: "default" });
+      expect(listDefaultAfter.statusCode).toBe(200);
+      expect(listDefaultAfter.json().result.files).toHaveLength(1);
+      expect(listDefaultAfter.json().result.files[0].name).toBe("2025-02-15.md");
+
+      const listAssistantEmpty = await rpc("memory.listLogs", { profileId: "assistant" });
+      expect(listAssistantEmpty.statusCode).toBe(200);
+      expect(listAssistantEmpty.json().result.files).toEqual([]);
+
+      await mkdir(join(dirAssistant, "memory"), { recursive: true });
+      await writeFile(join(dirAssistant, "memory", "2025-02-14.md"), "# assistant profile memory", "utf8");
+      const listAssistantAfter = await rpc("memory.listLogs", { profileId: "assistant" });
+      expect(listAssistantAfter.statusCode).toBe(200);
+      expect(listAssistantAfter.json().result.files).toHaveLength(1);
+      expect(listAssistantAfter.json().result.files[0].name).toBe("2025-02-14.md");
+
+      await app.close();
+    });
   });
 
   it("dispatches chat.send through channel hub when configured", async () => {
@@ -719,7 +976,9 @@ describe("gateway integration", () => {
   });
 
   it("rejects oversized RPC payloads", async () => {
-    const app = await createGateway();
+    const app = await createGateway({
+      gatewayOverrides: { bodyLimitBytes: 64 * 1024 }
+    });
     const oversized = "x".repeat(80_000);
     const res = await app.inject({
       method: "POST",
@@ -956,6 +1215,31 @@ describe("gateway integration", () => {
     });
     expect(grantsRes.statusCode).toBe(200);
     expect(grantsRes.json().result.grants.length).toBeGreaterThan(0);
+    await app.close();
+  });
+
+  it("accepts optional profileId in RPC params (profile-scoped RPCs)", async () => {
+    const app = await createGateway({
+      approvalWorkflow: new ApprovalWorkflow({
+        capabilityStore: new CapabilityStore(),
+        defaultGrantTtlMs: 10_000,
+        defaultGrantUses: 1
+      }),
+      capabilityStore: new CapabilityStore()
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: { authorization: "Bearer test-token" },
+      payload: {
+        version: "2.0",
+        method: "approval.capabilities",
+        params: { profileId: "default" }
+      }
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().result).toBeDefined();
+    expect(res.json().result.grants).toBeDefined();
     await app.close();
   });
 

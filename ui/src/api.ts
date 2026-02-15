@@ -124,6 +124,16 @@ export async function rpc<T = unknown>(method: string, params?: Record<string, u
   return data;
 }
 
+/** Call RPC with profileId merged into params. Use for profile-scoped RPCs (substrate, memory, heartbeat, approval, cron, workspace, etc.). */
+export async function rpcWithProfile<T = unknown>(
+  method: string,
+  params: Record<string, unknown> | undefined,
+  profileId: string
+): Promise<RpcResponse<T>> {
+  const merged = { ...(params ?? {}), profileId };
+  return rpc<T>(method, merged);
+}
+
 export async function getHealth(): Promise<{ ok: boolean; time: string }> {
   const base = getBaseUrl();
   const res = await fetch(`${base}/health`);
@@ -141,9 +151,9 @@ export async function getStatus(): Promise<StatusPayload> {
   return res.json();
 }
 
-/** Poll for a proactive message from a heartbeat turn. Returns the message if one was pending (and clears it). */
-export async function heartbeatPoll(): Promise<{ result: string; proactiveMessage?: string }> {
-  const res = await rpc<{ result: string; proactiveMessage?: string }>("heartbeat.poll");
+/** Poll for a proactive message from a heartbeat turn for the given profile. Returns the message if one was pending (and clears it). */
+export async function heartbeatPoll(profileId: string): Promise<{ result: string; proactiveMessage?: string }> {
+  const res = await rpcWithProfile<{ result: string; proactiveMessage?: string }>("heartbeat.poll", undefined, profileId);
   const payload = res.result;
   return payload != null && typeof payload === "object" ? payload : { result: "ok" };
 }
@@ -162,9 +172,18 @@ export async function updateHeartbeat(content: string): Promise<void> {
   await rpc("heartbeat.update", { content });
 }
 
+export interface ProfileInfo {
+  id: string;
+  root: string;
+  modelId?: string;
+}
+
 export interface StatusPayload {
   gateway: string;
   defaultModel: string;
+  /** Agent profiles for the profile selector; when absent or empty, backend uses single default profile. */
+  profiles?: ProfileInfo[];
+  defaultProfileId?: string;
   queueWarnings: string[];
   /** If present, the agent sent a proactive message during a heartbeat (e.g. BIRTH); poll heartbeat.poll to consume. */
   pendingProactiveMessage?: string;
@@ -185,6 +204,19 @@ export interface StatusPayload {
   policyDecisions: number;
   approvals: { pending: number; activeCapabilities: number };
   incident: { proactiveSendsDisabled: boolean; toolIsolationEnabled: boolean };
+}
+
+/** Create a new agent profile. Requires admin/local auth. */
+export async function profileCreate(id: string, root: string): Promise<{ profile: ProfileInfo; configPath: string }> {
+  const res = await rpc<{ profile: ProfileInfo; configPath: string }>("profile.create", { id: id.trim(), root: root.trim() });
+  const out = res.result;
+  if (!out?.profile) throw new Error("Invalid response from profile.create");
+  return out;
+}
+
+/** Delete an agent profile. Fails if it is the only profile. Requires admin/local auth. */
+export async function profileDelete(id: string, removeDirectory?: boolean): Promise<void> {
+  await rpc("profile.delete", { id: id.trim(), removeDirectory: removeDirectory === true });
 }
 
 /** Restart the framework (runs full build, then restarts). Requires admin/local auth. */
