@@ -76,6 +76,7 @@ export default function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>(() => loadThread("demo-session"));
   const [input, setInput] = useState("");
   const [streamEvents, setStreamEvents] = useState<StreamEvent[]>([]);
+  const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [channelConfigOpen, setChannelConfigOpen] = useState(false);
@@ -84,6 +85,15 @@ export default function Chat() {
   const [channelSendText, setChannelSendText] = useState("");
   const streamRef = useRef<EventSource | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
+  const [, setLoadingTick] = useState(0);
+
+  // While loading, tick every 500ms so "Working…" fallback can appear after delay
+  useEffect(() => {
+    if (!loading || loadingStartedAt == null) return;
+    const interval = setInterval(() => setLoadingTick((n) => n + 1), 500);
+    return () => clearInterval(interval);
+  }, [loading, loadingStartedAt]);
 
   // Persist thread when session or messages change
   useEffect(() => {
@@ -94,6 +104,34 @@ export default function Chat() {
   useEffect(() => {
     const sid = sessionId.trim();
     if (sid) setMessages(loadThread(sid));
+  }, [sessionId]);
+
+  // Keep lifecycle stream open for current session so we receive status events before/during run
+  useEffect(() => {
+    const sid = sessionId.trim();
+    if (!sid) return;
+    if (streamRef.current) {
+      streamRef.current.close();
+      streamRef.current = null;
+    }
+    const es = openStream(sid);
+    streamRef.current = es;
+    es.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data) as StreamEvent;
+        setStreamEvents((prev) => [...prev, data]);
+      } catch {
+        // ignore
+      }
+    };
+    es.onerror = () => {
+      es.close();
+      streamRef.current = null;
+    };
+    return () => {
+      es.close();
+      if (streamRef.current === es) streamRef.current = null;
+    };
   }, [sessionId]);
 
   // Auto-scroll to bottom when new messages arrive
@@ -117,8 +155,9 @@ export default function Chat() {
       return;
     }
     setError(null);
-    setStreamEvents([]);
+    setCurrentRunId(null);
     setLoading(true);
+    setLoadingStartedAt(Date.now());
     setInput("");
 
     const userMsg: ChatMessage = {
@@ -129,48 +168,8 @@ export default function Chat() {
     };
     setMessages((prev) => [...prev, userMsg]);
 
-    if (streamRef.current) {
-      streamRef.current.close();
-      streamRef.current = null;
-    }
     try {
-      let streamReady: Promise<void> = Promise.resolve();
-      try {
-        const es = openStream(sessionId.trim());
-        streamRef.current = es;
-        streamReady = new Promise<void>((resolve) => {
-          const timeout = setTimeout(() => resolve(), 3000);
-          let resolved = false;
-          const onStreamReady = () => {
-            if (resolved) return;
-            resolved = true;
-            clearTimeout(timeout);
-            resolve();
-          };
-          es.onmessage = (ev) => {
-            try {
-              const data = JSON.parse(ev.data) as StreamEvent;
-              setStreamEvents((prev) => [...prev, data]);
-              onStreamReady();
-              if (data.type === "completed" || data.type === "failed") {
-                es.close();
-                streamRef.current = null;
-              }
-            } catch {
-              // ignore
-            }
-          };
-          es.onerror = () => {
-            onStreamReady();
-            es.close();
-            streamRef.current = null;
-            resolve();
-          };
-        });
-        await streamReady;
-      } catch {
-        // Stream optional; ignore
-      }
+      // Stream is already open from useEffect; we only clear events for this turn
 
       const messageHistory = [...messages, userMsg];
       const apiMessages = messageHistory
@@ -183,6 +182,7 @@ export default function Chat() {
       });
       const runId = runRes.result?.runId;
       if (!runId) throw new Error("No runId returned");
+      setCurrentRunId(runId);
       const waitRes = await rpc<{ assistantText: string; events?: unknown[] }>("agent.wait", { runId });
       const out = waitRes.result;
       const assistantText = out?.assistantText ?? "";
@@ -201,15 +201,35 @@ export default function Chat() {
       setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
     } finally {
       setLoading(false);
+      setLoadingStartedAt(null);
+      setCurrentRunId(null);
     }
   };
 
-  const lastStreamEvent = streamEvents.length > 0 ? streamEvents[streamEvents.length - 1] : null;
+  // Events for the current run: filter by runId once we have it, else show recent events so "Queued" can appear before runId
+  const runEvents = loading
+    ? currentRunId
+      ? streamEvents.filter((e) => e.runId === currentRunId)
+      : streamEvents.slice(-20)
+    : [];
+  const lastStreamEvent = runEvents.length > 0 ? runEvents[runEvents.length - 1] : null;
+  const statusTrail = runEvents.map(formatStreamEventLabel);
+  const hasRealProgress = runEvents.some(
+    (e) => e.type !== "connecting" && e.type !== "queued"
+  );
+  const loadingDurationMs = loadingStartedAt != null ? Date.now() - loadingStartedAt : 0;
+  const showWorkingFallback =
+    loading && loadingDurationMs > 1500 && !hasRealProgress && statusTrail.length <= 2;
+
   const statusLabel = lastStreamEvent
     ? formatStreamEventLabel(lastStreamEvent)
-    : loading
-      ? "Connecting…"
-      : "Starting…";
+    : showWorkingFallback
+      ? "Working…"
+      : loading
+        ? currentRunId
+          ? "Waiting for events…"
+          : "Starting run…"
+        : "Starting…";
 
   const sendToChannel = async () => {
     const text = (channelSendText || input).trim();
@@ -351,7 +371,25 @@ export default function Chat() {
               <div className="chat-bubble chat-bubble--assistant chat-bubble--loading" data-role="assistant">
                 <span className="chat-bubble-role">Agent</span>
                 <div className="chat-bubble-content">
-                  <span className="chat-typing">{statusLabel}</span>
+                  <span className="chat-typing" aria-live="polite">
+                    {statusLabel}
+                  </span>
+                  {statusTrail.length > 0 && (
+                    <div className="chat-status-trail" aria-hidden>
+                      {statusTrail.map((label, i) => (
+                        <span
+                          key={i}
+                          className={
+                            runEvents[i]?.type === "tool"
+                              ? "chat-status-event chat-status-event--tool"
+                              : "chat-status-event"
+                          }
+                        >
+                          {label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}

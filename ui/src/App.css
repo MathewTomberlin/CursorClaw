@@ -411,6 +411,34 @@ a:hover {
   color: var(--text-muted);
 }
 
+.chat-status-trail {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  opacity: 0.9;
+  margin-top: 0.5rem;
+  line-height: 1.5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.5rem;
+  align-items: center;
+}
+
+.chat-status-event {
+  color: var(--text-muted);
+}
+
+.chat-status-event:not(:last-child)::after {
+  content: "→";
+  margin-left: 0.5rem;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.chat-status-event--tool {
+  color: var(--accent);
+  font-weight: 500;
+}
+
 .chat-input-row {
   display: flex;
   gap: 0.5rem;
