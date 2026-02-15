@@ -406,10 +406,147 @@ describe("CursorAgentModelAdapter", () => {
           body: JSON.stringify({
             model: "test-model",
             messages: [{ role: "user", content: "hi" }],
-            stream: true
+            stream: true,
+            tools: [
+              {
+                type: "function",
+                function: {
+                  name: "echo_tool",
+                  description: "echo",
+                  parameters: simpleTool.schema
+                }
+              }
+            ]
           })
         })
       );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("ollama provider emits tool_call events when response includes message.tool_calls", async () => {
+    const ollamaChunks = [
+      JSON.stringify({
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            { function: { name: "echo_tool", arguments: { value: "hello" } } }
+          ]
+        },
+        done: false
+      }) + "\n",
+      JSON.stringify({ done: true, eval_count: 10 }) + "\n"
+    ];
+    const stream = new ReadableStream({
+      start(controller) {
+        for (const chunk of ollamaChunks) {
+          controller.enqueue(new TextEncoder().encode(chunk));
+        }
+        controller.close();
+      }
+    });
+
+    const fetchStub = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: stream,
+      text: () => Promise.resolve("")
+    });
+    vi.stubGlobal("fetch", fetchStub);
+
+    try {
+      const adapter = new CursorAgentModelAdapter({
+        defaultModel: "local",
+        models: {
+          local: {
+            provider: "ollama",
+            ollamaModelName: "test-model",
+            baseURL: "http://localhost:11434",
+            timeoutMs: 10_000,
+            authProfiles: ["default"],
+            fallbackModels: [],
+            enabled: true
+          }
+        }
+      });
+      const session = await adapter.createSession({
+        sessionId: "s1",
+        channelId: "c1",
+        channelKind: "dm"
+      });
+      const events: Array<{ type: string; data?: unknown }> = [];
+      for await (const event of adapter.sendTurn(
+        session,
+        [{ role: "user", content: "use echo" }],
+        [simpleTool],
+        { turnId: "ollama-tool-turn" }
+      )) {
+        events.push({ type: event.type, data: event.data });
+      }
+      expect(events.map((e) => e.type)).toEqual(["tool_call", "usage", "done"]);
+      const toolCall = events.find((e) => e.type === "tool_call")?.data as { name?: string; args?: unknown };
+      expect(toolCall?.name).toBe("echo_tool");
+      expect(toolCall?.args).toEqual({ value: "hello" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("ollama provider omits tools from request when tools array is empty", async () => {
+    const ollamaChunks = [
+      JSON.stringify({ message: { content: "Hi" }, done: false }) + "\n",
+      JSON.stringify({ done: true, eval_count: 1 }) + "\n"
+    ];
+    const stream = new ReadableStream({
+      start(controller) {
+        for (const chunk of ollamaChunks) {
+          controller.enqueue(new TextEncoder().encode(chunk));
+        }
+        controller.close();
+      }
+    });
+    const fetchStub = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: stream,
+      text: () => Promise.resolve("")
+    });
+    vi.stubGlobal("fetch", fetchStub);
+
+    try {
+      const adapter = new CursorAgentModelAdapter({
+        defaultModel: "local",
+        models: {
+          local: {
+            provider: "ollama",
+            ollamaModelName: "test-model",
+            baseURL: "http://localhost:11434",
+            timeoutMs: 10_000,
+            authProfiles: ["default"],
+            fallbackModels: [],
+            enabled: true
+          }
+        }
+      });
+      const session = await adapter.createSession({
+        sessionId: "s1",
+        channelId: "c1",
+        channelKind: "dm"
+      });
+      for await (const _event of adapter.sendTurn(
+        session,
+        [{ role: "user", content: "hi" }],
+        [],
+        { turnId: "ollama-no-tools" }
+      )) {
+        // consume
+      }
+      const call = fetchStub.mock.calls[0];
+      expect(call).toBeDefined();
+      const body = JSON.parse((call as [string, RequestInit])[1].body as string);
+      expect(body.tools).toBeUndefined();
     } finally {
       vi.unstubAllGlobals();
     }

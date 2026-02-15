@@ -14,9 +14,22 @@ function isOllamaConfig(
   return c.provider === "ollama" && typeof c.ollamaModelName === "string" && c.ollamaModelName.length > 0;
 }
 
+/** Map adapter ToolDefinition to Ollama API tools format (OpenAI-style). */
+function mapToolsToOllama(tools: ToolDefinition[]): Array<{ type: "function"; function: { name: string; description: string; parameters: object } }> {
+  if (tools.length === 0) return [];
+  return tools.map((t) => ({
+    type: "function" as const,
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.schema ?? { type: "object", properties: {} }
+    }
+  }));
+}
+
 /**
  * Ollama provider: talks to a local (or remote) Ollama server via HTTP /api/chat.
- * Streams assistant content; tool_call support depends on model capabilities (documented in implementation guide).
+ * Streams assistant content and tool_call events when the model and Ollama support tools (see docs/Ollama-tool-call-support.md).
  */
 export class OllamaProvider implements ModelProvider {
   private readonly turnAbortControllers = new Map<string, AbortController>();
@@ -25,7 +38,7 @@ export class OllamaProvider implements ModelProvider {
     _session: ModelSessionHandle,
     modelConfig: ModelProviderConfig,
     messages: Array<{ role: string; content: string }>,
-    _tools: ToolDefinition[],
+    tools: ToolDefinition[],
     options: SendTurnOptions
   ): AsyncIterable<AdapterEvent> {
     if (!isOllamaConfig(modelConfig)) {
@@ -42,6 +55,15 @@ export class OllamaProvider implements ModelProvider {
       content: m.content
     }));
 
+    const body: { model: string; messages: typeof ollamaMessages; stream: boolean; tools?: ReturnType<typeof mapToolsToOllama> } = {
+      model,
+      messages: ollamaMessages,
+      stream: true
+    };
+    if (tools.length > 0) {
+      body.tools = mapToolsToOllama(tools);
+    }
+
     const controller = new AbortController();
     this.turnAbortControllers.set(options.turnId, controller);
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -50,7 +72,7 @@ export class OllamaProvider implements ModelProvider {
       const res = await fetch(`${baseURL}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model, messages: ollamaMessages, stream: true }),
+        body: JSON.stringify(body),
         signal: controller.signal
       });
 
@@ -66,11 +88,16 @@ export class OllamaProvider implements ModelProvider {
 
       let promptTokens = 0;
       let completionTokens = 0;
+      const emittedToolCallIndices = new Set<number>();
 
       for await (const chunk of streamReadLines(reader)) {
         const line = chunk.trim();
         if (!line) continue;
-        let parsed: { message?: { content?: string }; done?: boolean; eval_count?: number };
+        let parsed: {
+          message?: { content?: string; tool_calls?: Array<{ function?: { name?: string; arguments?: unknown } }> };
+          done?: boolean;
+          eval_count?: number;
+        };
         try {
           parsed = JSON.parse(line) as typeof parsed;
         } catch {
@@ -79,6 +106,25 @@ export class OllamaProvider implements ModelProvider {
         if (parsed.message?.content) {
           completionTokens += (parsed.message.content as string).length;
           yield { type: "assistant_delta", data: { content: parsed.message.content } };
+        }
+        const toolCalls = parsed.message?.tool_calls;
+        if (Array.isArray(toolCalls)) {
+          for (let i = 0; i < toolCalls.length; i++) {
+            if (emittedToolCallIndices.has(i)) continue;
+            const tc = toolCalls[i];
+            const name = typeof tc?.function?.name === "string" ? tc.function.name : "";
+            if (!name) continue;
+            emittedToolCallIndices.add(i);
+            let args: unknown = tc?.function?.arguments ?? {};
+            if (typeof args === "string") {
+              try {
+                args = JSON.parse(args);
+              } catch {
+                args = {};
+              }
+            }
+            yield { type: "tool_call", data: { name, args } };
+          }
         }
         if (parsed.done === true) {
           if (typeof parsed.eval_count === "number") {
