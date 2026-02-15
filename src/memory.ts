@@ -1,12 +1,24 @@
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { safeReadUtf8 } from "./fs-utils.js";
 import type { MemoryRecord, SensitivityLabel } from "./types.js";
 
+/** Optional rolling window: when MEMORY.md exceeds maxRecords or maxChars, oldest records are trimmed (primary file only; daily files unchanged). */
+export interface RollingWindowOptions {
+  maxRecords?: number;
+  maxChars?: number;
+  /** If set, trimmed lines are appended here (e.g. "memory/MEMORY-archive.md"). */
+  archivePath?: string;
+  /** Called after trim so the caller can re-sync e.g. the memory embedding index. */
+  onTrim?: () => Promise<void>;
+}
+
 export interface MemoryStoreOptions {
   workspaceDir: string;
+  /** When set, MEMORY.md is trimmed after append when over limit. Default off. */
+  rollingWindow?: RollingWindowOptions;
 }
 
 export interface IntegrityFinding {
@@ -45,10 +57,12 @@ function parseLine(line: string): MemoryRecord | null {
 export class MemoryStore {
   private readonly memoryDir: string;
   private readonly primaryFile: string;
+  private readonly rollingWindow: RollingWindowOptions | undefined;
 
   constructor(private readonly options: MemoryStoreOptions) {
     this.memoryDir = join(options.workspaceDir, "memory");
     this.primaryFile = join(options.workspaceDir, "MEMORY.md");
+    this.rollingWindow = options.rollingWindow;
   }
 
   async init(): Promise<void> {
@@ -67,7 +81,54 @@ export class MemoryStore {
     const line = `${toLine(materialized)}\n`;
     await writeFile(this.primaryFile, line, { encoding: "utf8", flag: "a" });
     await writeFile(dailyFile, line, { encoding: "utf8", flag: "a" });
+    await this.maybeTrimAfterAppend();
     return materialized;
+  }
+
+  /** When rolling window is configured and primary file is over limit, trim oldest from MEMORY.md only; optionally archive; call onTrim. */
+  private async maybeTrimAfterAppend(): Promise<void> {
+    const rw = this.rollingWindow;
+    if (!rw || (rw.maxRecords == null && rw.maxChars == null)) return;
+
+    const content = await safeReadUtf8(this.primaryFile);
+    if (content == null) return;
+
+    const lines = content.split("\n");
+    let firstRecordIndex = 0;
+    while (firstRecordIndex < lines.length && parseLine(lines[firstRecordIndex]!) == null) {
+      firstRecordIndex += 1;
+    }
+    const headerLines = lines.slice(0, firstRecordIndex);
+    const recordLines = lines.slice(firstRecordIndex).filter((l) => parseLine(l) != null);
+    const header = headerLines.length ? headerLines.join("\n") + "\n" : "";
+
+    let dropCount = 0;
+    if (rw.maxRecords != null && recordLines.length > rw.maxRecords) {
+      dropCount = Math.max(dropCount, recordLines.length - rw.maxRecords);
+    }
+    if (rw.maxChars != null) {
+      let totalChars = header.length;
+      for (const l of recordLines) totalChars += l.length + 1;
+      let fromFront = 0;
+      while (totalChars > rw.maxChars! && fromFront < recordLines.length) {
+        totalChars -= (recordLines[fromFront]!.length + 1);
+        fromFront += 1;
+      }
+      dropCount = Math.max(dropCount, fromFront);
+    }
+    if (dropCount <= 0) return;
+
+    const toDrop = recordLines.slice(0, dropCount);
+    const toKeep = recordLines.slice(dropCount);
+    const newContent = header + toKeep.map((l) => l + "\n").join("");
+
+    await writeFile(this.primaryFile, newContent, "utf8");
+    if (rw.archivePath) {
+      const archiveFull = join(this.options.workspaceDir, rw.archivePath);
+      await mkdir(dirname(archiveFull), { recursive: true });
+      await writeFile(archiveFull, toDrop.map((l) => l + "\n").join(""), { encoding: "utf8", flag: "a" });
+    }
+    await rw.onTrim?.();
   }
 
   async readAll(): Promise<MemoryRecord[]> {

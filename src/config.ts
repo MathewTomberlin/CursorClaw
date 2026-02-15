@@ -191,6 +191,12 @@ export interface ContinuityConfig {
   memorySizeWarnChars?: number;
   /** When set, heartbeat checklist warns when total substrate file size is at or above this many chars (default 60000). */
   substrateSizeWarnChars?: number;
+  /** Optional rolling window: max records to keep in MEMORY.md. When set, oldest records are trimmed after append (and optionally archived). Default off. */
+  memoryMaxRecords?: number;
+  /** Optional rolling window: max characters for MEMORY.md. When set, oldest records are trimmed after append (and optionally archived). Default off. */
+  memoryMaxChars?: number;
+  /** When rolling window is enabled, trimmed lines can be appended here (e.g. "memory/MEMORY-archive.md"). Omit to drop without archiving. */
+  memoryArchivePath?: string;
 }
 
 export interface CursorClawConfig {

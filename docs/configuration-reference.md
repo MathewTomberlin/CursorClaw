@@ -422,6 +422,9 @@ Defaults:
 - **memoryEmbeddingsMaxRecords:** Max records in the embedding index (default 3000). Only used when memoryEmbeddingsEnabled is true.
 - **memorySizeWarnChars:** When set (default 28800), the heartbeat memory/substrate checklist warns when MEMORY.md + daily size is at or above this (e.g. near cap so the agent considers compaction). Enables dumb-zone awareness.
 - **substrateSizeWarnChars:** When set (default 60000), the heartbeat checklist warns when total substrate file size is at or above this; the agent can consider summarizing or trimming.
+- **memoryMaxRecords:** Optional. When set, MEMORY.md is trimmed after each append to at most this many records (oldest dropped). Primary file only; daily files unchanged. Default off.
+- **memoryMaxChars:** Optional. When set, MEMORY.md is trimmed after each append so total size does not exceed this (oldest records dropped). Default off.
+- **memoryArchivePath:** Optional. When rolling window is enabled (memoryMaxRecords or memoryMaxChars set), trimmed lines are appended to this path under the profile (e.g. `memory/MEMORY-archive.md`). Omit to drop without archiving.
 
 ## Token and context limits
 
