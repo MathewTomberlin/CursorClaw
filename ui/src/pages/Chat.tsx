@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { rpc, mapRpcError } from "../api";
 
 type ChannelKind = "dm" | "group" | "web" | "mobile";
@@ -141,7 +143,9 @@ export default function Chat() {
       {reply && (
         <div className="card" style={{ marginTop: "1rem" }}>
           <h2>Reply</h2>
-          <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>{reply}</pre>
+          <div className="agent-reply markdown-body" style={{ margin: 0 }}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{reply}</ReactMarkdown>
+          </div>
           {events.length > 0 && (
             <details style={{ marginTop: "0.75rem" }}>
               <summary>Events ({events.length})</summary>
