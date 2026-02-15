@@ -134,25 +134,40 @@ export default function Chat() {
       streamRef.current = null;
     }
     try {
+      let streamReady: Promise<void> = Promise.resolve();
       try {
         const es = openStream(sessionId.trim());
         streamRef.current = es;
-        es.onmessage = (ev) => {
-          try {
-            const data = JSON.parse(ev.data) as StreamEvent;
-            setStreamEvents((prev) => [...prev, data]);
-            if (data.type === "completed" || data.type === "failed") {
-              es.close();
-              streamRef.current = null;
+        streamReady = new Promise<void>((resolve) => {
+          const timeout = setTimeout(() => resolve(), 3000);
+          let resolved = false;
+          const onStreamReady = () => {
+            if (resolved) return;
+            resolved = true;
+            clearTimeout(timeout);
+            resolve();
+          };
+          es.onmessage = (ev) => {
+            try {
+              const data = JSON.parse(ev.data) as StreamEvent;
+              setStreamEvents((prev) => [...prev, data]);
+              onStreamReady();
+              if (data.type === "completed" || data.type === "failed") {
+                es.close();
+                streamRef.current = null;
+              }
+            } catch {
+              // ignore
             }
-          } catch {
-            // ignore
-          }
-        };
-        es.onerror = () => {
-          es.close();
-          streamRef.current = null;
-        };
+          };
+          es.onerror = () => {
+            onStreamReady();
+            es.close();
+            streamRef.current = null;
+            resolve();
+          };
+        });
+        await streamReady;
       } catch {
         // Stream optional; ignore
       }
@@ -190,7 +205,11 @@ export default function Chat() {
   };
 
   const lastStreamEvent = streamEvents.length > 0 ? streamEvents[streamEvents.length - 1] : null;
-  const statusLabel = lastStreamEvent ? formatStreamEventLabel(lastStreamEvent) : "Starting…";
+  const statusLabel = lastStreamEvent
+    ? formatStreamEventLabel(lastStreamEvent)
+    : loading
+      ? "Connecting…"
+      : "Starting…";
 
   const sendToChannel = async () => {
     const text = (channelSendText || input).trim();

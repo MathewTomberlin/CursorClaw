@@ -33,6 +33,18 @@ export class InMemoryLifecycleStream implements LifecycleStream {
           resolve: null
         };
         self.subscribers.add(sub);
+        // Notify this subscriber that the stream is connected (so UI can show "Connecting…" and avoid losing "queued").
+        const connectingEvent: LifecycleEvent = {
+          type: "connecting",
+          sessionId: sessionId ?? "",
+          runId: "",
+          at: new Date().toISOString()
+        };
+        sub.queue.push(connectingEvent);
+        if (sub.resolve) {
+          sub.resolve();
+          sub.resolve = null;
+        }
         try {
           while (true) {
             if (sub.queue.length > 0) {

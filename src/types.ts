@@ -55,6 +55,7 @@ export interface SessionContext {
 }
 
 export type LifecycleEventType =
+  | "connecting"
   | "queued"
   | "started"
   | "tool"
