@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+
 import Fastify, { type FastifyInstance } from "fastify";
 
 import type { ChannelHub } from "./channels.js";
@@ -81,6 +84,8 @@ export interface GatewayDependencies {
   lifecycleStream?: LifecycleStream;
   /** If provided, called before channelHub.send; return false to skip delivery. */
   onBeforeSend?: (channelId: string, text: string) => Promise<boolean>;
+  /** If set, GET / serves index.html from this path; otherwise GET / serves a simple "UI not built" page. */
+  uiDistPath?: string;
 }
 
 const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
@@ -88,6 +93,7 @@ const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
   "agent.wait": ["local", "remote", "admin"],
   "chat.send": ["local", "remote", "admin"],
   "cron.add": ["admin", "local"],
+  "cron.list": ["admin", "local"],
   "incident.bundle": ["admin"],
   "approval.list": ["admin", "local"],
   "approval.resolve": ["admin", "local"],
@@ -96,7 +102,8 @@ const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
   "workspace.status": ["local", "remote", "admin"],
   "workspace.semantic_search": ["local", "remote", "admin"],
   "trace.ingest": ["local", "remote", "admin"],
-  "advisor.explain_function": ["local", "remote", "admin"]
+  "advisor.explain_function": ["local", "remote", "admin"],
+  "config.get": ["admin", "local"]
 };
 
 export function buildGateway(deps: GatewayDependencies): FastifyInstance {
@@ -111,6 +118,16 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
       ok: true,
       time: new Date().toISOString()
     };
+  });
+
+  app.get("/", async (_request, reply) => {
+    if (deps.uiDistPath) {
+      const html = await readFile(join(deps.uiDistPath, "index.html"), "utf8");
+      return reply.type("text/html").send(html);
+    }
+    return reply.type("text/html").send(
+      "<!DOCTYPE html><html><head><title>CursorClaw</title></head><body><p>UI not built. Run <code>npm run build</code>.</p><p><a href=\"/health\">Health</a> | <a href=\"/status\">Status</a></p></body></html>"
+    );
   });
 
   const streamConnectionsBySubject = new Map<string, number>();
@@ -342,6 +359,8 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           backoffMs: 1_000
         });
         result = { job };
+      } else if (body.method === "cron.list") {
+        result = { jobs: deps.cronService.listJobs() };
       } else if (body.method === "chat.send") {
         const channelId = String(body.params?.channelId ?? "unknown");
         const proactive = Boolean(body.params?.proactive ?? false);
@@ -522,6 +541,25 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           modulePath,
           symbol
         });
+      } else if (body.method === "config.get") {
+        const c = deps.config;
+        result = {
+          ...c,
+          gateway: {
+            ...c.gateway,
+            auth: {
+              ...c.gateway.auth,
+              token:
+                c.gateway.auth.token !== undefined
+                  ? { redacted: true, length: c.gateway.auth.token.length }
+                  : undefined,
+              password:
+                c.gateway.auth.password !== undefined
+                  ? { redacted: true, length: c.gateway.auth.password.length }
+                  : undefined
+            }
+          }
+        };
       } else {
         throw new RpcGatewayError(400, "BAD_REQUEST", `unknown method: ${body.method}`);
       }

@@ -229,8 +229,9 @@ To use your local **Cursor-Agent CLI** (real model) instead of the fallback, add
    "models": {
      "cursor-auto": {
        "provider": "cursor-agent-cli",
-       "command": "cursor-agent",
-       "args": ["auto", "--stream-json"],
+       "command": "agent",
+       "args": ["-p", "--output-format", "stream-json", "--stream-partial-output"],
+       "promptAsArg": true,
        "timeoutMs": 600000,
        "authProfiles": ["default"],
        "fallbackModels": ["fallback-default"],
@@ -246,13 +247,13 @@ To use your local **Cursor-Agent CLI** (real model) instead of the fallback, add
    }
    ```
 
-   - **`command`** — Executable name if on `PATH` (e.g. `"cursor-agent"`), or full path. On Windows you can point to `cursor-agent.cmd` or `cursor-agent.bat`; CursorClaw will run them via `cmd.exe /c` so they don’t cause spawn errors.
-   - **`args`** — Must include `"--stream-json"` so the adapter can read NDJSON events from stdout. `"auto"` is the typical first argument; use whatever your CLI expects.
+   - **`command`** — Executable name if on `PATH` (e.g. `"agent"`), or full path. On Windows you can use `agent.cmd` or `agent.bat`; CursorClaw runs `.cmd`/`.bat` via `cmd.exe /c` so they don’t cause spawn errors.
+   - **`args`** — For the official Cursor CLI use `-p`, `--output-format stream-json`, and **`promptAsArg`: true** (prompt as last argument; do not use `--stream-json`).
    - **`fallbackModels`** — If the CLI fails (auth, timeout, crash), CursorClaw will try `fallback-default` automatically.
 
 3. **Restart CursorClaw** after changing config. Then run an `agent.run` / `agent.wait`; the turn will use the CLI and you should see real model output in `result.assistantText`.
 
-The CLI must follow the [Cursor-Agent Adapter Contract](docs/cursor-agent-adapter.md): it receives a JSON turn on stdin and emits NDJSON events on stdout (`assistant_delta`, `tool_call`, `done`, etc.).
+With `promptAsArg`: true the adapter passes the user message as the last CLI argument; the CLI must emit NDJSON on stdout. See [Cursor-Agent Adapter Contract](docs/cursor-agent-adapter.md).
 
 For a **production-like** setup:
 
@@ -291,6 +292,13 @@ These are normal; add `tmp/` and log paths to backup/exclusion rules as needed.
 | Status | `GET http://127.0.0.1:8787/status` |
 | RPC | `POST http://127.0.0.1:8787/rpc` with `Authorization: Bearer <token>` |
 | Agent reply after `agent.wait` | In the response: `$waitResp.result.assistantText` |
+| Web UI | After `npm run build`, open `http://127.0.0.1:8787/` in a browser; log in with the token from `openclaw.json`. |
+
+---
+
+## Web UI
+
+After building with `npm run build`, the server serves the UI from `ui/dist` at the same origin as the API. Open `http://127.0.0.1:8787/` (or your gateway URL), enter the gateway URL and the token from `openclaw.json` under `gateway.auth.token`, and click Connect. The UI provides Dashboard, Chat (agent run/wait, chat.send), Approvals, Cron, Workspace (status, semantic search, advisor), Incidents, Config (read-only), and Trace ingest.
 
 ---
 
@@ -305,5 +313,10 @@ These are normal; add `tmp/` and log paths to backup/exclusion rules as needed.
 - **Startup rejects config** — Ensure token is not `changeme`, `undefined`, or `null`.
 - **400 PROTO_VERSION_UNSUPPORTED** — Send `"version": "2.0"` in RPC JSON.
 - **Tool execution blocked** — Check approval/capability policy or incident mode; see [Configuration Reference](docs/configuration-reference.md) and [RPC API Reference](docs/rpc-api-reference.md).
+- **Getting fallback response instead of cursor-auto** — The Cursor-Agent CLI failed for the last turn, so the runtime used the fallback model. In the UI Dashboard, check the **Cursor-Agent CLI fallback** box (it shows the last error). Common causes:
+  1. **Command not found** — The `command` in `openclaw.json` (e.g. `agent` or `agent.cmd`) must be on your `PATH`, or set `command` to the full path to the executable (e.g. `C:\path\to\agent.cmd` on Windows).
+  2. **CLI stream not accepted** — The CLI must emit NDJSON events on stdout. The adapter accepts a final `done` event, or a `result` event (treated as end-of-turn), or exit code 0 after at least one forwardable event. With `promptAsArg: true` the adapter does not write turn JSON to stdin; it passes the user message as the last argument. See [Cursor-Agent Adapter Contract](docs/cursor-agent-adapter.md).
+  3. **Timeout** — Increase `timeoutMs` for the `cursor-auto` model in config if the CLI is slow.
+  4. **Wrong args** — For the official Cursor CLI use `-p`, `--output-format stream-json`, and `promptAsArg: true` (see Step 7). Do not use `--stream-json`; use `--output-format stream-json`. Ensure `args` in config match what your CLI expects.
 
-For more detail: [Getting Started](docs/getting-started.md), [Configuration Reference](docs/configuration-reference.md), [RPC API Reference](docs/rpc-api-reference.md).
+For more detail: [Getting Started](docs/getting-started.md), [Configuration Reference](docs/configuration-reference.md), [RPC API Reference](docs/rpc-api-reference.md), [Cursor-Agent Adapter Contract](docs/cursor-agent-adapter.md).

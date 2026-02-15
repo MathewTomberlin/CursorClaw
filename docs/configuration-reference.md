@@ -369,8 +369,9 @@ Slack adapter:
   "models": {
     "cursor-auto": {
       "provider": "cursor-agent-cli",
-      "command": "cursor-agent",
-      "args": ["auto", "--stream-json"],
+      "command": "agent",
+      "args": ["-p", "--output-format", "stream-json", "--stream-partial-output"],
+      "promptAsArg": true,
       "timeoutMs": 600000,
       "authProfiles": ["default"],
       "fallbackModels": ["fallback-default"],

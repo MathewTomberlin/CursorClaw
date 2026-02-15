@@ -116,6 +116,7 @@ Method scope rules (`METHOD_SCOPES`):
 - `agent.wait`: local, remote, admin
 - `chat.send`: local, remote, admin
 - `cron.add`: admin, local
+- `cron.list`: admin, local
 - `incident.bundle`: admin
 - `approval.list`: admin, local
 - `approval.resolve`: admin, local
@@ -125,6 +126,7 @@ Method scope rules (`METHOD_SCOPES`):
 - `workspace.semantic_search`: local, remote, admin
 - `trace.ingest`: local, remote, admin
 - `advisor.explain_function`: local, remote, admin
+- `config.get`: admin, local
 
 ---
 
@@ -223,7 +225,21 @@ Returns:
 
 ---
 
-### 5.5 `incident.bundle`
+### 5.5 `cron.list`
+
+Lists registered cron jobs (admin, local).
+
+No required params.
+
+Returns:
+
+```json
+{ "jobs": [ { "id": "...", "type": "every", "expression": "30m", "isolated": true, "maxRetries": 3, "backoffMs": 1000, "nextRunAt": 1700000000000 } ] }
+```
+
+---
+
+### 5.6 `incident.bundle`
 
 Triggers incident containment actions.
 
@@ -246,7 +262,7 @@ Returns forensic bundle:
 
 ---
 
-### 5.6 `approval.list`
+### 5.7 `approval.list`
 
 Lists approval workflow requests.
 
@@ -262,7 +278,7 @@ Returns:
 
 ---
 
-### 5.7 `approval.resolve`
+### 5.8 `approval.resolve`
 
 Resolves a pending approval request.
 
@@ -282,7 +298,7 @@ Returns:
 
 ---
 
-### 5.8 `approval.capabilities`
+### 5.9 `approval.capabilities`
 
 Lists active capability grants.
 
@@ -294,7 +310,7 @@ Returns:
 
 ---
 
-### 5.9 `advisor.file_change`
+### 5.10 `advisor.file_change`
 
 Generates proactive suggestions based on changed file paths.
 
@@ -315,7 +331,7 @@ Returns:
 
 ---
 
-### 5.10 `workspace.status`
+### 5.11 `workspace.status`
 
 Delegates to workspace status service callback.
 
@@ -330,7 +346,7 @@ Typical result includes:
 
 ---
 
-### 5.11 `workspace.semantic_search`
+### 5.12 `workspace.semantic_search`
 
 Semantic retrieval across indexed workspace modules.
 
@@ -345,7 +361,7 @@ Returns callback-defined structure; default integration returns grouped module h
 
 ---
 
-### 5.12 `trace.ingest`
+### 5.13 `trace.ingest`
 
 Ingests network trace for route-to-module linking and observation logging.
 
@@ -364,7 +380,7 @@ Returns callback-defined result; default integration returns acceptance status a
 
 ---
 
-### 5.13 `advisor.explain_function`
+### 5.14 `advisor.explain_function`
 
 Explains function/symbol behavior in indexed module context.
 
@@ -374,6 +390,16 @@ Explains function/symbol behavior in indexed module context.
 - `symbol: string` (required)
 
 Returns callback-defined explanation payload; default integration includes summary, side effects, caller hints, history, confidence, and provenance.
+
+---
+
+### 5.15 `config.get`
+
+Returns current runtime config with secrets redacted (admin, local).
+
+No params.
+
+Returns the same shape as [Configuration Reference](configuration-reference.md); `gateway.auth.token` and `gateway.auth.password` are replaced with `{ redacted: true, length?: number }`.
 
 ## 6) RPC error codes in practice
 

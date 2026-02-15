@@ -18,6 +18,12 @@ export interface CursorAgentAdapterModelConfig {
   provider: "cursor-agent-cli" | "fallback-model";
   command?: string;
   args?: string[];
+  /**
+   * If true, the last user message is passed as the final CLI argument (prompt-as-arg)
+   * and no turn JSON is written to stdin. Use for Cursor CLI which expects
+   * e.g. agent -p --output-format stream-json "prompt".
+   */
+  promptAsArg?: boolean;
   timeoutMs: number;
   authProfiles: string[];
   fallbackModels: string[];
@@ -46,7 +52,8 @@ export class CursorAgentModelAdapter implements ModelAdapter {
   private readonly metrics = {
     timeoutCount: 0,
     crashCount: 0,
-    fallbackAttemptCount: 0
+    fallbackAttemptCount: 0,
+    lastFallbackError: null as string | null
   };
 
   constructor(private readonly config: CursorAgentAdapterConfig) {}
@@ -59,6 +66,7 @@ export class CursorAgentModelAdapter implements ModelAdapter {
     timeoutCount: number;
     crashCount: number;
     fallbackAttemptCount: number;
+    lastFallbackError: string | null;
   } {
     return { ...this.metrics };
   }
@@ -101,6 +109,8 @@ export class CursorAgentModelAdapter implements ModelAdapter {
         } catch (error) {
           lastError = error;
           this.metrics.fallbackAttemptCount += 1;
+          const errMsg = redactSecrets(String(error));
+          this.metrics.lastFallbackError = errMsg;
           this.pushEventLog(redactSecrets(`adapter-fail model=${modelName} profile=${profile} err=${String(error)}`));
           if (!isRecoverableAdapterError(error)) {
             throw error;
@@ -169,29 +179,38 @@ export class CursorAgentModelAdapter implements ModelAdapter {
       throw new Error(`model config missing command: ${modelName}`);
     }
     const timeoutMs = options.timeoutMs ?? modelConfig.timeoutMs;
-    const { command, args } = this.resolveSpawnCommand(modelConfig.command, modelConfig.args ?? []);
-    const child = spawn(command, args, {
+    const baseArgs = modelConfig.args ?? [];
+    const promptAsArg = Boolean(modelConfig.promptAsArg);
+    const lastUserContent =
+      [...messages].reverse().find((m) => m.role === "user")?.content?.trim() ?? "";
+    const args = promptAsArg ? [...baseArgs, lastUserContent] : baseArgs;
+    const { command, args: resolvedArgs } = this.resolveSpawnCommand(modelConfig.command, args);
+    const child = spawn(command, resolvedArgs, {
       env: {
-        PATH: process.env.PATH ?? "",
-        HOME: process.env.HOME ?? "",
-        LANG: "C.UTF-8",
+        ...process.env,
+        LANG: process.env.LANG ?? "C.UTF-8",
         CURSOR_AGENT_AUTH_PROFILE: authProfile
       },
       stdio: ["pipe", "pipe", "pipe"]
     });
     this.processes.set(options.turnId, child);
 
-    const payload = {
-      type: "turn",
-      turnId: options.turnId,
-      messages,
-      tools: tools.map((tool) => ({ name: tool.name, schema: tool.schema }))
-    };
-    child.stdin.write(JSON.stringify(payload) + "\n");
-    child.stdin.end();
+    if (promptAsArg) {
+      child.stdin.end();
+    } else {
+      const payload = {
+        type: "turn",
+        turnId: options.turnId,
+        messages,
+        tools: tools.map((tool) => ({ name: tool.name, schema: tool.schema }))
+      };
+      child.stdin.write(JSON.stringify(payload) + "\n");
+      child.stdin.end();
+    }
 
     let timedOut = false;
     let sawDone = false;
+    let sawForwardableEvent = false;
     let timeoutHandle: NodeJS.Timeout | undefined;
     const resetTimeout = (): void => {
       if (timeoutHandle) {
@@ -229,6 +248,7 @@ export class CursorAgentModelAdapter implements ModelAdapter {
         const parsed = this.parseEventFrame(sentinelBuffer, tools);
         if (parsed) {
           if (parsed.type === "done") sawDone = true;
+          else sawForwardableEvent = true;
           yield parsed;
         }
         sentinelBuffer = null;
@@ -241,6 +261,7 @@ export class CursorAgentModelAdapter implements ModelAdapter {
       const parsed = this.parseEventFrame(trimmed, tools);
       if (parsed) {
         if (parsed.type === "done") sawDone = true;
+        else sawForwardableEvent = true;
         yield parsed;
       }
     }
@@ -257,12 +278,29 @@ export class CursorAgentModelAdapter implements ModelAdapter {
     if (timedOut) {
       throw new Error("adapter timeout");
     }
+    const stderrText = stderrChunks.join(" ").trim().replace(/\s+/g, " ") || "(no stderr)";
+    const runHint =
+      stderrText === "(no stderr)"
+        ? " Run the CLI manually and pipe one line of turn JSON to stdin to see what it prints (see docs/cursor-agent-adapter.md for the turn format)."
+        : "";
     if (code !== 0 && !sawDone) {
       this.metrics.crashCount += 1;
-      throw new Error(`adapter transport failure (${code}): ${stderrChunks.join(" | ")}`);
+      throw new Error(
+        `Cursor-Agent CLI exited with code ${code} before sending a done event. ` +
+          `The CLI must read the turn JSON from stdin, emit NDJSON events on stdout (see docs/cursor-agent-adapter.md), and send a final {"type":"done","data":{}}. ` +
+          `Stderr: ${stderrText}.${runHint}`
+      );
     }
     if (!sawDone) {
-      throw new Error("adapter stream terminated without done event");
+      if (code === 0 && sawForwardableEvent) {
+        sawDone = true;
+      } else {
+        throw new Error(
+          `Cursor-Agent CLI stream ended without a done event. ` +
+            `The process may have exited (code ${code}) before emitting any events, or it does not send {"type":"done","data":{}} at the end. ` +
+            `Stderr: ${stderrText}.${runHint}`
+        );
+      }
     }
   }
 
@@ -276,11 +314,11 @@ export class CursorAgentModelAdapter implements ModelAdapter {
     if (!parsed || typeof parsed !== "object") {
       throw new Error("malformed frame payload");
     }
-    const candidate = parsed as { type?: string; data?: unknown };
+    const candidate = parsed as { type?: string; data?: unknown; message?: { content?: Array<{ type?: string; text?: string }> } };
     if (!candidate.type) {
       throw new Error("malformed frame missing type");
     }
-    const supportedEventTypes = ["assistant_delta", "tool_call", "usage", "error", "done", "protocol"];
+    const supportedEventTypes = ["assistant_delta", "tool_call", "usage", "error", "done", "protocol", "system", "user", "thinking", "assistant", "result"];
     if (!supportedEventTypes.includes(candidate.type)) {
       throw new Error(`unknown adapter event type: ${candidate.type}`);
     }
@@ -291,6 +329,22 @@ export class CursorAgentModelAdapter implements ModelAdapter {
         throw new Error(`unsupported protocol version: ${version}`);
       }
       return null;
+    }
+    if (["system", "user", "thinking"].includes(candidate.type)) {
+      return null;
+    }
+    if (candidate.type === "assistant") {
+      const content = candidate.message?.content;
+      const text =
+        Array.isArray(content) ?
+          content.map((c) => (c && typeof c.text === "string" ? c.text : "")).join("") :
+          "";
+      if (!text) return null;
+      this.pushEventLog(redactSecrets(JSON.stringify(candidate)));
+      return { type: "assistant_delta", data: { content: text } };
+    }
+    if (candidate.type === "result") {
+      return { type: "done", data: {} };
     }
     if (candidate.type === "tool_call") {
       this.validateToolCall(candidate.data, tools);

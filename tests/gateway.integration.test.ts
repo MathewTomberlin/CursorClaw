@@ -625,6 +625,52 @@ describe("gateway integration", () => {
     await app.close();
   });
 
+  it("cron.list returns jobs from cron service", async () => {
+    const app = await createGateway();
+    const addRes = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: { authorization: "Bearer test-token" },
+      payload: {
+        version: "2.0",
+        method: "cron.add",
+        params: { type: "every", expression: "30m", isolated: true }
+      }
+    });
+    expect(addRes.statusCode).toBe(200);
+    const runId = addRes.json().result?.job?.id;
+    expect(runId).toBeDefined();
+    const listRes = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: { authorization: "Bearer test-token" },
+      payload: { version: "2.0", method: "cron.list", params: {} }
+    });
+    expect(listRes.statusCode).toBe(200);
+    const jobs = listRes.json().result?.jobs;
+    expect(Array.isArray(jobs)).toBe(true);
+    expect(jobs.some((j: { id: string }) => j.id === runId)).toBe(true);
+    await app.close();
+  });
+
+  it("config.get returns sanitized config without token value", async () => {
+    const app = await createGateway();
+    const res = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: { authorization: "Bearer test-token" },
+      payload: { version: "2.0", method: "config.get", params: {} }
+    });
+    expect(res.statusCode).toBe(200);
+    const result = res.json().result;
+    expect(result).toBeDefined();
+    expect(result.gateway).toBeDefined();
+    expect(result.gateway.auth).toBeDefined();
+    expect(result.gateway.auth.token).not.toBe("test-token");
+    expect(result.gateway.auth.token).toEqual({ redacted: true, length: 10 });
+    await app.close();
+  });
+
   it("rejects oversized RPC payloads", async () => {
     const app = await createGateway();
     const oversized = "x".repeat(80_000);

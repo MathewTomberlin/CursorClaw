@@ -388,8 +388,13 @@ export class AgentRuntime {
             if (event.type === "assistant_delta") {
               const rawContent = String((event.data as { content?: string })?.content ?? "");
               const content = this.scrubText(rawContent, scrubScopeId);
-              assistantText += content;
-              emit("assistant", { content });
+              if (content.length >= assistantText.length && content.startsWith(assistantText)) {
+                assistantText = content;
+                emit("assistant", { content });
+              } else {
+                assistantText += content;
+                emit("assistant", { content });
+              }
               emittedCount += 1;
             } else if (event.type === "tool_call") {
               const call = event.data as ToolCall;

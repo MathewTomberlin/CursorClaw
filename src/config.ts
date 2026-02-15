@@ -38,6 +38,8 @@ export interface ModelProviderConfig {
   provider: "cursor-agent-cli" | "fallback-model";
   command?: string;
   args?: string[];
+  /** If true, pass last user message as final CLI arg (e.g. Cursor CLI -p --output-format stream-json). */
+  promptAsArg?: boolean;
   timeoutMs: number;
   authProfiles: string[];
   fallbackModels: string[];

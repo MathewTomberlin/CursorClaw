@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 
@@ -450,6 +451,7 @@ async function main(): Promise<void> {
     scheduleFlakyScan();
     idleScheduler.start();
   }
+  const uiDist = join(workspaceDir, "ui", "dist");
   const gateway = buildGateway({
     config,
     runtime,
@@ -464,6 +466,7 @@ async function main(): Promise<void> {
     approvalWorkflow,
     capabilityStore,
     lifecycleStream,
+    ...(existsSync(uiDist) ? { uiDistPath: uiDist } : {}),
     onActivity: () => {
       idleScheduler.noteActivity();
       ensureReflectionJobQueued?.();
@@ -582,6 +585,17 @@ async function main(): Promise<void> {
       };
     }
   });
+
+  if (existsSync(uiDist)) {
+    const fastifyStatic = (await import("@fastify/static")).default;
+    await gateway.register(fastifyStatic, { root: uiDist });
+    gateway.setNotFoundHandler((request, reply) => {
+      if (request.method === "GET" && !request.url.includes(".")) {
+        return reply.sendFile("index.html", uiDist);
+      }
+      return reply.code(404).send({ error: "Not found" });
+    });
+  }
 
   const port = Number.parseInt(process.env.PORT ?? "8787", 10);
   await gateway.listen({
