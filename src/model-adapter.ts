@@ -14,7 +14,7 @@ import type {
 } from "./types.js";
 
 export interface CursorAgentAdapterModelConfig {
-  provider: "cursor-agent-cli" | "fallback-model";
+  provider: "cursor-agent-cli" | "fallback-model" | "ollama";
   command?: string;
   args?: string[];
   /**
@@ -112,7 +112,15 @@ export class CursorAgentModelAdapter implements ModelAdapter {
         session.authProfile = profile;
         this.turnIdToProvider.set(options.turnId, provider);
         try {
-          yield* provider.sendTurn(session, modelConfig, messages, tools, options);
+          for await (const event of provider.sendTurn(
+            session,
+            modelConfig,
+            messages,
+            tools,
+            options
+          )) {
+            yield event;
+          }
           return;
         } catch (error) {
           lastError = error;

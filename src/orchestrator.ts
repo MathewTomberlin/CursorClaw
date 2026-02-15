@@ -38,7 +38,6 @@ export class AutonomyOrchestrator {
   private latestIntegrityFindings: IntegrityFinding[] = [];
   private pendingProactiveIntents = 0;
   private firstHeartbeatNotYetScheduled = true;
-  private firstHeartbeatRunDone = false;
 
   constructor(private readonly options: AutonomyOrchestratorOptions) {}
 
@@ -151,15 +150,12 @@ export class AutonomyOrchestrator {
     if (!this.running) {
       return;
     }
-    const bypassBudget =
-      this.options.firstHeartbeatDelayMs != null && this.options.firstHeartbeatDelayMs > 0 && !this.firstHeartbeatRunDone;
     const result = await this.options.heartbeat.runOnce({
       channelId: this.options.heartbeatChannelId,
       budget: this.options.budget,
       turn: () => this.options.onHeartbeatTurn(this.options.heartbeatChannelId),
-      bypassBudget
+      bypassBudget: true
     });
-    this.firstHeartbeatRunDone = true;
     this.lastHeartbeatResult = result;
     await this.persistBudgetState();
   }

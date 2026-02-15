@@ -5,6 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { describe, expect, it, afterEach, vi } from "vitest";
 
 import { CursorAgentModelAdapter } from "../src/model-adapter.js";
+import { CursorAgentCliProvider } from "../src/providers/cursor-agent-cli.js";
 import type { ToolDefinition } from "../src/types.js";
 
 const simpleTool: ToolDefinition = {
@@ -268,19 +269,6 @@ describe("CursorAgentModelAdapter", () => {
   it("forces SIGKILL in cancel when process is still running after SIGTERM", async () => {
     vi.useFakeTimers();
     try {
-      const adapter = new CursorAgentModelAdapter({
-        defaultModel: "fallback-model-a",
-        models: {
-          "fallback-model-a": {
-            provider: "fallback-model",
-            timeoutMs: 5_000,
-            authProfiles: ["default"],
-            fallbackModels: [],
-            enabled: true
-          }
-        }
-      });
-
       const killCalls: Array<number | NodeJS.Signals> = [];
       const fakeChild = {
         killed: false,
@@ -296,12 +284,14 @@ describe("CursorAgentModelAdapter", () => {
         }
       } as unknown as import("node:child_process").ChildProcessWithoutNullStreams;
 
-      const processMap = (adapter as unknown as {
-        processes: Map<string, import("node:child_process").ChildProcessWithoutNullStreams>;
-      }).processes;
-      processMap.set("cancel-turn", fakeChild);
+      const provider = new CursorAgentCliProvider();
+      (provider as unknown as { processes: Map<string, unknown> }).processes = new Map();
+      (provider as unknown as { processes: Map<string, unknown> }).processes.set(
+        "cancel-turn",
+        fakeChild
+      );
 
-      await adapter.cancel("cancel-turn");
+      await provider.cancel("cancel-turn");
       await vi.advanceTimersByTimeAsync(300);
 
       expect(killCalls).toEqual(["SIGTERM", "SIGKILL"]);
@@ -313,19 +303,6 @@ describe("CursorAgentModelAdapter", () => {
   it("forces SIGKILL in stageTerminate when process has not exited", async () => {
     vi.useFakeTimers();
     try {
-      const adapter = new CursorAgentModelAdapter({
-        defaultModel: "fallback-model-a",
-        models: {
-          "fallback-model-a": {
-            provider: "fallback-model",
-            timeoutMs: 5_000,
-            authProfiles: ["default"],
-            fallbackModels: [],
-            enabled: true
-          }
-        }
-      });
-
       const killCalls: Array<number | NodeJS.Signals> = [];
       const fakeChild = {
         killed: false,
@@ -341,7 +318,8 @@ describe("CursorAgentModelAdapter", () => {
         }
       } as unknown as import("node:child_process").ChildProcessWithoutNullStreams;
 
-      (adapter as unknown as {
+      const provider = new CursorAgentCliProvider();
+      (provider as unknown as {
         stageTerminate: (
           child: import("node:child_process").ChildProcessWithoutNullStreams,
           turnId: string
@@ -356,26 +334,84 @@ describe("CursorAgentModelAdapter", () => {
   });
 
   it("bounds adapter redacted logs to avoid unbounded memory growth", async () => {
-    const adapter = new CursorAgentModelAdapter({
-      defaultModel: "fallback-model-a",
-      models: {
-        "fallback-model-a": {
-          provider: "fallback-model",
-          timeoutMs: 5_000,
-          authProfiles: ["default"],
-          fallbackModels: [],
-          enabled: true
-        }
-      }
-    });
-    const internal = adapter as unknown as {
-      pushEventLog: (entry: string) => void;
-    };
+    const provider = new CursorAgentCliProvider();
+    const internal = provider as unknown as { pushEventLog: (entry: string) => void };
     for (let idx = 0; idx < 6_000; idx += 1) {
       internal.pushEventLog(`entry-${idx}`);
     }
-    const logs = adapter.getRedactedLogs();
+    const logs = provider.getRedactedLogs();
     expect(logs.length).toBe(5_000);
     expect(logs[0]).toBe("entry-1000");
+  });
+
+  it("ollama provider streams events when fetch returns Ollama-format NDJSON", async () => {
+    const ollamaChunks = [
+      JSON.stringify({ message: { content: "Hello " }, done: false }) + "\n",
+      JSON.stringify({ message: { content: "from Ollama" }, done: false }) + "\n",
+      JSON.stringify({ done: true, eval_count: 12 }) + "\n"
+    ];
+    const stream = new ReadableStream({
+      start(controller) {
+        for (const chunk of ollamaChunks) {
+          controller.enqueue(new TextEncoder().encode(chunk));
+        }
+        controller.close();
+      }
+    });
+
+    const fetchStub = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: stream,
+      text: () => Promise.resolve("")
+    });
+    vi.stubGlobal("fetch", fetchStub);
+
+    try {
+      const adapter = new CursorAgentModelAdapter({
+        defaultModel: "local",
+        models: {
+          local: {
+            provider: "ollama",
+            ollamaModelName: "test-model",
+            baseURL: "http://localhost:11434",
+            timeoutMs: 10_000,
+            authProfiles: ["default"],
+            fallbackModels: [],
+            enabled: true
+          }
+        }
+      });
+      const session = await adapter.createSession({
+        sessionId: "s1",
+        channelId: "c1",
+        channelKind: "dm"
+      });
+      const events: Array<{ type: string; data?: unknown }> = [];
+      for await (const event of adapter.sendTurn(
+        session,
+        [{ role: "user", content: "hi" }],
+        [simpleTool],
+        { turnId: "ollama-turn-1" }
+      )) {
+        events.push({ type: event.type, data: event.data });
+      }
+      expect(events.map((e) => e.type)).toEqual(["assistant_delta", "assistant_delta", "usage", "done"]);
+      const deltas = events.filter((e) => e.type === "assistant_delta").map((e) => (e.data as { content?: string })?.content);
+      expect(deltas).toEqual(["Hello ", "from Ollama"]);
+      expect(fetchStub).toHaveBeenCalledWith(
+        "http://localhost:11434/api/chat",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            model: "test-model",
+            messages: [{ role: "user", content: "hi" }],
+            stream: true
+          })
+        })
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

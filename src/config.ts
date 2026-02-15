@@ -36,7 +36,7 @@ export interface CompactionConfig {
 }
 
 export interface ModelProviderConfig {
-  provider: "cursor-agent-cli" | "fallback-model";
+  provider: "cursor-agent-cli" | "fallback-model" | "ollama";
   command?: string;
   args?: string[];
   /** If true, pass last user message as final CLI arg (e.g. Cursor CLI -p --output-format stream-json). */
@@ -45,6 +45,12 @@ export interface ModelProviderConfig {
   authProfiles: string[];
   fallbackModels: string[];
   enabled: boolean;
+  /** Reference into credential store for API key (never plaintext in config). Used by OpenAI-compatible etc. */
+  apiKeyRef?: string;
+  /** Provider-specific: Ollama model name (e.g. llama3.2, granite3.2). */
+  ollamaModelName?: string;
+  /** Provider-specific: base URL for OpenAI-compatible or Ollama (e.g. http://localhost:11434). */
+  baseURL?: string;
 }
 
 export interface ToolsConfig {

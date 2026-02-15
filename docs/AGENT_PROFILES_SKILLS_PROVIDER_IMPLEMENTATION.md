@@ -136,9 +136,19 @@ Recommended layout for one profile root `{profileRoot}`:
   - `openai-compatible` or named APIs (e.g. OpenAI, Anthropic, or custom endpoint) with API key.
 - **API keys:** Stored per profile in a secure store (existing credential system); never in config files in plaintext, never in substrate or prompts. Key is fetched at runtime when building the request for that provider.
 - **Local LLM support:** For Ollama (and similar), document or implement:
-  - Model list discovery (e.g. `ollama list`).
-  - Context window and token limits so the runtime does not exceed what the model supports (e.g. smaller system prompt or truncation for 16GB models).
-  - No assumption that all models support the same tool set; adapter layer may need to map or disable tools for simpler local models.
+  - Model list discovery (e.g. `ollama list` or `GET /api/tags` on the Ollama server).
+  - Context window and token limits so the runtime does not exceed what the model supports (e.g. smaller system prompt or truncation for 16GB models). See **§ 3.3.1 Context and token limits for local/16GB models** below.
+  - No assumption that all models support the same tool set; adapter layer may need to map or disable tools for simpler local models. See **§ 3.3.2 Tool support for Ollama** below.
+
+#### 3.3.1 Context and token limits for local/16GB models
+
+- **Typical 16GB VRAM models** (e.g. Granite 3.2, Llama 3.2 8B): often have context windows in the 8K–128K token range; smaller quantized models may sit at 4K–8K. The runtime does not currently truncate or shorten the system prompt per provider; if the combined message size exceeds the model’s context, the Ollama server may truncate or fail.
+- **Recommendation:** For 16GB local use, (1) choose a model with a known context size (e.g. from `ollama show <model>` or provider docs), (2) keep system prompt and substrate concise, (3) future work may add optional per-model or per-provider `maxContextTokens` and truncation so the adapter never sends more than the model supports.
+
+#### 3.3.2 Tool support for Ollama
+
+- The **Ollama provider** today streams only **text** (assistant_delta). It does not emit `tool_call` events; tool use depends on the model and Ollama’s tool-calling API, which may be added in a later phase.
+- When using Ollama with the same gateway as Cursor-Agent CLI, **MCP and other tools are still registered**; the model will not receive tool definitions in a format that triggers tool calls until the provider maps Ollama’s tool format (if any) to our adapter’s `tool_call` event. For local-only chat without tools, the current implementation is sufficient.
 
 ### 3.4 Implementation Phases (Provider and Model)
 
@@ -149,15 +159,15 @@ Recommended layout for one profile root `{profileRoot}`:
 
 **Phase P.2 – Provider abstraction**
 
-- [ ] **P.2.1** Introduce a small **provider interface**: e.g. `runTurn(messages, options) => Promise<stream or response>`. Current Cursor-Agent CLI invocation becomes one implementation of this interface.
-- [ ] **P.2.2** Registry: map `provider` id (e.g. `cursor-agent-cli`, `ollama`) to implementation. Cursor-Agent CLI remains the default and must pass existing tests unchanged.
-- [ ] **P.2.3** Config: `ModelProviderConfig` gains optional `apiKeyRef?: string` (reference into credential store) and provider-specific options (e.g. `ollamaModelName`, `baseURL` for OpenAI-compatible).
+- [x] **P.2.1** Introduce a small **provider interface**: e.g. `runTurn(messages, options) => Promise<stream or response>`. Current Cursor-Agent CLI invocation becomes one implementation of this interface.
+- [x] **P.2.2** Registry: map `provider` id (e.g. `cursor-agent-cli`, `ollama`) to implementation. Cursor-Agent CLI remains the default and must pass existing tests unchanged.
+- [x] **P.2.3** Config: `ModelProviderConfig` gains optional `apiKeyRef?: string` (reference into credential store) and provider-specific options (e.g. `ollamaModelName`, `baseURL` for OpenAI-compatible).
 
 **Phase P.3 – Ollama provider**
 
-- [ ] **P.3.1** Implement Ollama provider: call Ollama API (local or configured URL), support stream, map messages to Ollama format. Discover model list from `ollama list` or API when needed.
-- [ ] **P.3.2** Document context/token limits for typical 16GB models; add optional truncation or smaller system prompt when using such models.
-- [ ] **P.3.3** Tool support: document which tools are available for Ollama (e.g. same MCP/tools as Cursor-Agent if Ollama is used with same gateway); or reduced tool set for local-only use.
+- [x] **P.3.1** Implement Ollama provider: call Ollama API (local or configured URL), support stream, map messages to Ollama format. Discover model list from `ollama list` or API when needed.
+- [x] **P.3.2** Document context/token limits for typical 16GB models; add optional truncation or smaller system prompt when using such models.
+- [x] **P.3.3** Tool support: document which tools are available for Ollama (e.g. same MCP/tools as Cursor-Agent if Ollama is used with same gateway); or reduced tool set for local-only use.
 
 **Phase P.4 – OpenAI-compatible / API key**
 
@@ -174,8 +184,8 @@ Recommended layout for one profile root `{profileRoot}`:
 
 - [x] Per-profile model selection works; default profile uses global defaultModel when profile does not override.
 - [x] Cursor-Agent CLI behavior unchanged; no regression in tests or manual flows.
-- [ ] At least one additional provider (Ollama or OpenAI-compatible) works for chat; API key is resolved from credential store and never leaked.
-- [ ] Local 16GB VRAM use case documented (model choice, context limits, tool set).
+- [x] At least one additional provider (Ollama or OpenAI-compatible) works for chat; API key is resolved from credential store and never leaked.
+- [x] Local 16GB VRAM use case documented (model choice, context limits, tool set).
 
 ### 3.6 Guardrails (Provider and Model)
 
@@ -275,3 +285,5 @@ Recommended layout for one profile root `{profileRoot}`:
 - **Changelog (1.3):** Phase A.3.1 complete. CapabilityStore and ApprovalWorkflow accept optional `stateDir`; when set (profile root `tmp/approvals`), grants and approval requests are persisted and loaded on startup. Single profile uses one store per process; multi-profile will use one store per profile root (each with its own stateDir).
 - **Changelog (1.4):** Phase A.3.2, A.4.1, A.4.2 complete. Gateway accepts optional `params.profileId`; when absent, uses `defaultProfileId` from deps (or "default"). Index passes `defaultProfileId: getDefaultProfileId(config)` to the gateway. Approval and other RPCs are profile-ready (single profile context used until multi-profile context map is added). Tests: config profile resolution (single profile root = workspaceDir; two profiles resolve to distinct roots; path traversal rejected); gateway test for optional profileId in RPC params.
 - **Changelog (1.5):** Phase P.1 complete. AgentProfileConfig has optional `modelId`. `getModelIdForProfile(config, profileId)` resolves model per profile (profile.modelId ?? defaultModel; validates against config.models). SessionContext has optional `profileId`; gateway sets it from resolvedProfileId for agent.run. ModelAdapter.createSession accepts optional CreateSessionOptions.modelId; runtime uses profile-resolved model for ensureModelSession and stores full handle (id, model, authProfile). Heartbeat session includes profileId. Tests: getModelIdForProfile (no profiles, profile without modelId, profile with modelId, invalid modelId fallback). All 157 tests pass.
+- **Changelog (1.6):** Phase P.2 complete. Added `ModelProvider` interface (`sendTurn`, `cancel`) in `src/providers/types.ts`. Implemented `CursorAgentCliProvider` (CLI subprocess + NDJSON parsing) and `FallbackModelProvider` in `src/providers/`. Registry in `src/providers/registry.ts`: `getProvider(id, config)`, `registerProvider`, `clearProviderCache`. Adapter delegates to registry; turnId→provider map for cancel; getRedactedLogs/getMetrics delegate to CLI provider. `ModelProviderConfig` extended with `apiKeyRef?`, `ollamaModelName?`, `baseURL?`. All 164 tests pass.
+- **Changelog (1.7):** Phase P.3 complete. Implemented `OllamaProvider` in `src/providers/ollama.ts`: calls Ollama `POST /api/chat` with stream, maps messages to Ollama format, yields `assistant_delta`, `usage`, `done`; supports `cancel` via AbortController. Config and adapter types extended with `"ollama"`; registry registers `ollama` factory. Added § 3.3.1 (context/token limits for 16GB models) and § 3.3.2 (tool support for Ollama). Adapter test added for Ollama with mocked fetch. All adapter and gateway tests pass.

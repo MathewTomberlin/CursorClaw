@@ -322,6 +322,8 @@ Model object fields:
 
 ## 4.15 `autonomyBudget`
 
+Limits how many proactive/autonomy actions run per channel per hour and per day. **Scheduled heartbeats are not limited** (they always run on their interval). Other proactive flows (e.g. queued intents) respect this budget.
+
 Defaults:
 
 ```json
@@ -331,7 +333,9 @@ Defaults:
 }
 ```
 
-Optional:
+Optional **quiet hours** (UTC): when set, the budget denies runs whose hour (UTC) falls inside the window. To **disable quiet hours**, omit `quietHours` from your config (or do not set `autonomyBudget.quietHours`).
+
+Example (22:00–06:00 UTC = no runs during that window):
 
 ```json
 {
@@ -341,6 +345,8 @@ Optional:
   }
 }
 ```
+
+If you see "heartbeat skipped: budget limit or quiet hours", it was from an older build; in current code, scheduled heartbeats bypass the budget and are never skipped for limit or quiet hours.
 
 ## 4.16 `substrate`
 
