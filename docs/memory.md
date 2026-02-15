@@ -51,9 +51,8 @@ Relationship and preference context is **not** stored in a dedicated structured 
 - **USER.md** (substrate): Who the human is, what to call them, timezone, pronouns, notes. Manually edited; loaded every turn in the main session.
 - **MEMORY.md and memory/YYYY-MM-DD.md**: Turn summaries, notes, and any agent- or user-initiated “remember this” style content. For example, “Operator prefers X” in a turn summary or a memory record with category `note` or `user-preference` (if such categories are used) persists for future sessions.
 
-The agent learns about the user only via manual USER.md edits and whatever gets appended to memory (e.g. preferences mentioned in turn summaries). There is no automatic dossier-building; scope is limited to what the user or agent explicitly records. Optional “remember this about me” flows (tool or prompt guidance) would write MemoryRecords; existing MemoryStore.append suffices for that.
+The agent learns about the user only via manual USER.md edits and whatever gets appended to memory (e.g. preferences mentioned in turn summaries). There is no automatic dossier-building; scope is limited to what the user or agent explicitly records. **Remember-this flow (RF.2):** The main session has a **remember_this** tool; when the user says "remember this" or "remember that I prefer X", the agent can call it to append a MemoryRecord (stored in MEMORY.md and daily file; recall via recall_memory when embeddings are enabled).
 
 ## 7. Possible future improvements
 
 - **Summarization / rolling window**: Keep MEMORY.md bounded (e.g. summarization or time-based window) instead of unbounded append.
-- **Explicit remember flow**: Tool or prompt guidance for writing specific memories (retrieval is supported via recall_memory when vector index is enabled).

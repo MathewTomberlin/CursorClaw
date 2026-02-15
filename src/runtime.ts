@@ -442,7 +442,8 @@ export class AgentRuntime {
                 decisionLogs: this.decisionLogs,
                 provenance: turnProvenance,
                 ...(profileRootForTool !== undefined && profileRootForTool !== "" ? { profileRoot: profileRootForTool } : {}),
-                ...(request.session.channelKind !== undefined ? { channelKind: request.session.channelKind } : {})
+                ...(request.session.channelKind !== undefined ? { channelKind: request.session.channelKind } : {}),
+                ...(request.session.sessionId !== undefined ? { sessionId: request.session.sessionId } : {})
               };
               const output = await this.options.toolRouter.execute(call, toolContext);
               const safeCall = this.scrubUnknown(call, scrubScopeId) as ToolCall;

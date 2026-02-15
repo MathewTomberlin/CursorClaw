@@ -67,6 +67,7 @@ import {
   createMcpListResourcesTool,
   createMcpReadResourceTool,
   createRecallMemoryTool,
+  createRememberThisTool,
   createWebFetchTool,
   createWebSearchTool
 } from "./tools.js";
@@ -364,6 +365,11 @@ async function main(): Promise<void> {
       })
     );
   }
+  toolRouter.register(
+    createRememberThisTool({
+      appendRecord: (record) => memory.append(record)
+    })
+  );
 
   const confidenceModel = new ConfidenceModel();
   const deepScanService = new DeepScanService({

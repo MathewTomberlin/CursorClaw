@@ -148,6 +148,8 @@ export interface ToolExecuteContext {
   profileRoot?: string;
   /** Channel kind (e.g. "web" for main session). Used to restrict tools to main session when required. */
   channelKind?: string;
+  /** Session id for the current turn (e.g. "main"). Used by profile-scoped tools e.g. remember_this. */
+  sessionId?: string;
 }
 
 export interface ToolDefinition {

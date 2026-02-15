@@ -20,6 +20,7 @@ import type {
   ToolDefinition,
   ToolExecuteContext
 } from "./types.js";
+import type { SensitivityLabel } from "./types.js";
 
 const WEB_FETCH_MAX_REDIRECTS = 5;
 const WEB_FETCH_MAX_BODY_BYTES = 20_000;
@@ -728,6 +729,71 @@ export function createRecallMemoryTool(args: {
       }
       const results = await args.getRecallResults(ctx.profileRoot, parsed.query, parsed.top_k ?? 5);
       return { results };
+    }
+  };
+}
+
+const SENSITIVITY_LABELS: SensitivityLabel[] = ["public", "private-user", "secret", "operational"];
+
+/** Main-session-only tool: append a "remember this" entry to long-term memory. Requires profileRoot, channelKind, and sessionId in context. */
+export function createRememberThisTool(args: {
+  appendRecord: (record: {
+    sessionId: string;
+    category: string;
+    text: string;
+    provenance: { sourceChannel: string; confidence: number; timestamp: string; sensitivity: SensitivityLabel };
+  }) => Promise<{ id: string }>;
+}): ToolDefinition {
+  return {
+    name: "remember_this",
+    description:
+      "Store something in long-term memory so it can be recalled later. Use when the user says 'remember this', 'remember that', or asks you to keep a fact, preference, or decision. Only available in the main web session.",
+    schema: {
+      type: "object",
+      properties: {
+        text: {
+          type: "string",
+          minLength: 1,
+          description: "What to remember (concise fact, preference, or decision)"
+        },
+        category: {
+          type: "string",
+          description: "Optional category (default: note). E.g. note, user-preference, decision",
+          default: "note"
+        },
+        sensitivity: {
+          type: "string",
+          enum: SENSITIVITY_LABELS,
+          description: "Optional sensitivity (default: private-user). Use private-user for personal preferences.",
+          default: "private-user"
+        }
+      },
+      required: ["text"],
+      additionalProperties: false
+    },
+    riskLevel: "low",
+    execute: async (rawArgs: unknown, ctx?: ToolExecuteContext) => {
+      const parsed = rawArgs as { text: string; category?: string; sensitivity?: string };
+      if (ctx?.channelKind !== "web" || !ctx?.profileRoot || !ctx?.sessionId) {
+        return { error: "remember_this is only available in the main session." };
+      }
+      const category = (parsed.category ?? "note").trim() || "note";
+      const sensitivity = SENSITIVITY_LABELS.includes((parsed.sensitivity ?? "private-user") as SensitivityLabel)
+        ? (parsed.sensitivity as SensitivityLabel)
+        : "private-user";
+      const record = {
+        sessionId: ctx.sessionId,
+        category,
+        text: parsed.text.trim(),
+        provenance: {
+          sourceChannel: "operator",
+          confidence: 1,
+          timestamp: new Date().toISOString(),
+          sensitivity
+        }
+      };
+      const { id } = await args.appendRecord(record);
+      return { ok: true, id };
     }
   };
 }
