@@ -45,7 +45,8 @@ Dev-mode detection:
   "models": {},
   "defaultModel": "cursor-auto",
   "autonomyBudget": {},
-  "substrate": {}
+  "substrate": {},
+  "continuity": {}
 }
 ```
 
@@ -387,6 +388,39 @@ Path defaults (workspace root): `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `BIRTH.md
 - When **HEARTBEAT.md** is missing, empty, or comments-only, set `heartbeat.skipWhenEmpty: true` to skip issuing a heartbeat API call for that cycle; see `heartbeat` section.
 
 **BOOT.md (future):** Short startup instructions; when implemented, would run at process/gateway startup (e.g. send welcome, run check). Not injected into the chat system prompt. Optional memory layer (MEMORY.md, memory/YYYY-MM-DD.md) for session-start continuity is documented as future work in the implementation spec.
+
+## 4.17 `continuity`
+
+Optional. Controls BOOT.md at startup, session-start memory injection, and optional memory-embedding index.
+
+Defaults:
+
+```json
+{
+  "bootEnabled": true,
+  "sessionMemoryEnabled": true,
+  "sessionMemoryCap": 32000,
+  "memoryEmbeddingsEnabled": false,
+  "memoryEmbeddingsMaxRecords": 3000
+}
+```
+
+- **bootEnabled:** When true (default), run BOOT.md once at process startup when the file exists at profile root.
+- **sessionMemoryEnabled:** When true (default), inject MEMORY.md and memory/today+yesterday into the main-session system prompt at turn start. See docs/memory.md.
+- **sessionMemoryCap:** Max characters for that injection (default 32000). Only used when sessionMemoryEnabled is true.
+- **memoryEmbeddingsEnabled:** When true, maintain a memory-embedding index and enable the recall_memory tool for the main session (default false).
+- **memoryEmbeddingsMaxRecords:** Max records in the embedding index (default 3000). Only used when memoryEmbeddingsEnabled is true.
+
+## Token and context limits
+
+The runtime limits prompt size in several places. There is **no per-model or per-provider context token cap** yet; providers may truncate or fail when the prompt exceeds the model’s context window.
+
+- **session.maxMessagesPerTurn** (default 10_000): Max messages accepted per request; the runtime compacts long threads to a smaller window. Users are not blocked from sending more; compaction retains a recent window and injects a summary.
+- **session.maxMessageChars** (default 8_000): Per-message character limit. Used by the runtime to cap individual system messages and to derive the total system prompt budget.
+- **continuity.sessionMemoryCap** (default 32_000): Cap on session-start memory injection (MEMORY.md + memory/today+yesterday) in characters. See § 4.17 and docs/memory.md.
+- **Runtime system prompt budget:** The runtime applies `applySystemPromptBudget`: each system message is capped at `session.maxMessageChars`, and the combined system messages are capped at about 1.5× that value (total system budget). Excess is truncated (conversation history and optional context are trimmed first; core system blocks are preserved in the current implementation).
+
+So critical system blocks (AGENTS, SOUL, USER, memory summary) are preserved up to the per-message and total budget; there is no optional per-model `maxContextTokens` yet to pre-truncate before sending to small-context models (e.g. 8K local models). Future work may add per-model caps and priority-aware truncation.
 
 ## 5) Environment variables used at runtime
 
