@@ -16,7 +16,7 @@ When **BOOT.md** exists at the profile root and `continuity.bootEnabled` is not 
 
 ## 4. Decision journal
 
-The decision journal is persisted to file. The **last 5 entries** are replayed in the system prompt with the instruction to maintain rationale continuity unless new runtime evidence contradicts prior decisions. There is no configurable replay count or “since timestamp” replay yet; that is optional future work.
+The decision journal is persisted to file. Recent entries are replayed in the system prompt with the instruction to maintain rationale continuity unless new runtime evidence contradicts prior decisions. The number of recent entries replayed is configurable via **`continuity.decisionJournalReplayCount`** (default 5, clamped 1–100). "Since last session" or time-based replay is optional future work.
 
 ## 5. Run/session continuity after restart
 
