@@ -935,13 +935,14 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         if (!definition || typeof definition !== "object") {
           throw new RpcGatewayError(400, "BAD_REQUEST", "definition (object) is required");
         }
+        const def = definition as Record<string, unknown>;
         const { analyzeSkillSafety } = await import("./skills/safety.js");
         const safety = analyzeSkillSafety(
           {
-            description: String(definition.description ?? ""),
-            install: String(definition.install ?? ""),
-            credentials: String(definition.credentials ?? ""),
-            usage: String(definition.usage ?? "")
+            description: String(def.description ?? ""),
+            install: String(def.install ?? ""),
+            credentials: String(def.credentials ?? ""),
+            usage: String(def.usage ?? "")
           },
           sourceUrl
         );
