@@ -223,6 +223,7 @@ describe("autonomy orchestrator integration", () => {
       }
     });
 
+    vi.useFakeTimers();
     let scanCount = 0;
     const orchestrator = new AutonomyOrchestrator({
       cronService: cron,
