@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { getDefaultProfileId, getModelIdForProfile, type CursorClawConfig } from "./config.js";
+import { applyMaxContextTokens } from "./max-context-tokens.js";
 import type { DecisionJournal } from "./decision-journal.js";
 import type { MemoryStore } from "./memory.js";
 import type { CursorAgentModelAdapter } from "./model-adapter.js";
@@ -182,6 +183,10 @@ export interface AgentRuntimeOptions {
   getProfileRoot?: (profileId: string) => string | undefined;
   /** When set, used for main session only to load MEMORY.md + memory/today+yesterday and inject into system prompt. */
   getSessionMemoryContext?: (profileRoot: string) => Promise<string | undefined>;
+  /** When set, used for main session only to load recent topics (conversation starters) for prompt injection. */
+  getRecentTopicsContext?: (profileRoot: string) => Promise<string | undefined>;
+  /** When set, called for main session when the first user message in a session is processed; records topic for recent-topics. */
+  recordRecentTopic?: (profileRoot: string, sessionId: string, topic: string) => Promise<void>;
   /** When set, called for main session; if it returns a string, injected once as a system notice (e.g. "Previous run was interrupted by process restart"). */
   getInterruptedRunNotice?: () => Promise<string | undefined>;
 }
@@ -389,7 +394,13 @@ export class AgentRuntime {
             deepScanSummary
           );
           pluginDiagnosticCount = promptBuild.pluginDiagnosticCount;
-          const promptMessages = promptBuild.messages;
+          let promptMessages = promptBuild.messages;
+          const profileId = request.session.profileId ?? getDefaultProfileId(this.options.config);
+          const modelId = getModelIdForProfile(this.options.config, profileId);
+          const modelConfig = this.options.config.models[modelId];
+          if (modelConfig?.maxContextTokens !== undefined && modelConfig.maxContextTokens > 0) {
+            promptMessages = applyMaxContextTokens(promptMessages, modelConfig.maxContextTokens);
+          }
           const lastUserContent =
             request.messages.filter((m) => m.role === "user").pop()?.content ?? "";
           const inboundRisk = scoreInboundRisk({
@@ -399,7 +410,6 @@ export class AgentRuntime {
           });
           const turnProvenance = inboundRisk >= 70 ? ("untrusted" as const) : ("operator" as const);
 
-          const profileId = request.session.profileId ?? getDefaultProfileId(this.options.config);
           const profileRoot = this.options.getProfileRoot?.(profileId);
 
           const sendOptions: SendTurnOptions = {
@@ -738,6 +748,34 @@ export class AgentRuntime {
             role: "system",
             content: this.scrubText(`Session memory (for continuity):\n\n${memoryContext.trim()}`, scopeId)
           });
+        }
+      }
+    }
+    if (isMainSession && this.options.getRecentTopicsContext && this.options.getProfileRoot) {
+      const profileId = request.session.profileId ?? getDefaultProfileId(this.options.config);
+      const profileRoot = this.options.getProfileRoot(profileId);
+      if (profileRoot) {
+        const recentTopics = await this.options.getRecentTopicsContext(profileRoot);
+        if (recentTopics?.trim()) {
+          systemMessages.push({
+            role: "system",
+            content: this.scrubText(`Recent topics (with this user):\n\n${recentTopics.trim()}`, scopeId)
+          });
+        }
+      }
+    }
+    if (isMainSession && this.options.recordRecentTopic && this.options.getProfileRoot) {
+      const userMessages = request.messages.filter((m) => m.role === "user");
+      const firstUser = userMessages[0];
+      if (firstUser && userMessages.length === 1) {
+        const profileId = request.session.profileId ?? getDefaultProfileId(this.options.config);
+        const profileRoot = this.options.getProfileRoot(profileId);
+        if (profileRoot) {
+          await this.options.recordRecentTopic(
+            profileRoot,
+            request.session.sessionId,
+            firstUser.content
+          );
         }
       }
     }

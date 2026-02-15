@@ -59,6 +59,8 @@ export interface ModelProviderConfig {
   baseURL?: string;
   /** Provider-specific: OpenAI-compatible model id (e.g. gpt-4o-mini, gpt-4o). */
   openaiModelId?: string;
+  /** Optional per-model context token cap. When set, runtime trims oldest messages (system first) so estimated tokens ≤ cap. Best-effort char-based estimate (~4 chars/token). */
+  maxContextTokens?: number;
 }
 
 export interface ToolsConfig {
@@ -179,6 +181,12 @@ export interface ContinuityConfig {
   memoryEmbeddingsEnabled?: boolean;
   /** Max memory records to keep in the embedding index (default 3000). Only used when memoryEmbeddingsEnabled is true. */
   memoryEmbeddingsMaxRecords?: number;
+  /** When true, inject a short "Recent topics (with this user)" block into main-session system prompt (default false). */
+  includeRecentTopics?: boolean;
+  /** When set, heartbeat checklist warns when memory (MEMORY.md + daily) is at or above this many chars (default: 90% of sessionMemoryCap). Enables dumb-zone awareness. */
+  memorySizeWarnChars?: number;
+  /** When set, heartbeat checklist warns when total substrate file size is at or above this many chars (default 60000). */
+  substrateSizeWarnChars?: number;
 }
 
 export interface CursorClawConfig {
@@ -360,7 +368,9 @@ export const DEFAULT_CONFIG: CursorClawConfig = {
     sessionMemoryEnabled: true,
     sessionMemoryCap: 32_000,
     memoryEmbeddingsEnabled: false,
-    memoryEmbeddingsMaxRecords: 3_000
+    memoryEmbeddingsMaxRecords: 3_000,
+    memorySizeWarnChars: 28_800,
+    substrateSizeWarnChars: 60_000
   }
 };
 
