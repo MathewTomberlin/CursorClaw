@@ -22,6 +22,7 @@ describe("substrate loader", () => {
     const dir = await mkdtemp(join(tmpdir(), "substrate-empty-"));
     tempDirs.push(dir);
     const content = await loadSubstrate(dir);
+    expect(content.agents).toBeUndefined();
     expect(content.identity).toBeUndefined();
     expect(content.soul).toBeUndefined();
     expect(content.birth).toBeUndefined();
@@ -33,9 +34,11 @@ describe("substrate loader", () => {
   it("reads present files and trims content", async () => {
     const dir = await mkdtemp(join(tmpdir(), "substrate-present-"));
     tempDirs.push(dir);
+    await writeFile(join(dir, "AGENTS.md"), "Session: read SOUL and USER.\n", "utf8");
     await writeFile(join(dir, "IDENTITY.md"), "  I am TestBot.\n  ", "utf8");
     await writeFile(join(dir, "SOUL.md"), "Be helpful and concise.\n", "utf8");
     const content = await loadSubstrate(dir);
+    expect(content.agents).toBe("Session: read SOUL and USER.");
     expect(content.identity).toBe("I am TestBot.");
     expect(content.soul).toBe("Be helpful and concise.");
     expect(content.birth).toBeUndefined();

@@ -89,12 +89,12 @@ Defaults:
   "queueFilePath": null,
   "turnTimeoutMs": 60000,
   "snapshotEveryEvents": 12,
-  "maxMessagesPerTurn": 64,
+  "maxMessagesPerTurn": 10000,
   "maxMessageChars": 8000
 }
 ```
 
-Fields control queueing, turn timeout, snapshot cadence, and message bounds.
+Fields control queueing, turn timeout, snapshot cadence, and message bounds. The runtime compacts long threads (retains a recent window and injects a summary); `maxMessagesPerTurn` is a per-request acceptance limit only—users are not blocked from sending more messages.
 
 ## 4.3 `heartbeat`
 
@@ -344,13 +344,14 @@ Optional:
 
 ## 4.16 `substrate`
 
-Optional. When present, workspace markdown files (Identity, Soul, Birth, etc.) are loaded at startup and injected into the system prompt for every turn, including heartbeat.
+Optional. When present, workspace markdown files (AGENTS, Identity, Soul, Birth, etc.) are loaded at startup and injected into the system prompt for every turn, including heartbeat.
 
-Path defaults (workspace root): `IDENTITY.md`, `SOUL.md`, `BIRTH.md`, `CAPABILITIES.md`, `USER.md`, `TOOLS.md`.
+Path defaults (workspace root): `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `BIRTH.md`, `CAPABILITIES.md`, `USER.md`, `TOOLS.md`.
 
 ```json
 {
   "substrate": {
+    "agentsPath": "AGENTS.md",
     "identityPath": "IDENTITY.md",
     "soulPath": "SOUL.md",
     "birthPath": "BIRTH.md",
@@ -362,13 +363,14 @@ Path defaults (workspace root): `IDENTITY.md`, `SOUL.md`, `BIRTH.md`, `CAPABILIT
 }
 ```
 
-- **Identity and Soul:** When the files exist, their content is prepended to the system prompt (Identity first, then Soul) for every turn, including heartbeat. This gives the agent consistent identity and tone.
+- **AGENTS.md:** Coordinating workspace rules file (OpenClaw-style). Injected **first** in the system prompt so the agent sees session-start ritual (read SOUL, USER, memory), memory system, safety, and heartbeat behavior before Identity/Soul/User. Using the filename `AGENTS.md` allows clients that treat it as a rules file (e.g. Claude Code, Cursor) to use it the same way when editing the workspace.
+- **Identity and Soul:** When the files exist, their content is prepended after AGENTS (Identity, then Soul) for every turn, including heartbeat. This gives the agent consistent identity and tone.
 - **USER.md:** Injected only in main session (web channel). Contains information about the human (name, timezone, preferences). Do not put secrets here; treat as private.
 - **BIRTH (Bootstrap):** Injected only on the first turn per session (e.g. "wake" behavior). Not repeated on later turns.
 - **Capabilities:** When `includeCapabilitiesInPrompt` is `true` and `CAPABILITIES.md` exists, a short summary (up to 500 chars) is appended to the system prompt. Informational only; `CapabilityStore` and approval workflow remain the source of truth for tool execution.
 - If `substrate` is absent, no substrate loading occurs (backward compatible). Substrate loading must not block startup; on loader failure, the process continues with empty substrate.
 
-**Guardrail:** Substrate files are included in the agent prompt. Do not put secrets in IDENTITY.md, SOUL.md, BIRTH.md, CAPABILITIES.md, USER.md, or TOOLS.md.
+**Guardrail:** Substrate files are included in the agent prompt. Do not put secrets in AGENTS.md, IDENTITY.md, SOUL.md, BIRTH.md, CAPABILITIES.md, USER.md, or TOOLS.md.
 
 ### Substrate and heartbeat
 

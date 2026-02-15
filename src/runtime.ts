@@ -666,6 +666,14 @@ export class AgentRuntime {
     const systemMessages: Array<{ role: string; content: string }> = [];
 
     const substrate = this.options.getSubstrate?.() ?? {};
+    // AGENTS.md is the coordinating rules file (session start, memory, safety). Inject first so the agent
+    // sees workspace rules before Identity/Soul/User; matches OpenClaw/Claude Code use of AGENTS.md as rules.
+    if (substrate.agents?.trim()) {
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(`Workspace rules (AGENTS):\n\n${substrate.agents.trim()}`, scopeId)
+      });
+    }
     if (substrate.identity?.trim()) {
       systemMessages.push({
         role: "system",

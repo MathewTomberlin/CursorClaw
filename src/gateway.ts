@@ -300,6 +300,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           deps.config.session.maxMessagesPerTurn,
           deps.config.session.maxMessageChars
         );
+        // Runtime compacts via applyUserMessageFreshness; no user-facing message limit.
         const started = deps.runtime.startTurn({ session, messages });
         if (deps.runStore) {
           await deps.runStore.createPending(started.runId, session.sessionId);
@@ -584,6 +585,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         const pathKeys: Record<string, string> = { ...DEFAULT_SUBSTRATE_PATHS };
         const sub = deps.config.substrate;
         if (sub) {
+          if (sub.agentsPath) pathKeys.agentsPath = sub.agentsPath;
           if (sub.identityPath) pathKeys.identityPath = sub.identityPath;
           if (sub.soulPath) pathKeys.soulPath = sub.soulPath;
           if (sub.birthPath) pathKeys.birthPath = sub.birthPath;
@@ -717,7 +719,11 @@ function parseMessages(
     throw new RpcGatewayError(400, "BAD_REQUEST", "messages must be array");
   }
   if (value.length > maxMessagesPerTurn) {
-    throw new RpcGatewayError(400, "BAD_REQUEST", `too many messages in turn (limit=${maxMessagesPerTurn})`);
+    throw new RpcGatewayError(
+      400,
+      "BAD_REQUEST",
+      `message count exceeds server limit (${maxMessagesPerTurn}); reduce or clear thread`
+    );
   }
   return value.map((entry) => {
     const item = entry as { role?: unknown; content?: unknown };

@@ -16,6 +16,7 @@ export async function loadSubstrate(
   const out: SubstrateContent = {};
 
   const entries: Array<{ key: keyof SubstrateContent; path: string }> = [
+    { key: "agents", path: p.agentsPath },
     { key: "identity", path: p.identityPath },
     { key: "soul", path: p.soulPath },
     { key: "birth", path: p.birthPath },

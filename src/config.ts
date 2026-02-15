@@ -132,8 +132,9 @@ export interface MetricsConfig {
   intervalSeconds?: number;
 }
 
-/** Optional substrate file paths (workspace-relative). Defaults: IDENTITY.md, SOUL.md, BIRTH.md, CAPABILITIES.md, USER.md, TOOLS.md in workspace root. */
+/** Optional substrate file paths (workspace-relative). Defaults: AGENTS.md, IDENTITY.md, SOUL.md, BIRTH.md, CAPABILITIES.md, USER.md, TOOLS.md in workspace root. */
 export interface SubstrateConfig {
+  agentsPath?: string;
   identityPath?: string;
   soulPath?: string;
   birthPath?: string;
@@ -194,7 +195,8 @@ export const DEFAULT_CONFIG: CursorClawConfig = {
     queueBackend: "memory",
     turnTimeoutMs: 60_000,
     snapshotEveryEvents: 12,
-    maxMessagesPerTurn: 64,
+    /** Max messages accepted per request; runtime compacts to a smaller window. Users are never blocked. */
+    maxMessagesPerTurn: 10_000,
     maxMessageChars: 8_000
   },
   heartbeat: {

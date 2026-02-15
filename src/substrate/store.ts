@@ -9,6 +9,7 @@ import { DEFAULT_SUBSTRATE_PATHS, isSubstrateKey, SUBSTRATE_KEYS } from "./types
 
 /** Map substrate key to config path key (e.g. identity -> identityPath). */
 const KEY_TO_PATH_KEY: Record<string, keyof SubstratePaths> = {
+  agents: "agentsPath",
   identity: "identityPath",
   soul: "soulPath",
   birth: "birthPath",

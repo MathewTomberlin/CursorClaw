@@ -147,7 +147,7 @@ Starts an asynchronous runtime turn.
   - `userId?: string`
 - `messages` (required):
   - array of `{ role: string, content: string }`
-  - bounded by `session.maxMessagesPerTurn`
+  - per-request count bounded by `session.maxMessagesPerTurn` (default 10000); runtime compacts long threads so users are not blocked
   - each `content` bounded by `session.maxMessageChars`
 
 Returns:
@@ -432,7 +432,7 @@ Returns substrate content for the UI. If `key` is omitted, returns full `Substra
 
 `params`:
 
-- `key?`: `"identity" | "soul" | "birth" | "capabilities" | "user" | "tools"` (optional)
+- `key?`: `"agents" | "identity" | "soul" | "birth" | "capabilities" | "user" | "tools"` (optional)
 
 Edits take effect on the next agent turn without restart (runtime reads from store each turn).
 
@@ -440,14 +440,14 @@ Edits take effect on the next agent turn without restart (runtime reads from sto
 
 ### 5.18 `substrate.update`
 
-Writes content for one substrate key to the workspace file and updates the in-memory cache (admin, local). Path is resolved from config; must be under workspace root. Only allowed keys: identity, soul, birth, capabilities, user, tools.
+Writes content for one substrate key to the workspace file and updates the in-memory cache (admin, local). Path is resolved from config; must be under workspace root. Only allowed keys: agents, identity, soul, birth, capabilities, user, tools.
 
 `params`:
 
 - `key: string` (required)
 - `content: string` (required)
 
-Returns `{ ok: true }`. On path traversal or invalid key, returns `BAD_REQUEST`. Do not put secrets in substrate files; they are included in the agent prompt.
+Returns `{ ok: true }`. On path traversal or invalid key, returns `BAD_REQUEST`. Do not put secrets in substrate files (including AGENTS.md); they are included in the agent prompt.
 
 ---
 
