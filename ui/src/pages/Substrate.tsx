@@ -156,7 +156,7 @@ export default function Substrate() {
               type="button"
               className="btn"
               onClick={() => handleSave(key)}
-              disabled={saving === key || !dirty}
+              disabled={saving === key || (present && !dirty)}
               style={{ marginTop: "0.25rem" }}
             >
               {saving === key ? "Saving…" : "Save"}

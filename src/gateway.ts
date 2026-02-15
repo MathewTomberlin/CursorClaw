@@ -656,6 +656,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           throw new RpcGatewayError(400, "BAD_REQUEST", "substrate not configured");
         }
         await deps.substrateStore.reload(deps.workspaceDir, deps.config.substrate);
+        await deps.substrateStore.ensureDefaults(deps.workspaceDir, deps.config.substrate);
         result = { ok: true };
       } else if (body.method === "admin.restart") {
         if (!deps.onRestart) {

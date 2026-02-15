@@ -57,4 +57,20 @@ describe("SubstrateStore", () => {
     const onDisk = await readFile(join(dir, "IDENTITY.md"), "utf8");
     expect(onDisk).toBe("New identity.");
   });
+
+  it("ensureDefaults creates missing files with default content", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "substrate-ensure-"));
+    tempDirs.push(dir);
+    const store = new SubstrateStore();
+    await store.reload(dir);
+    expect(store.get()).toEqual({});
+    await store.ensureDefaults(dir, undefined);
+    const content = store.get();
+    expect(content.identity).toBeDefined();
+    expect(content.identity).toContain("IDENTITY.md");
+    expect(content.soul).toBeDefined();
+    const { readFile } = await import("node:fs/promises");
+    const onDisk = await readFile(join(dir, "IDENTITY.md"), "utf8");
+    expect(onDisk.trim()).toBe(content.identity);
+  });
 });

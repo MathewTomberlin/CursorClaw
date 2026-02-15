@@ -2,9 +2,10 @@ import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { SubstrateConfig } from "../config.js";
+import { SUBSTRATE_DEFAULTS } from "./defaults.js";
 import { loadSubstrate } from "./loader.js";
 import type { SubstrateContent, SubstratePaths } from "./types.js";
-import { DEFAULT_SUBSTRATE_PATHS, isSubstrateKey } from "./types.js";
+import { DEFAULT_SUBSTRATE_PATHS, isSubstrateKey, SUBSTRATE_KEYS } from "./types.js";
 
 /** Map substrate key to config path key (e.g. identity -> identityPath). */
 const KEY_TO_PATH_KEY: Record<string, keyof SubstratePaths> = {
@@ -36,6 +37,23 @@ export class SubstrateStore {
   ): Promise<void> {
     const next = await loadSubstrate(workspaceDir, paths);
     this.content = next;
+  }
+
+  /**
+   * Create any missing substrate files with default template content.
+   * Call after reload when you want empty slots to be filled with defaults on disk.
+   */
+  async ensureDefaults(
+    workspaceDir: string,
+    config: SubstrateConfig | undefined
+  ): Promise<void> {
+    for (const key of SUBSTRATE_KEYS) {
+      const current = (this.content as Record<string, string | undefined>)[key];
+      const defaultContent = SUBSTRATE_DEFAULTS[key];
+      if (current == null && defaultContent != null) {
+        await this.writeKey(workspaceDir, config, key, defaultContent);
+      }
+    }
   }
 
   /**
