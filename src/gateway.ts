@@ -1317,9 +1317,15 @@ function parseMessages(
   }
   return value.map((entry) => {
     const item = entry as { role?: unknown; content?: unknown };
-    const content = String(item.content ?? "");
+    let content = String(item.content ?? "");
     if (content.length > maxMessageChars) {
-      throw new RpcGatewayError(400, "BAD_REQUEST", `message too long (limit=${maxMessageChars})`);
+      if (process.env.NODE_ENV !== "test") {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[CursorClaw] message truncated (${content.length} → ${maxMessageChars} chars); consider summarizing MEMORY.md or clearing long thread entries`
+        );
+      }
+      content = content.slice(0, maxMessageChars) + "\n\n[... truncated for length]";
     }
     return {
       role: String(item.role ?? "user"),
