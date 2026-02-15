@@ -43,7 +43,7 @@ Optional trusted identity header enforcement:
 }
 ```
 
-**Profile-scoped RPCs:** For multi-agent setups, `params` may include an optional `profileId` string. When present, the request is executed in the context of that agent profile (substrate, memory, approvals, etc.). When omitted, the gateway uses the default profile. Single-agent deployments ignore this and use the single profile. Profile-scoped methods include: `heartbeat.poll`, `heartbeat.getFile`, `heartbeat.update`, `memory.*`, `substrate.*`, `skills.list`, `skills.fetchFromUrl`, `skills.analyze`, `skills.install`, `skills.credentials.set`, `skills.credentials.delete`, `skills.credentials.list`, `approval.*`, `cron.list`/`cron.add`, `workspace.status`/`workspace.semantic_search`, `trace.ingest`, `advisor.file_change`/`advisor.explain_function`, `incident.bundle`, `chat.getThread`, and `thread.set`. `agent.run` accepts `session.profileId` to run the turn in that profile's context.
+**Profile-scoped RPCs:** For multi-agent setups, `params` may include an optional `profileId` string. When present, the request is executed in the context of that agent profile (substrate, memory, approvals, etc.). When omitted, the gateway uses the default profile. Single-agent deployments ignore this and use the single profile. Profile-scoped methods include: `heartbeat.poll`, `heartbeat.getFile`, `heartbeat.update`, `memory.*`, `substrate.*`, `skills.list`, `skills.fetchFromUrl`, `skills.analyze`, `skills.install`, `skills.credentials.set`, `skills.credentials.delete`, `skills.credentials.list`, `provider.credentials.set`, `provider.credentials.delete`, `provider.credentials.list`, `approval.*`, `cron.list`/`cron.add`, `workspace.status`/`workspace.semantic_search`, `trace.ingest`, `advisor.file_change`/`advisor.explain_function`, `incident.bundle`, `chat.getThread`, and `thread.set`. `agent.run` accepts `session.profileId` to run the turn in that profile's context.
 
 ### Success response
 
@@ -150,6 +150,9 @@ Method scope rules (`METHOD_SCOPES`):
 - `skills.credentials.set`: admin, local
 - `skills.credentials.delete`: admin, local
 - `skills.credentials.list`: admin, local
+- `provider.credentials.set`: admin, local
+- `provider.credentials.delete`: admin, local
+- `provider.credentials.list`: admin, local
 
 ---
 
@@ -613,6 +616,36 @@ Returns `{ deleted: boolean }` — `true` if the key existed and was removed.
 Lists credential **names** for a skill (no values). Profile-scoped.
 
 `params`: `skillId: string` (required).
+
+Returns `{ names: string[] }`.
+
+---
+
+### 5.27 `provider.credentials.set`
+
+Stores a provider API key (or other credential) for a profile (admin, local). Used when a model provider config uses `apiKeyRef: "profile:providerId"` or `"profile:providerId.keyName"`. Profile-scoped; requires profile root. Values are never returned to the agent or included in prompts or logs.
+
+`params`: `providerId: string`, `keyName: string`, `value: string`. All required. `providerId` and `keyName` must match `[a-zA-Z0-9_-]+`. Typical provider ids: `openai-compatible`. Default key name is `apiKey`.
+
+Returns `{ ok: true }`.
+
+---
+
+### 5.28 `provider.credentials.delete`
+
+Removes a provider credential by key name. Profile-scoped.
+
+`params`: `providerId: string`, `keyName: string`. Both required.
+
+Returns `{ deleted: boolean }` — `true` if the key existed and was removed.
+
+---
+
+### 5.29 `provider.credentials.list`
+
+Lists credential **names** for a provider (no values). Profile-scoped.
+
+`params`: `providerId: string` (required).
 
 Returns `{ names: string[] }`.
 

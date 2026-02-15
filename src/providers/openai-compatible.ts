@@ -6,7 +6,7 @@ import type {
   SendTurnOptions,
   ToolDefinition
 } from "../types.js";
-import { resolveApiKey } from "../security/credential-resolver.js";
+import { resolveApiKey, resolveApiKeyAsync } from "../security/credential-resolver.js";
 
 /** Config for OpenAI-compatible provider: base URL and model id; apiKeyRef for Bearer token. */
 function isOpenAICompatibleConfig(
@@ -38,10 +38,13 @@ export class OpenAICompatibleProvider implements ModelProvider {
     const model = modelConfig.openaiModelId ?? "gpt-4o-mini";
     const timeoutMs = options.timeoutMs ?? modelConfig.timeoutMs ?? 120_000;
 
-    const apiKey = resolveApiKey(modelConfig.apiKeyRef);
+    const apiKey =
+      options.profileRoot != null
+        ? await resolveApiKeyAsync(modelConfig.apiKeyRef, options.profileRoot)
+        : resolveApiKey(modelConfig.apiKeyRef);
     if (!apiKey) {
       throw new Error(
-        "openai-compatible provider requires apiKeyRef (e.g. env:OPENAI_API_KEY) to be set and resolve to a non-empty value"
+        "openai-compatible provider requires apiKeyRef (e.g. env:OPENAI_API_KEY or profile:openai-compatible) to be set and resolve to a non-empty value"
       );
     }
 

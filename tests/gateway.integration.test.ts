@@ -474,6 +474,132 @@ describe("gateway integration", () => {
 
       await app.close();
     });
+
+    it("provider.credentials RPCs set, list, delete scoped to profile", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "cursorclaw-provcreds-"));
+      cleanupPaths.push(dir);
+      const config = loadConfig({
+        gateway: {
+          auth: { mode: "token", token: "test-token" },
+          protocolVersion: "2.0",
+          bind: "loopback",
+          trustedProxyIps: []
+        },
+        defaultModel: "fallback",
+        models: {
+          fallback: {
+            provider: "fallback-model",
+            timeoutMs: 10_000,
+            authProfiles: ["default"],
+            fallbackModels: [],
+            enabled: true
+          }
+        }
+      });
+      const cronService = new CronService({
+        maxConcurrentRuns: 2,
+        stateFile: join(dir, "tmp", "cron-state.json")
+      });
+      await cronService.loadState();
+      const approvalsDir = join(dir, "tmp", "approvals");
+      await mkdir(approvalsDir, { recursive: true });
+      const capabilityStore = new CapabilityStore({ stateDir: approvalsDir });
+      await capabilityStore.load();
+      const approvalWorkflow = new ApprovalWorkflow({
+        capabilityStore,
+        defaultGrantTtlMs: 10 * 60_000,
+        defaultGrantUses: 1,
+        stateDir: approvalsDir
+      });
+      await approvalWorkflow.load();
+      const substrateStore = new SubstrateStore();
+      await substrateStore.reload(dir, config.substrate);
+      const profileContextMap = new Map<string, ProfileContext>([
+        [
+          "default",
+          {
+            profileRoot: dir,
+            substrateStore,
+            approvalWorkflow,
+            capabilityStore,
+            cronService
+          }
+        ]
+      ]);
+      const memory = new MemoryStore({ workspaceDir: dir });
+      const adapter = new CursorAgentModelAdapter({ defaultModel: "fallback", models: config.models });
+      const gate = new AlwaysAllowApprovalGate();
+      const toolRouter = new ToolRouter({ approvalGate: gate, allowedExecBins: ["echo"] });
+      toolRouter.register(createExecTool({ allowedBins: ["echo"], approvalGate: gate }));
+      const runtime = new AgentRuntime({
+        config,
+        adapter,
+        toolRouter,
+        memory,
+        snapshotDir: join(dir, "snapshots")
+      });
+      const incidentCommander = new IncidentCommander();
+      const auth = new AuthService({
+        mode: "token",
+        token: "test-token",
+        trustedProxyIps: [],
+        isTokenRevoked: (t: string) => incidentCommander.isTokenRevoked(t)
+      });
+      const rateLimiter = new MethodRateLimiter(10, 60_000, {});
+      const policyLogs = new PolicyDecisionLogger();
+      const app = buildGateway({
+        getConfig: () => config,
+        runtime,
+        cronService,
+        auth,
+        rateLimiter,
+        policyLogs,
+        incidentCommander,
+        defaultProfileId: "default",
+        workspaceDir: dir,
+        workspaceRoot: dir,
+        getProfileContext: (profileId) => profileContextMap.get(profileId)
+      });
+
+      const rpc = (method: string, params?: object) =>
+        app.inject({
+          method: "POST",
+          url: "/rpc",
+          headers: { authorization: "Bearer test-token" },
+          payload: { version: "2.0", method, params }
+        });
+
+      const listEmpty = await rpc("provider.credentials.list", { profileId: "default", providerId: "openai-compatible" });
+      expect(listEmpty.statusCode).toBe(200);
+      expect(listEmpty.json().result.names).toEqual([]);
+
+      const setRes = await rpc("provider.credentials.set", {
+        profileId: "default",
+        providerId: "openai-compatible",
+        keyName: "apiKey",
+        value: "sk-secret"
+      });
+      expect(setRes.statusCode).toBe(200);
+      expect(setRes.json().result).toEqual({ ok: true });
+
+      const listAfter = await rpc("provider.credentials.list", { profileId: "default", providerId: "openai-compatible" });
+      expect(listAfter.statusCode).toBe(200);
+      expect(listAfter.json().result.names).toEqual(["apiKey"]);
+
+      const delRes = await rpc("provider.credentials.delete", {
+        profileId: "default",
+        providerId: "openai-compatible",
+        keyName: "apiKey"
+      });
+      expect(delRes.statusCode).toBe(200);
+      expect(delRes.json().result.deleted).toBe(true);
+
+      const listAfterDel = await rpc("provider.credentials.list", { profileId: "default", providerId: "openai-compatible" });
+      expect(listAfterDel.statusCode).toBe(200);
+      expect(listAfterDel.json().result.names).toEqual([]);
+
+      await app.close();
+    });
   });
 
   it("dispatches chat.send through channel hub when configured", async () => {

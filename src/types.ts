@@ -100,6 +100,8 @@ export interface ModelSessionHandle {
 export interface SendTurnOptions {
   turnId: string;
   timeoutMs?: number;
+  /** When set, used to resolve profile-scoped apiKeyRef (e.g. profile:openai-compatible). */
+  profileRoot?: string;
 }
 
 export interface CreateSessionOptions {

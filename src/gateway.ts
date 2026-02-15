@@ -205,7 +205,10 @@ const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
   "skills.install": ["admin", "local"],
   "skills.credentials.set": ["admin", "local"],
   "skills.credentials.delete": ["admin", "local"],
-  "skills.credentials.list": ["admin", "local"]
+  "skills.credentials.list": ["admin", "local"],
+  "provider.credentials.set": ["admin", "local"],
+  "provider.credentials.delete": ["admin", "local"],
+  "provider.credentials.list": ["admin", "local"]
 };
 
 export function buildGateway(deps: GatewayDependencies): FastifyInstance {
@@ -1147,6 +1150,42 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         }
         const { listCredentialNames } = await import("./skills/credentials.js");
         const names = await listCredentialNames(profileCtx.profileRoot, skillId);
+        result = { names };
+      } else if (body.method === "provider.credentials.set") {
+        if (!profileCtx.profileRoot) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "profile root not configured");
+        }
+        const providerId = typeof body.params?.providerId === "string" ? body.params.providerId.trim() : "";
+        const keyName = typeof body.params?.keyName === "string" ? body.params.keyName.trim() : "";
+        const value = typeof body.params?.value === "string" ? body.params.value : String(body.params?.value ?? "");
+        if (!providerId || !keyName) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "provider.credentials.set requires providerId and keyName");
+        }
+        const { setProviderCredential } = await import("./security/provider-credentials.js");
+        await setProviderCredential(profileCtx.profileRoot, providerId, keyName, value);
+        result = { ok: true };
+      } else if (body.method === "provider.credentials.delete") {
+        if (!profileCtx.profileRoot) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "profile root not configured");
+        }
+        const providerId = typeof body.params?.providerId === "string" ? body.params.providerId.trim() : "";
+        const keyName = typeof body.params?.keyName === "string" ? body.params.keyName.trim() : "";
+        if (!providerId || !keyName) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "provider.credentials.delete requires providerId and keyName");
+        }
+        const { deleteProviderCredential } = await import("./security/provider-credentials.js");
+        const deleted = await deleteProviderCredential(profileCtx.profileRoot, providerId, keyName);
+        result = { deleted };
+      } else if (body.method === "provider.credentials.list") {
+        if (!profileCtx.profileRoot) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "profile root not configured");
+        }
+        const providerId = typeof body.params?.providerId === "string" ? body.params.providerId.trim() : "";
+        if (!providerId) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "provider.credentials.list requires providerId");
+        }
+        const { listProviderCredentialNames } = await import("./security/provider-credentials.js");
+        const names = await listProviderCredentialNames(profileCtx.profileRoot, providerId);
         result = { names };
       } else if (body.method === "admin.restart") {
         if (!deps.onRestart) {

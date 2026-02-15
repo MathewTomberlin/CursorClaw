@@ -178,6 +178,8 @@ export interface AgentRuntimeOptions {
   onEvent?: (event: RuntimeEvent) => void;
   /** When set, used each turn to get current substrate (Identity, Soul, etc.) for the system prompt. */
   getSubstrate?: () => SubstrateContent;
+  /** When set, used to resolve profile root for the current turn (e.g. for profile-scoped provider API keys). */
+  getProfileRoot?: (profileId: string) => string | undefined;
 }
 
 export class AgentRuntime {
@@ -379,13 +381,17 @@ export class AgentRuntime {
           });
           const turnProvenance = inboundRisk >= 70 ? ("untrusted" as const) : ("operator" as const);
 
+          const profileId = request.session.profileId ?? getDefaultProfileId(this.options.config);
+          const profileRoot = this.options.getProfileRoot?.(profileId);
+
           const adapterStream = this.options.adapter.sendTurn(
             modelSession,
             promptMessages,
             this.options.toolRouter.list(),
             {
               turnId: runId,
-              timeoutMs: this.options.config.session.turnTimeoutMs
+              timeoutMs: this.options.config.session.turnTimeoutMs,
+              profileRoot
             }
           );
           let emittedCount = 2;

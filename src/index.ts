@@ -384,7 +384,8 @@ async function main(): Promise<void> {
     privacyScrubber,
     lifecycleStream,
     snapshotDir: join(profileRoot, "tmp", "snapshots"),
-    getSubstrate
+    getSubstrate,
+    getProfileRoot: (profileId: string) => profileContextMap.get(profileId)?.profileRoot ?? defaultCtx.profileRoot
   });
 
   const runStore = new RunStore({
