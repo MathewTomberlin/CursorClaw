@@ -260,8 +260,25 @@ async function main(): Promise<void> {
     await contextIndexService.ensureFreshIndex();
   }
 
-  const memory = new MemoryStore({ workspaceDir: profileRoot });
   let memoryEmbeddingIndex: MemoryEmbeddingIndex | null = null;
+  const hasRollingWindow =
+    config.continuity?.memoryMaxRecords != null || config.continuity?.memoryMaxChars != null;
+  const memory = new MemoryStore({
+    workspaceDir: profileRoot,
+    ...(hasRollingWindow && {
+      rollingWindow: {
+        ...(config.continuity!.memoryMaxRecords != null && { maxRecords: config.continuity!.memoryMaxRecords }),
+        ...(config.continuity!.memoryMaxChars != null && { maxChars: config.continuity!.memoryMaxChars }),
+        ...(config.continuity!.memoryArchivePath != null && { archivePath: config.continuity!.memoryArchivePath }),
+        onTrim: async () => {
+          if (memoryEmbeddingIndex) {
+            const records = await memory.readAll();
+            await memoryEmbeddingIndex.upsertFromRecords(records, config.memory.includeSecretsInPrompt);
+          }
+        }
+      }
+    })
+  });
   if (config.continuity?.memoryEmbeddingsEnabled) {
     memoryEmbeddingIndex = new MemoryEmbeddingIndex({
       stateFile: join(profileRoot, "tmp", "memory-embeddings.json"),

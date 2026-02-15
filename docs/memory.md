@@ -17,7 +17,7 @@ Records have: `id`, `sessionId`, `category`, `text`, `provenance` (sourceChannel
 - **flushPreCompaction(sessionId)**: Appends a compaction checkpoint before compaction runs.
 - **integrityScan()**: Detects contradictions (same session+category, different text) and 120-day staleness; returns findings, does not auto-fix.
 
-Memory grows append-only unless you edit or compact MEMORY.md manually. Optionally, when `continuity.memoryEmbeddingsEnabled` is true, a separate **memory embedding index** is maintained under `tmp/memory-embeddings.json` (hash-based vectors over record text), and the main session can use the **recall_memory** tool to query by semantic similarity without loading the full MEMORY.md. The code-context embedding index remains separate (for workspace/repo chunks only).
+Memory grows append-only unless you enable a **rolling window** or edit/compact MEMORY.md manually. When `continuity.memoryMaxRecords` or `continuity.memoryMaxChars` is set, the store trims the **primary file (MEMORY.md) only** after each append so it stays under the limit; daily files are not rewritten. Trimmed lines can optionally be appended to an archive file (`continuity.memoryArchivePath`, e.g. `memory/MEMORY-archive.md`). If the memory embedding index is enabled, it is re-synced after a trim. Optionally, when `continuity.memoryEmbeddingsEnabled` is true, a separate **memory embedding index** is maintained under `tmp/memory-embeddings.json` (hash-based vectors over record text), and the main session can use the **recall_memory** tool to query by semantic similarity without loading the full MEMORY.md. The code-context embedding index remains separate (for workspace/repo chunks only).
 
 ## 3. Session-start injection (main session only)
 
@@ -53,6 +53,10 @@ Relationship and preference context is **not** stored in a dedicated structured 
 
 The agent learns about the user only via manual USER.md edits and whatever gets appended to memory (e.g. preferences mentioned in turn summaries). There is no automatic dossier-building; scope is limited to what the user or agent explicitly records. **Remember-this flow (RF.2):** The main session has a **remember_this** tool; when the user says "remember this" or "remember that I prefer X", the agent can call it to append a MemoryRecord (stored in MEMORY.md and daily file; recall via recall_memory when embeddings are enabled).
 
-## 7. Possible future improvements
+## 7. Rolling window (optional)
 
-- **Summarization / rolling window**: Keep MEMORY.md bounded (e.g. summarization or time-based window) instead of unbounded append.
+When **continuity.memoryMaxRecords** or **continuity.memoryMaxChars** is set, MEMORY.md is kept bounded: after each append, if the primary file exceeds the limit, the oldest records are removed (only MEMORY.md is rewritten; daily files are left unchanged). Optionally set **continuity.memoryArchivePath** (e.g. `memory/MEMORY-archive.md`) to append trimmed lines to an archive file. See the configuration reference for defaults and details.
+
+## 8. Possible future improvements
+
+- **Summarization**: Optional agent-triggered summarization of middle-aged content (e.g. compact many turn-summary lines into one compaction record) in addition to or instead of a simple rolling window.
