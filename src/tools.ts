@@ -21,6 +21,7 @@ import type {
   ToolExecuteContext
 } from "./types.js";
 import type { SensitivityLabel } from "./types.js";
+import type { SubstrateContent } from "./substrate/types.js";
 
 const WEB_FETCH_MAX_REDIRECTS = 5;
 const WEB_FETCH_MAX_BODY_BYTES = 20_000;
@@ -794,6 +795,63 @@ export function createRememberThisTool(args: {
       };
       const { id } = await args.appendRecord(record);
       return { ok: true, id };
+    }
+  };
+}
+
+const SOUL_IDENTITY_KEYS = ["soul", "identity"] as const;
+
+/** Proposal-only tool for SOUL.md/IDENTITY.md evolution. Does not write; returns current + proposed for user to apply. */
+export function createProposeSoulIdentityUpdateTool(args: {
+  getSubstrateContent: (profileRoot: string) => SubstrateContent | undefined;
+}): ToolDefinition {
+  return {
+    name: "propose_soul_identity_update",
+    description:
+      "Propose an update to SOUL.md or IDENTITY.md. Use when you infer a lasting change in how you want to be or how you present in this workspace. This tool does not write to disk; it returns the current content and your proposed content so the user can review and apply manually (e.g. via substrate.update in the UI). Only available in the main web session.",
+    schema: {
+      type: "object",
+      properties: {
+        key: {
+          type: "string",
+          enum: SOUL_IDENTITY_KEYS,
+          description: "Which file: soul (SOUL.md) or identity (IDENTITY.md)"
+        },
+        proposed_content: {
+          type: "string",
+          description: "Full proposed content for the file (replaces entire file when user applies)"
+        }
+      },
+      required: ["key", "proposed_content"],
+      additionalProperties: false
+    },
+    riskLevel: "low",
+    execute: async (rawArgs: unknown, ctx?: ToolExecuteContext) => {
+      if (ctx?.channelKind !== "web" || !ctx?.profileRoot) {
+        return { error: "propose_soul_identity_update is only available in the main session." };
+      }
+      const parsed = rawArgs as { key: string; proposed_content: string };
+      const key = parsed.key?.trim();
+      if (!SOUL_IDENTITY_KEYS.includes(key as (typeof SOUL_IDENTITY_KEYS)[number])) {
+        return { error: "key must be 'soul' or 'identity'." };
+      }
+      const proposedContent = typeof parsed.proposed_content === "string" ? parsed.proposed_content.trim() : "";
+      if (!proposedContent) {
+        return { error: "proposed_content is required and must be non-empty." };
+      }
+      const content = args.getSubstrateContent(ctx.profileRoot);
+      if (!content) {
+        return { error: "Substrate not available for this profile." };
+      }
+      const currentContent = (content as Record<string, string | undefined>)[key] ?? "";
+      const fileLabel = key === "soul" ? "SOUL.md" : "IDENTITY.md";
+      return {
+        key,
+        file: fileLabel,
+        current_content: currentContent,
+        proposed_content: proposedContent,
+        message: `Proposed update to ${fileLabel}. Review the proposed_content above; apply manually (e.g. via Settings or substrate.update) if you want to save it. No file was written.`
+      };
     }
   };
 }

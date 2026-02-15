@@ -154,16 +154,23 @@ function getEffectiveProfileContext(deps: GatewayDependencies, resolvedProfileId
   };
 }
 
-/** When thread store is present, append the assistant reply to the persisted thread for the run's profile/session. Call before consume(runId). */
+/** When thread store is present, append the assistant reply to the persisted thread for the run's profile/session. Call before consume(runId). Idempotent per runId and by content so racing agent.wait and thread.set do not create duplicate bubbles. */
 async function appendAssistantToThread(
   deps: GatewayDependencies,
   runId: string,
-  result: TurnResult
+  result: TurnResult,
+  appendedRunIds: Set<string>
 ): Promise<void> {
   if (!deps.threadStore || !deps.runStore || !result.assistantText) return;
+  if (appendedRunIds.has(runId)) return;
+  appendedRunIds.add(runId);
   const record = await deps.runStore.get(runId);
   if (!record?.profileId || !record?.sessionId) return;
   const profileCtx = getEffectiveProfileContext(deps, record.profileId);
+  const existing = await deps.threadStore.getThread(profileCtx.profileRoot, record.sessionId);
+  const last = existing.length > 0 ? existing[existing.length - 1] : null;
+  const newContent = (result.assistantText ?? "").trim();
+  if (last?.role === "assistant" && (last.content ?? "").trim() === newContent) return;
   await deps.threadStore.appendMessage(profileCtx.profileRoot, record.sessionId, {
     role: "assistant",
     content: result.assistantText
@@ -223,6 +230,8 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
     bodyLimit: deps.getConfig().gateway.bodyLimitBytes
   });
   const pendingRuns = new Map<string, PendingRun>();
+  /** RunIds for which we have already appended the assistant reply to the thread (avoids duplicate bubbles when multiple agent.wait requests race). */
+  const appendedRunIds = new Set<string>();
 
   // CORS so UI from another origin (e.g. Vite dev server, Tailscale) can call /rpc, /status, /stream
   void app.register(fastifyCors, {
@@ -480,7 +489,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
             throw new RpcGatewayError(404, "NOT_FOUND", `runId not found: ${runId}`);
           }
           if (persisted.status === "completed" && persisted.result !== undefined) {
-            await appendAssistantToThread(deps, runId, persisted.result);
+            await appendAssistantToThread(deps, runId, persisted.result, appendedRunIds);
             await deps.runStore?.consume(runId);
             result = persisted.result;
           } else if (persisted.status === "pending") {
@@ -491,7 +500,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           }
         } else if (pending.result !== undefined) {
           pendingRuns.delete(runId);
-          await appendAssistantToThread(deps, runId, pending.result);
+          await appendAssistantToThread(deps, runId, pending.result, appendedRunIds);
           await deps.runStore?.consume(runId);
           result = pending.result;
         } else if (pending.error !== undefined) {
@@ -506,7 +515,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
             try {
               const resolved = await pending.promise;
               result = resolved;
-              await appendAssistantToThread(deps, runId, resolved);
+              await appendAssistantToThread(deps, runId, resolved, appendedRunIds);
               await deps.runStore?.consume(runId);
             } finally {
               pendingRuns.delete(runId);

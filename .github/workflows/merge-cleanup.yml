@@ -1,0 +1,27 @@
+# When a PR is merged into main, delete the merged branch so the repo and ROADMAP
+# workflow stay clear of stale branch references. Operators run the local
+# after-merge script to sync main and prune local refs (see BRANCH_PROTECTION.md).
+name: Merge cleanup
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  delete-merged-branch:
+    # Only run when PR is merged and head is in this repo (not a fork)
+    if: github.event.pull_request.merged == true && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete merged branch
+        run: |
+          BRANCH="${{ github.event.pull_request.head.ref }}"
+          if [ -z "$BRANCH" ] || [ "$BRANCH" = "main" ]; then
+            echo "Skipping delete for branch: $BRANCH"
+            exit 0
+          fi
+          gh api "repos/${{ github.repository }}/git/refs/heads/${BRANCH}" -X DELETE
+          echo "Deleted branch: $BRANCH"
+        env:
+          GH_TOKEN: ${{ github.token }}

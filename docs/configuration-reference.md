@@ -371,11 +371,13 @@ Path defaults (workspace root): `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `BIRTH.md
     "userPath": "USER.md",
     "toolsPath": "TOOLS.md",
     "roadmapPath": "ROADMAP.md",
-    "includeCapabilitiesInPrompt": false
+    "includeCapabilitiesInPrompt": false,
+    "allowSoulIdentityEvolution": false
   }
 }
 ```
 
+- **allowSoulIdentityEvolution:** When `true`, the agent may propose updates to SOUL.md or IDENTITY.md via the `propose_soul_identity_update` tool. The tool is proposal-only: it returns current and proposed content for the user to review; no file is written until the user applies the change (e.g. via Settings or `substrate.update`). Default `false`. See docs/IG.4-soul-identity-evolution.md.
 - **AGENTS.md:** Coordinating workspace rules file (OpenClaw-style). Injected **first** in the system prompt so the agent sees session-start ritual (read SOUL, USER, memory), memory system, safety, planning/agency, and heartbeat behavior before Identity/Soul/User. Using the filename `AGENTS.md` allows clients that treat it as a rules file (e.g. Claude Code, Cursor) to use it the same way when editing the workspace.
 - **Identity and Soul:** When the files exist, their content is prepended after AGENTS (Identity, then Soul) for every turn, including heartbeat. This gives the agent consistent identity and tone.
 - **USER.md:** Injected only in main session (web channel). Contains information about the human (name, timezone, preferences). Do not put secrets here; treat as private.

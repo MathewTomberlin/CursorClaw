@@ -75,15 +75,20 @@ export default function Chat() {
       try {
         const { proactiveMessage } = await heartbeatPoll(selectedProfileId);
         if (proactiveMessage?.trim()) {
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: `proactive-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-              role: "assistant",
-              content: proactiveMessage.trim(),
-              at: new Date().toISOString()
-            }
-          ]);
+          const text = proactiveMessage.trim();
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            if (last?.role === "assistant" && (last.content ?? "").trim() === text) return prev;
+            return [
+              ...prev,
+              {
+                id: `proactive-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+                role: "assistant",
+                content: text,
+                at: new Date().toISOString()
+              }
+            ];
+          });
         }
       } catch {
         // ignore poll errors (e.g. offline, auth)

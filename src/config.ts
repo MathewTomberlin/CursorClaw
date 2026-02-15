@@ -176,6 +176,8 @@ export interface SubstrateConfig {
   roadmapPath?: string;
   /** When true, include a short capabilities summary in the system prompt (default false). */
   includeCapabilitiesInPrompt?: boolean;
+  /** When true, allow the agent to propose SOUL.md/IDENTITY.md updates via propose_soul_identity_update (proposal-only; no direct write). Default false. */
+  allowSoulIdentityEvolution?: boolean;
 }
 
 export interface ContinuityConfig {

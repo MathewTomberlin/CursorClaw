@@ -17,7 +17,8 @@
     "test:security": "vitest run tests/security-tools.test.ts",
     "test:redteam": "vitest run tests/prompt-injection-redteam.test.ts",
     "test:bench": "vitest run tests/bench/",
-    "security:audit": "npm audit --audit-level=high"
+    "security:audit": "npm audit --audit-level=high",
+    "after-merge": "node scripts/after-merge.js"
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",

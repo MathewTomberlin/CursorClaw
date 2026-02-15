@@ -66,6 +66,7 @@ import {
   createMcpCallTool,
   createMcpListResourcesTool,
   createMcpReadResourceTool,
+  createProposeSoulIdentityUpdateTool,
   createRecallMemoryTool,
   createRememberThisTool,
   createWebFetchTool,
@@ -389,6 +390,18 @@ async function main(): Promise<void> {
       appendRecord: (record) => memory.append(record)
     })
   );
+  if (config.substrate?.allowSoulIdentityEvolution) {
+    const getSubstrateContent = (profileRoot: string): SubstrateContent | undefined => {
+      if (profileContextMap) {
+        for (const ctx of profileContextMap.values()) {
+          if (ctx.profileRoot === profileRoot && ctx.substrateStore) return ctx.substrateStore.get();
+        }
+      }
+      if (defaultCtx.profileRoot === profileRoot && defaultCtx.substrateStore) return defaultCtx.substrateStore.get();
+      return undefined;
+    };
+    toolRouter.register(createProposeSoulIdentityUpdateTool({ getSubstrateContent }));
+  }
 
   const confidenceModel = new ConfidenceModel();
   const deepScanService = new DeepScanService({
