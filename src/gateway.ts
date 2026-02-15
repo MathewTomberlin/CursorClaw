@@ -164,16 +164,20 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
     reply.raw.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
-      Connection: "keep-alive"
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no"
     });
+    const raw = reply.raw as NodeJS.WritableStream & { flush?: () => void };
     const send = (event: unknown) => {
-      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+      raw.write(`data: ${JSON.stringify(event)}\n\n`);
+      raw.flush?.();
     };
     void (async () => {
       try {
         for await (const event of deps.lifecycleStream!.subscribe(sessionId)) {
           send(event);
           if (request.raw.destroyed) break;
+          await new Promise((r) => setImmediate(r));
         }
       } catch {
         // client disconnected or stream closed
