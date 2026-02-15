@@ -280,7 +280,7 @@ export default function Chat() {
                 onClick={() => setChannelConfigOpen((o) => !o)}
                 aria-expanded={channelConfigOpen}
               >
-                {channelConfigOpen ? "Hide" : "Session & channels"}
+                {channelConfigOpen ? "Hide" : "Conversation settings"}
               </button>
               <button type="button" className="btn" onClick={clearThread} disabled={loading}>
                 Clear thread

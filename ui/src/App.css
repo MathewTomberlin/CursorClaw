@@ -70,7 +70,16 @@ a:hover {
 
 .main {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   padding: 1.5rem;
+  overflow: hidden;
+}
+
+.main > * {
+  flex: 1 1 0;
+  min-height: 0;
   overflow: auto;
 }
 
@@ -271,9 +280,9 @@ a:hover {
 .chat-page {
   display: flex;
   flex-direction: column;
-  height: 0;
-  min-height: 60vh;
-  flex: 1;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .chat-layout {
