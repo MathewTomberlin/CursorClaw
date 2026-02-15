@@ -5,6 +5,13 @@ import { rpc, mapRpcError, openStream } from "../api";
 
 type ChannelKind = "dm" | "group" | "web" | "mobile";
 
+interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  at?: string;
+}
+
 /** Lifecycle event from /stream (queued, started, tool, assistant, compaction, completed, failed). */
 interface StreamEvent {
   type: string;
@@ -35,19 +42,62 @@ function formatStreamEventLabel(ev: StreamEvent): string {
   }
 }
 
+const STORAGE_KEY_PREFIX = "cursorclaw_chat_";
+
+function loadThread(sessionId: string): ChatMessage[] {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY_PREFIX + sessionId);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as ChatMessage[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveThread(sessionId: string, messages: ChatMessage[]): void {
+  try {
+    sessionStorage.setItem(STORAGE_KEY_PREFIX + sessionId, JSON.stringify(messages));
+  } catch {
+    // ignore
+  }
+}
+
+function generateId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
 export default function Chat() {
   const [sessionId, setSessionId] = useState("demo-session");
   const [channelId, setChannelId] = useState("dm:demo-session");
   const [channelKind, setChannelKind] = useState<ChannelKind>("dm");
-  const [message, setMessage] = useState("");
-  const [reply, setReply] = useState("");
-  const [events, setEvents] = useState<unknown[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => loadThread("demo-session"));
+  const [input, setInput] = useState("");
   const [streamEvents, setStreamEvents] = useState<StreamEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [channelConfigOpen, setChannelConfigOpen] = useState(false);
   const [chatSendResult, setChatSendResult] = useState<string | null>(null);
   const [chatSendError, setChatSendError] = useState<string | null>(null);
+  const [channelSendText, setChannelSendText] = useState("");
   const streamRef = useRef<EventSource | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  // Persist thread when session or messages change
+  useEffect(() => {
+    if (sessionId.trim()) saveThread(sessionId.trim(), messages);
+  }, [sessionId, messages]);
+
+  // Load thread when session changes
+  useEffect(() => {
+    const sid = sessionId.trim();
+    if (sid) setMessages(loadThread(sid));
+  }, [sessionId]);
+
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages, streamEvents]);
 
   useEffect(() => {
     return () => {
@@ -59,22 +109,29 @@ export default function Chat() {
   }, []);
 
   const runTurn = async () => {
-    const text = message.trim();
+    const text = input.trim();
     if (!text || !sessionId.trim() || !channelId.trim()) {
       setError("Session ID, channel ID, and message are required.");
       return;
     }
     setError(null);
-    setReply("");
-    setEvents([]);
     setStreamEvents([]);
     setLoading(true);
+    setInput("");
+
+    const userMsg: ChatMessage = {
+      id: generateId(),
+      role: "user",
+      content: text,
+      at: new Date().toISOString()
+    };
+    setMessages((prev) => [...prev, userMsg]);
+
     if (streamRef.current) {
       streamRef.current.close();
       streamRef.current = null;
     }
     try {
-      // Open stream before agent.run so we receive queued/started and all subsequent events
       try {
         const es = openStream(sessionId.trim());
         streamRef.current = es;
@@ -97,20 +154,34 @@ export default function Chat() {
       } catch {
         // Stream optional; ignore
       }
+
+      const messageHistory = [...messages, userMsg];
+      const apiMessages = messageHistory
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({ role: m.role, content: m.content }));
+
       const runRes = await rpc<{ runId: string }>("agent.run", {
         session: { sessionId: sessionId.trim(), channelId: channelId.trim(), channelKind },
-        messages: [{ role: "user", content: text }]
+        messages: apiMessages
       });
       const runId = runRes.result?.runId;
       if (!runId) throw new Error("No runId returned");
       const waitRes = await rpc<{ assistantText: string; events?: unknown[] }>("agent.wait", { runId });
       const out = waitRes.result;
-      if (out) {
-        setReply(out.assistantText ?? "");
-        if (Array.isArray(out.events)) setEvents(out.events);
-      }
+      const assistantText = out?.assistantText ?? "";
+
+      const assistantMsg: ChatMessage = {
+        id: generateId(),
+        role: "assistant",
+        content: assistantText,
+        at: new Date().toISOString()
+      };
+      setMessages((prev) => [...prev, assistantMsg]);
     } catch (e) {
-      setError(e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } }));
+      setError(
+        e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } })
+      );
+      setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
     } finally {
       setLoading(false);
     }
@@ -119,10 +190,10 @@ export default function Chat() {
   const lastStreamEvent = streamEvents.length > 0 ? streamEvents[streamEvents.length - 1] : null;
   const statusLabel = lastStreamEvent ? formatStreamEventLabel(lastStreamEvent) : "Running…";
 
-  const sendChat = async () => {
-    const text = message.trim();
+  const sendToChannel = async () => {
+    const text = (channelSendText || input).trim();
     if (!text || !channelId.trim()) {
-      setChatSendError("Channel ID and text are required.");
+      setChatSendError("Channel ID and message text are required.");
       return;
     }
     setChatSendError(null);
@@ -133,101 +204,166 @@ export default function Chat() {
         text
       });
       const r = res.result;
-      setChatSendResult(r?.delivered === true ? "Delivered." : r?.reason ? `Not delivered: ${r.reason}` : "Sent.");
+      setChatSendResult(
+        r?.delivered === true ? "Delivered to channel." : r?.reason ? `Not delivered: ${r.reason}` : "Sent."
+      );
+      if (r?.delivered) setChannelSendText("");
     } catch (e) {
-      setChatSendError(e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } }));
+      setChatSendError(
+        e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } })
+      );
+    }
+  };
+
+  const clearThread = () => {
+    setMessages([]);
+    if (sessionId.trim()) {
+      try {
+        sessionStorage.removeItem(STORAGE_KEY_PREFIX + sessionId.trim());
+      } catch {
+        // ignore
+      }
     }
   };
 
   return (
-    <div className="card">
-      <h2>Agent</h2>
-      <div className="form-group">
-        <label>Session ID</label>
-        <input value={sessionId} onChange={(e) => setSessionId(e.target.value)} />
-      </div>
-      <div className="form-group">
-        <label>Channel ID</label>
-        <input value={channelId} onChange={(e) => setChannelId(e.target.value)} />
-      </div>
-      <div className="form-group">
-        <label>Channel kind</label>
-        <select value={channelKind} onChange={(e) => setChannelKind(e.target.value as ChannelKind)}>
-          <option value="dm">dm</option>
-          <option value="group">group</option>
-          <option value="web">web</option>
-          <option value="mobile">mobile</option>
-        </select>
-      </div>
-      <div className="form-group">
-        <label>Message</label>
-        <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={3} />
-      </div>
-      {error && <p className="error-msg">{error}</p>}
-      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
-        <button type="button" className="btn btn-primary" onClick={runTurn} disabled={loading}>
-          {loading ? "Running…" : "Send"}
-        </button>
-        {loading && (
-          <span className="agent-status" style={{ fontSize: "0.9rem", color: "var(--text-muted, #666)" }} aria-live="polite">
-            {statusLabel}
-          </span>
-        )}
-      </div>
-      {(loading || streamEvents.length > 0) && (
-        <div className="card agent-activity" style={{ marginTop: "1rem" }}>
-          <h3 style={{ marginTop: 0, marginBottom: "0.5rem", fontSize: "1rem" }}>Agent activity</h3>
-          <ul
-            style={{
-              listStyle: "none",
-              padding: 0,
-              margin: 0,
-              fontSize: "0.85rem",
-              maxHeight: "10rem",
-              overflowY: "auto"
-            }}
-            aria-live="polite"
-          >
-            {streamEvents.map((ev, i) => (
-              <li
-                key={i}
-                style={{
-                  padding: "0.25rem 0",
-                  borderBottom: i < streamEvents.length - 1 ? "1px solid var(--border, #eee)" : "none"
-                }}
+    <div className="chat-page">
+      <div className="chat-layout">
+        <section className="chat-thread-card card">
+          <div className="chat-thread-header">
+            <h2>Chat with agent</h2>
+            <div className="chat-thread-actions">
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setChannelConfigOpen((o) => !o)}
+                aria-expanded={channelConfigOpen}
               >
-                <span style={{ color: "var(--text-muted, #666)", marginRight: "0.5rem" }}>{ev.at ? new Date(ev.at).toLocaleTimeString() : ""}</span>
-                {formatStreamEventLabel(ev)}
-              </li>
-            ))}
-          </ul>
-          {loading && streamEvents.length === 0 && (
-            <p style={{ margin: 0, color: "var(--text-muted, #666)", fontSize: "0.85rem" }}>Connecting…</p>
-          )}
-        </div>
-      )}
-      {reply && (
-        <div className="card" style={{ marginTop: "1rem" }}>
-          <h2>Reply</h2>
-          <div className="agent-reply markdown-body" style={{ margin: 0 }}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{reply}</ReactMarkdown>
+                {channelConfigOpen ? "Hide" : "Session & channels"}
+              </button>
+              <button type="button" className="btn" onClick={clearThread} disabled={loading}>
+                Clear thread
+              </button>
+            </div>
           </div>
-          {events.length > 0 && (
-            <details style={{ marginTop: "0.75rem" }}>
-              <summary>Events ({events.length})</summary>
-              <pre style={{ fontSize: "0.75rem", overflow: "auto", maxHeight: "12rem" }}>{JSON.stringify(events, null, 2)}</pre>
-            </details>
+
+          {channelConfigOpen && (
+            <div className="chat-channel-config card" style={{ marginTop: "0.75rem" }}>
+              <h3 style={{ marginTop: 0, fontSize: "0.9375rem" }}>Session & channel</h3>
+              <p className="chat-config-desc">
+                Session and channel identify this conversation. Use <strong>Send to channel</strong> below to
+                deliver a message to the configured channel (e.g. Slack or local echo) without running the
+                agent.
+              </p>
+              <div className="form-group">
+                <label>Session ID</label>
+                <input value={sessionId} onChange={(e) => setSessionId(e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label>Channel ID</label>
+                <input value={channelId} onChange={(e) => setChannelId(e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label>Channel kind</label>
+                <select value={channelKind} onChange={(e) => setChannelKind(e.target.value as ChannelKind)}>
+                  <option value="dm">dm</option>
+                  <option value="group">group</option>
+                  <option value="web">web</option>
+                  <option value="mobile">mobile</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Send to channel (chat.send)</label>
+                <input
+                  value={channelSendText}
+                  onChange={(e) => setChannelSendText(e.target.value)}
+                  placeholder="Message to deliver to channel…"
+                />
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={sendToChannel}
+                  disabled={loading}
+                  style={{ marginTop: "0.5rem" }}
+                >
+                  Send to channel
+                </button>
+                {chatSendResult && (
+                  <p style={{ color: "var(--success)", marginTop: "0.5rem", fontSize: "0.875rem" }}>
+                    {chatSendResult}
+                  </p>
+                )}
+                {chatSendError && <p className="error-msg">{chatSendError}</p>}
+              </div>
+            </div>
           )}
-        </div>
-      )}
-      <div className="card" style={{ marginTop: "1.5rem" }}>
-        <h2>Send to channel (chat.send)</h2>
-        <p>Uses the channel ID above. Sends the message in the input above.</p>
-        <button type="button" className="btn btn-primary" onClick={sendChat} disabled={loading}>
-          Send to channel
-        </button>
-        {chatSendResult && <p style={{ color: "var(--success)", marginTop: "0.5rem" }}>{chatSendResult}</p>}
-        {chatSendError && <p className="error-msg">{chatSendError}</p>}
+
+          <div className="chat-messages" ref={scrollRef} role="log" aria-live="polite">
+            {messages.length === 0 && !loading && (
+              <div className="chat-empty">
+                <p>No messages yet. Send a message to start a conversation with the agent.</p>
+              </div>
+            )}
+            {messages.map((msg) => (
+              <div
+                key={msg.id}
+                className={`chat-bubble chat-bubble--${msg.role}`}
+                data-role={msg.role}
+                aria-label={msg.role === "user" ? "You" : "Agent"}
+              >
+                <span className="chat-bubble-role">{msg.role === "user" ? "You" : "Agent"}</span>
+                {msg.role === "assistant" ? (
+                  <div className="chat-bubble-content markdown-body agent-reply">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content || "—"}</ReactMarkdown>
+                  </div>
+                ) : (
+                  <div className="chat-bubble-content chat-bubble-content--text">{msg.content}</div>
+                )}
+                {msg.at && (
+                  <span className="chat-bubble-time" aria-hidden>
+                    {new Date(msg.at).toLocaleTimeString()}
+                  </span>
+                )}
+              </div>
+            ))}
+            {loading && (
+              <div className="chat-bubble chat-bubble--assistant chat-bubble--loading" data-role="assistant">
+                <span className="chat-bubble-role">Agent</span>
+                <div className="chat-bubble-content">
+                  <span className="chat-typing">{statusLabel}</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {error && <p className="error-msg" style={{ marginTop: "0.5rem" }}>{error}</p>}
+
+          <div className="chat-input-row">
+            <textarea
+              className="chat-input"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void runTurn();
+                }
+              }}
+              placeholder="Message the agent…"
+              rows={2}
+              disabled={loading}
+              aria-label="Message the agent"
+            />
+            <button
+              type="button"
+              className="btn btn-primary chat-send-btn"
+              onClick={() => void runTurn()}
+              disabled={loading || !input.trim()}
+            >
+              {loading ? statusLabel : "Send"}
+            </button>
+          </div>
+        </section>
       </div>
     </div>
   );
