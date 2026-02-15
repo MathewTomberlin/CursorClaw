@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { rpc, mapRpcError } from "../api";
+import { rpc, mapRpcError, heartbeatPoll } from "../api";
 import { useChat } from "../contexts/ChatContext";
 import type { StreamEvent } from "../contexts/ChatContext";
 
@@ -37,6 +37,7 @@ export default function Chat() {
     channelKind,
     setChannelKind,
     messages,
+    setMessages,
     loading,
     streamEvents,
     currentRunId,
@@ -65,6 +66,39 @@ export default function Chat() {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "auto" });
   }, [messages, streamEvents]);
+
+  // Poll for proactive messages from heartbeat (e.g. BIRTH); append to thread when one arrives
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const { proactiveMessage } = await heartbeatPoll();
+        if (proactiveMessage?.trim()) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `proactive-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+              role: "assistant",
+              content: proactiveMessage.trim(),
+              at: new Date().toISOString()
+            }
+          ]);
+        }
+      } catch {
+        // ignore poll errors (e.g. offline, auth)
+      }
+    };
+    void poll();
+    const intervalMs = 5_000;
+    const t = setInterval(poll, intervalMs);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void poll();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [setMessages]);
 
   const runTurn = async () => {
     const text = input.trim();

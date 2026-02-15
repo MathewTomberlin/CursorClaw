@@ -141,10 +141,33 @@ export async function getStatus(): Promise<StatusPayload> {
   return res.json();
 }
 
+/** Poll for a proactive message from a heartbeat turn. Returns the message if one was pending (and clears it). */
+export async function heartbeatPoll(): Promise<{ result: string; proactiveMessage?: string }> {
+  const res = await rpc<{ result: string; proactiveMessage?: string }>("heartbeat.poll");
+  const payload = res.result;
+  return payload != null && typeof payload === "object" ? payload : { result: "ok" };
+}
+
+/** Read HEARTBEAT.md content (used on the next heartbeat run). */
+export async function getHeartbeatFile(): Promise<{ content: string }> {
+  const res = await rpc<{ content: string }>("heartbeat.getFile");
+  const payload = res.result;
+  return payload != null && typeof payload === "object" && typeof (payload as { content?: string }).content === "string"
+    ? (payload as { content: string })
+    : { content: "" };
+}
+
+/** Write HEARTBEAT.md content. Takes effect on the next heartbeat. */
+export async function updateHeartbeat(content: string): Promise<void> {
+  await rpc("heartbeat.update", { content });
+}
+
 export interface StatusPayload {
   gateway: string;
   defaultModel: string;
   queueWarnings: string[];
+  /** If present, the agent sent a proactive message during a heartbeat (e.g. BIRTH); poll heartbeat.poll to consume. */
+  pendingProactiveMessage?: string;
   runtimeMetrics: {
     turnsStarted: number;
     turnsCompleted: number;

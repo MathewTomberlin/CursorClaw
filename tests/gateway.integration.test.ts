@@ -59,6 +59,8 @@ async function createGateway(options: {
   onActivity?: () => void;
   withLifecycleStream?: boolean;
   onBeforeSend?: (channelId: string, text: string) => Promise<boolean>;
+  getPendingProactiveMessage?: () => string | null;
+  takePendingProactiveMessage?: () => string | null;
 } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "cursorclaw-gw-"));
   cleanupPaths.push(dir);
@@ -133,6 +135,8 @@ async function createGateway(options: {
     ...(options.onActivity ? { onActivity: options.onActivity } : {}),
     ...(lifecycleStream ? { lifecycleStream } : {}),
     ...(options.onBeforeSend ? { onBeforeSend: options.onBeforeSend } : {}),
+    ...(options.getPendingProactiveMessage ? { getPendingProactiveMessage: options.getPendingProactiveMessage } : {}),
+    ...(options.takePendingProactiveMessage ? { takePendingProactiveMessage: options.takePendingProactiveMessage } : {}),
     auth,
     rateLimiter,
     policyLogs,
@@ -668,6 +672,49 @@ describe("gateway integration", () => {
     expect(result.gateway.auth).toBeDefined();
     expect(result.gateway.auth.token).not.toBe("test-token");
     expect(result.gateway.auth.token).toEqual({ redacted: true, length: 10 });
+    await app.close();
+  });
+
+  it("heartbeat.poll returns ok and optional proactiveMessage, and take clears it", async () => {
+    let pending: string | null = "Hello from BIRTH!";
+    const app = await createGateway({
+      getPendingProactiveMessage: () => pending,
+      takePendingProactiveMessage: () => {
+        const msg = pending;
+        pending = null;
+        return msg;
+      }
+    });
+    const first = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: { authorization: "Bearer test-token" },
+      payload: { version: "2.0", method: "heartbeat.poll", params: {} }
+    });
+    expect(first.statusCode).toBe(200);
+    const firstResult = first.json().result;
+    expect(firstResult).toEqual({ result: "ok", proactiveMessage: "Hello from BIRTH!" });
+    const second = await app.inject({
+      method: "POST",
+      url: "/rpc",
+      headers: { authorization: "Bearer test-token" },
+      payload: { version: "2.0", method: "heartbeat.poll", params: {} }
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json().result).toEqual({ result: "ok" });
+    const statusRes = await app.inject({ method: "GET", url: "/status" });
+    expect(statusRes.json().pendingProactiveMessage).toBeUndefined();
+    await app.close();
+  });
+
+  it("GET /status includes pendingProactiveMessage when getter returns one", async () => {
+    const app = await createGateway({
+      getPendingProactiveMessage: () => "Proactive greeting",
+      takePendingProactiveMessage: () => null
+    });
+    const status = await app.inject({ method: "GET", url: "/status" });
+    expect(status.statusCode).toBe(200);
+    expect(status.json().pendingProactiveMessage).toBe("Proactive greeting");
     await app.close();
   });
 

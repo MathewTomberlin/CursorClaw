@@ -687,6 +687,15 @@ export class AgentRuntime {
       });
     }
     const isMainSession = request.session.channelKind === "web";
+    if (isMainSession) {
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(
+          "The user is chatting with you in the CursorClaw web UI (Chat tab in the browser at this server's URL). This is not Cursor IDE. Do not refer to Cursor IDE or cursor-auto; address the user in the web Chat context. Write clearly and avoid typos.",
+          scopeId
+        )
+      });
+    }
     if (substrate.user?.trim() && isMainSession) {
       systemMessages.push({
         role: "system",

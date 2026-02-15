@@ -10,6 +10,7 @@ import Workspace from "./pages/Workspace";
 import Incidents from "./pages/Incidents";
 import Config from "./pages/Config";
 import Substrate from "./pages/Substrate";
+import Heartbeat from "./pages/Heartbeat";
 import Trace from "./pages/Trace";
 import Memory from "./pages/Memory";
 
@@ -58,6 +59,9 @@ function Shell() {
           <NavLink to="/substrate" className={({ isActive }) => (isActive ? "active" : "")}>
             Substrate
           </NavLink>
+          <NavLink to="/heartbeat" className={({ isActive }) => (isActive ? "active" : "")}>
+            Heartbeat
+          </NavLink>
           <NavLink to="/trace" className={({ isActive }) => (isActive ? "active" : "")}>
             Trace
           </NavLink>
@@ -73,6 +77,7 @@ function Shell() {
             <Route path="/incidents" element={<Incidents />} />
             <Route path="/config" element={<Config />} />
             <Route path="/substrate" element={<Substrate />} />
+            <Route path="/heartbeat" element={<Heartbeat />} />
             <Route path="/trace" element={<Trace />} />
           </Routes>
         </main>

@@ -409,6 +409,8 @@ async function main(): Promise<void> {
   });
   let orchestratorRef: AutonomyOrchestrator | null = null;
   let ensureReflectionJobQueued: (() => void) | null = null;
+  /** When a heartbeat produces a proactive message, it is stored here so clients can retrieve it via heartbeat.poll or /status. */
+  let pendingProactiveMessage: string | null = null;
   if (config.reflection.enabled) {
     const speculativeTestRunner = new SpeculativeTestRunner({
       workspaceDir,
@@ -609,6 +611,12 @@ async function main(): Promise<void> {
           modulePath: match.modulePath
         }
       };
+    },
+    getPendingProactiveMessage: () => pendingProactiveMessage,
+    takePendingProactiveMessage: () => {
+      const msg = pendingProactiveMessage;
+      pendingProactiveMessage = null;
+      return msg;
     }
   });
 
@@ -629,6 +637,7 @@ async function main(): Promise<void> {
     port
   });
 
+  const birthPath = join(workspaceDir, config.substrate?.birthPath ?? "BIRTH.md");
   const orchestrator = new AutonomyOrchestrator({
     cronService,
     heartbeat,
@@ -642,6 +651,7 @@ async function main(): Promise<void> {
     cronTickMs: 1_000,
     integrityScanEveryMs: config.memory.integrityScanEveryMs,
     intentTickMs: 1_000,
+    ...(existsSync(birthPath) ? { firstHeartbeatDelayMs: 10_000 } : {}),
     onCronRun: async (job) => {
       const sessionId = job.isolated ? `cron:${job.id}` : "main";
       await runtime.runTurn({
@@ -659,12 +669,14 @@ async function main(): Promise<void> {
       });
     },
     onHeartbeatTurn: async (channelId) => {
-      // Heartbeat turn uses the same runtime.runTurn → buildPromptMessages path, so Identity and Soul
-      // (and optional User/Birth/Capabilities) are already in the system prompt. HEARTBEAT.md is the
-      // per-tick checklist and is prepended to the heartbeat user message below.
       const heartbeatPath = join(workspaceDir, "HEARTBEAT.md");
+      const birthPending = existsSync(birthPath);
+      const fallbackMessage =
+        "Hi — BIRTH is pending for this workspace. I'm here to help you set up: who you are (USER.md), who I am here (IDENTITY.md), and how you want to use this agent. What's your main use case, and what would you like to call me?";
+      try {
       const skipWhenEmpty = config.heartbeat.skipWhenEmpty === true;
-      if (skipWhenEmpty) {
+      // Do not skip heartbeat when BIRTH.md exists — agent must get a chance to send a proactive BIRTH message.
+      if (skipWhenEmpty && !birthPending) {
         if (!existsSync(heartbeatPath)) {
           return "HEARTBEAT_OK";
         }
@@ -690,6 +702,10 @@ async function main(): Promise<void> {
       } else {
         content = `Read HEARTBEAT.md if present. ${baseInstruction}`;
       }
+      if (birthPending) {
+        content =
+          `BIRTH.md is present. You must complete BIRTH proactively: reply with your message to the user (e.g. introduce yourself and ask for their use case and identity). Do not reply HEARTBEAT_OK — your reply will be delivered as a proactive message in the CursorClaw web UI Chat tab (the user is there, not in Cursor IDE).\n\n${content}`;
+      }
       const result = await runtime.runTurn({
         session: {
           sessionId: "heartbeat:main",
@@ -705,8 +721,26 @@ async function main(): Promise<void> {
           text: result.assistantText,
           proactive: true
         });
+        pendingProactiveMessage = result.assistantText;
+      } else if (birthPending) {
+        // Fallback: model returned HEARTBEAT_OK or empty; still deliver a BIRTH prompt so the user sees a proactive message
+        const fallbackMessage =
+          "Hi — BIRTH is pending for this workspace. I’m here to help you set up: who you are (USER.md), who I am here (IDENTITY.md), and how you want to use this agent. What’s your main use case, and what would you like to call me?";
+        await channelHub.send({
+          channelId,
+          text: fallbackMessage,
+          proactive: true
+        });
+        pendingProactiveMessage = fallbackMessage;
       }
       return reply === "" ? "HEARTBEAT_OK" : result.assistantText;
+      } catch (err) {
+        console.error("[CursorClaw] heartbeat turn error:", err);
+        if (birthPending) {
+          pendingProactiveMessage = fallbackMessage;
+        }
+        return "HEARTBEAT_OK";
+      }
     },
     onProactiveIntent: async (intent) => {
       const delivered = await channelHub.send({

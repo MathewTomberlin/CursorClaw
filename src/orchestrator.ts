@@ -20,6 +20,8 @@ export interface AutonomyOrchestratorOptions {
   cronTickMs: number;
   integrityScanEveryMs: number;
   intentTickMs?: number;
+  /** If set, used only for the first heartbeat schedule (e.g. when BIRTH.md exists so user sees a proactive message soon). */
+  firstHeartbeatDelayMs?: number;
   onCronRun: (job: CronJobDefinition) => Promise<void>;
   onHeartbeatTurn: (channelId: string) => Promise<string>;
   onProactiveIntent?: (intent: ProactiveIntent) => Promise<boolean>;
@@ -35,6 +37,8 @@ export class AutonomyOrchestrator {
   private lastHeartbeatResult: "HEARTBEAT_OK" | "SENT" = "HEARTBEAT_OK";
   private latestIntegrityFindings: IntegrityFinding[] = [];
   private pendingProactiveIntents = 0;
+  private firstHeartbeatNotYetScheduled = true;
+  private firstHeartbeatRunDone = false;
 
   constructor(private readonly options: AutonomyOrchestratorOptions) {}
 
@@ -126,7 +130,16 @@ export class AutonomyOrchestrator {
     if (!this.running) {
       return;
     }
-    const intervalMs = this.options.heartbeat.nextInterval({ unreadEvents });
+    const useFirstDelay =
+      this.firstHeartbeatNotYetScheduled &&
+      this.options.firstHeartbeatDelayMs != null &&
+      this.options.firstHeartbeatDelayMs > 0;
+    if (useFirstDelay) {
+      this.firstHeartbeatNotYetScheduled = false;
+    }
+    const intervalMs = useFirstDelay
+      ? this.options.firstHeartbeatDelayMs!
+      : this.options.heartbeat.nextInterval({ unreadEvents });
     this.heartbeatTimer = setTimeout(() => {
       void this.runHeartbeat().finally(() => {
         this.scheduleHeartbeat(0);
@@ -138,10 +151,18 @@ export class AutonomyOrchestrator {
     if (!this.running) {
       return;
     }
+    const bypassBudget =
+      !this.firstHeartbeatRunDone &&
+      this.options.firstHeartbeatDelayMs != null &&
+      this.options.firstHeartbeatDelayMs > 0;
+    if (bypassBudget) {
+      this.firstHeartbeatRunDone = true;
+    }
     const result = await this.options.heartbeat.runOnce({
       channelId: this.options.heartbeatChannelId,
       budget: this.options.budget,
-      turn: () => this.options.onHeartbeatTurn(this.options.heartbeatChannelId)
+      turn: () => this.options.onHeartbeatTurn(this.options.heartbeatChannelId),
+      ...(bypassBudget ? { bypassBudget: true } : {})
     });
     this.lastHeartbeatResult = result;
     await this.persistBudgetState();

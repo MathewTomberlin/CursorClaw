@@ -94,6 +94,10 @@ export interface GatewayDependencies {
   workspaceDir?: string;
   /** When substrate config is present, store for list/get/update/reload. */
   substrateStore?: SubstrateStore;
+  /** If set, used by heartbeat.poll and /status to expose proactive messages from heartbeat turns. */
+  getPendingProactiveMessage?: () => string | null;
+  /** If set, heartbeat.poll calls this to return and clear the pending proactive message. */
+  takePendingProactiveMessage?: () => string | null;
 }
 
 const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
@@ -119,7 +123,10 @@ const METHOD_SCOPES: Record<string, Array<"local" | "remote" | "admin">> = {
   "substrate.reload": ["admin", "local"],
   "memory.listLogs": ["admin", "local"],
   "memory.getFile": ["admin", "local"],
-  "memory.writeFile": ["admin", "local"]
+  "memory.writeFile": ["admin", "local"],
+  "heartbeat.poll": ["local", "remote", "admin"],
+  "heartbeat.getFile": ["local", "remote", "admin"],
+  "heartbeat.update": ["local", "remote", "admin"]
 };
 
 export function buildGateway(deps: GatewayDependencies): FastifyInstance {
@@ -200,7 +207,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
   });
 
   app.get("/status", async () => {
-    return {
+    const base = {
       gateway: "ok",
       defaultModel: deps.config.defaultModel,
       queueWarnings: deps.runtime.getQueueWarnings(),
@@ -220,6 +227,8 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         toolIsolationEnabled: deps.incidentCommander.isToolIsolationEnabled()
       }
     };
+    const pendingProactive = deps.getPendingProactiveMessage?.() ?? null;
+    return pendingProactive !== null ? { ...base, pendingProactiveMessage: pendingProactive } : base;
   });
 
   app.post("/rpc", async (request, reply) => {
@@ -581,6 +590,24 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
             }
           }
         };
+      } else if (body.method === "heartbeat.poll") {
+        const message = deps.takePendingProactiveMessage?.() ?? null;
+        result = message !== null ? { result: "ok", proactiveMessage: message } : { result: "ok" };
+      } else if (body.method === "heartbeat.getFile") {
+        if (!deps.workspaceDir) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "workspace not configured");
+        }
+        const heartbeatPath = join(deps.workspaceDir, "HEARTBEAT.md");
+        const content = await readFile(heartbeatPath, "utf8").catch(() => "");
+        result = { content };
+      } else if (body.method === "heartbeat.update") {
+        if (!deps.workspaceDir) {
+          throw new RpcGatewayError(400, "BAD_REQUEST", "workspace not configured");
+        }
+        const content = typeof body.params?.content === "string" ? body.params.content : String(body.params?.content ?? "");
+        const heartbeatPath = join(deps.workspaceDir, "HEARTBEAT.md");
+        await writeFile(heartbeatPath, content, "utf8");
+        result = { ok: true };
       } else if (body.method === "substrate.list") {
         if (!deps.substrateStore) {
           throw new RpcGatewayError(400, "BAD_REQUEST", "substrate not configured");

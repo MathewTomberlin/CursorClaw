@@ -128,11 +128,19 @@ export class HeartbeatRunner {
     channelId: string;
     budget: AutonomyBudget;
     turn: () => Promise<string>;
+    /** When true, run the turn even if budget would deny (e.g. first heartbeat when BIRTH exists). */
+    bypassBudget?: boolean;
   }): Promise<"HEARTBEAT_OK" | "SENT"> {
     if (!this.config.enabled) {
+      if (process.env.NODE_ENV !== "test") {
+        console.warn("[CursorClaw] heartbeat skipped: disabled in config");
+      }
       return "HEARTBEAT_OK";
     }
-    if (!args.budget.allow(args.channelId)) {
+    if (args.bypassBudget !== true && !args.budget.allow(args.channelId)) {
+      if (process.env.NODE_ENV !== "test") {
+        console.warn("[CursorClaw] heartbeat skipped: budget limit or quiet hours for channel", args.channelId);
+      }
       return "HEARTBEAT_OK";
     }
     const result = await args.turn();
