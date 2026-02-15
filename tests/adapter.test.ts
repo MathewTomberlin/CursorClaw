@@ -494,6 +494,74 @@ describe("CursorAgentModelAdapter", () => {
     }
   });
 
+  it("ollama provider accumulates streamed tool_calls by index (e.g. Granite3.2)", async () => {
+    const ollamaChunks = [
+      JSON.stringify({
+        message: { role: "assistant", content: "", tool_calls: [{ function: { name: "echo_tool" } }] },
+        done: false
+      }) + "\n",
+      JSON.stringify({
+        message: {
+          tool_calls: [{ function: { arguments: '{"value":"streamed"}' } }]
+        },
+        done: false
+      }) + "\n",
+      JSON.stringify({ done: true, eval_count: 5 }) + "\n"
+    ];
+    const stream = new ReadableStream({
+      start(controller) {
+        for (const chunk of ollamaChunks) {
+          controller.enqueue(new TextEncoder().encode(chunk));
+        }
+        controller.close();
+      }
+    });
+    const fetchStub = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: stream,
+      text: () => Promise.resolve("")
+    });
+    vi.stubGlobal("fetch", fetchStub);
+
+    try {
+      const adapter = new CursorAgentModelAdapter({
+        defaultModel: "local",
+        models: {
+          local: {
+            provider: "ollama",
+            ollamaModelName: "test-model",
+            baseURL: "http://localhost:11434",
+            timeoutMs: 10_000,
+            authProfiles: ["default"],
+            fallbackModels: [],
+            enabled: true
+          }
+        }
+      });
+      const session = await adapter.createSession({
+        sessionId: "s1",
+        channelId: "c1",
+        channelKind: "dm"
+      });
+      const events: Array<{ type: string; data?: unknown }> = [];
+      for await (const event of adapter.sendTurn(
+        session,
+        [{ role: "user", content: "call echo_tool" }],
+        [simpleTool],
+        { turnId: "ollama-stream-tool" }
+      )) {
+        events.push({ type: event.type, data: event.data });
+      }
+      expect(events.map((e) => e.type)).toContain("tool_call");
+      const toolCall = events.find((e) => e.type === "tool_call")?.data as { name?: string; args?: unknown };
+      expect(toolCall?.name).toBe("echo_tool");
+      expect(toolCall?.args).toEqual({ value: "streamed" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("ollama provider omits tools from request when tools array is empty", async () => {
     const ollamaChunks = [
       JSON.stringify({ message: { content: "Hi" }, done: false }) + "\n",

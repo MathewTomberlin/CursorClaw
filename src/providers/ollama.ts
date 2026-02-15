@@ -88,6 +88,8 @@ export class OllamaProvider implements ModelProvider {
 
       let promptTokens = 0;
       let completionTokens = 0;
+      /** Accumulate tool_calls by index across stream chunks (Ollama may stream name then arguments, e.g. Granite3.2). */
+      const toolCallsByIndex = new Map<number, { name: string; argsRaw: string | object }>();
       const emittedToolCallIndices = new Set<number>();
 
       for await (const chunk of streamReadLines(reader)) {
@@ -110,27 +112,73 @@ export class OllamaProvider implements ModelProvider {
         const toolCalls = parsed.message?.tool_calls;
         if (Array.isArray(toolCalls)) {
           for (let i = 0; i < toolCalls.length; i++) {
-            if (emittedToolCallIndices.has(i)) continue;
             const tc = toolCalls[i];
             const name = typeof tc?.function?.name === "string" ? tc.function.name : "";
-            if (!name) continue;
-            emittedToolCallIndices.add(i);
-            let args: unknown = tc?.function?.arguments ?? {};
-            if (typeof args === "string") {
-              try {
-                args = JSON.parse(args);
-              } catch {
-                args = {};
-              }
+            const argsRaw = tc?.function?.arguments;
+            const argsVal = argsRaw !== undefined && argsRaw !== null ? argsRaw : {};
+            const argsStr = typeof argsVal === "string" ? argsVal : JSON.stringify(argsVal);
+            const existing = toolCallsByIndex.get(i);
+            if (name) {
+              const merged = existing
+                ? { name, argsRaw: (typeof existing.argsRaw === "string" ? existing.argsRaw : JSON.stringify(existing.argsRaw)) + argsStr }
+                : { name, argsRaw: argsStr };
+              toolCallsByIndex.set(i, merged);
+            } else if (existing) {
+              const prevStr = typeof existing.argsRaw === "string" ? existing.argsRaw : JSON.stringify(existing.argsRaw);
+              const nextRaw = argsStr.trim();
+              const isCompleteJson = nextRaw.length > 0 && (nextRaw.startsWith("{") || nextRaw.startsWith("["));
+              const mergedArgs = isCompleteJson && (() => { try { JSON.parse(nextRaw); return true; } catch { return false; } })()
+                ? nextRaw
+                : prevStr + argsStr;
+              toolCallsByIndex.set(i, { name: existing.name, argsRaw: mergedArgs });
             }
-            yield { type: "tool_call", data: { name, args } };
           }
         }
         if (parsed.done === true) {
           if (typeof parsed.eval_count === "number") {
             completionTokens = parsed.eval_count;
           }
+          for (const [idx] of toolCallsByIndex) {
+            if (emittedToolCallIndices.has(idx)) continue;
+            const acc = toolCallsByIndex.get(idx);
+            if (acc?.name) {
+              emittedToolCallIndices.add(idx);
+              let args: unknown = acc.argsRaw;
+              if (typeof args === "string") {
+                try {
+                  args = JSON.parse(args);
+                } catch {
+                  args = {};
+                }
+              }
+              yield { type: "tool_call", data: { name: acc.name, args } };
+            }
+          }
           break;
+        }
+        for (const [idx, acc] of toolCallsByIndex) {
+          if (emittedToolCallIndices.has(idx) || !acc.name) continue;
+          const asStr = typeof acc.argsRaw === "string" ? acc.argsRaw : JSON.stringify(acc.argsRaw);
+          const trimmed = asStr.trim();
+          if (trimmed.length > 0 && (trimmed.startsWith("{") || trimmed.startsWith("["))) {
+            try {
+              const parsedArgs = JSON.parse(trimmed) as object;
+              if (typeof parsedArgs === "object" && parsedArgs !== null && Object.keys(parsedArgs).length > 0) {
+                emittedToolCallIndices.add(idx);
+                let args: unknown = acc.argsRaw;
+                if (typeof args === "string") {
+                  try {
+                    args = JSON.parse(args);
+                  } catch {
+                    args = {};
+                  }
+                }
+                yield { type: "tool_call", data: { name: acc.name, args } };
+              }
+            } catch {
+              // not yet complete JSON or empty object; keep accumulating
+            }
+          }
         }
       }
 

@@ -2,9 +2,35 @@
 
 **Scope:** Extend the Ollama provider (`src/providers/ollama.ts`) so it can send tools to the Ollama API and parse tool-call responses into adapter `tool_call` events. This enables the PMR `validate-model --fullSuite` tool-call check and runtime tool use when an Ollama model is in the fallback chain.
 
-**Status:** Implemented (branch `feature/ollama-tool-call-support`). Best-effort per PMR §8; no parity guarantee with Cursor Auto.
+**Status:** Implemented (branch `feature/ollama-tool-call-support` merged). Best-effort per PMR §8; no parity guarantee with Cursor Auto.
 
-**Implemented:** Request includes OpenAI-style `tools` when `tools.length > 0`. Response parsing reads `message.tool_calls[]` (each `{ function: { name, arguments } }`); `arguments` may be object or JSON string. One `tool_call` event per call; streaming chunks deduplicated by index. No new config; see §3 for version/model requirements.
+**Implemented:** Request includes OpenAI-style `tools` when `tools.length > 0`. Response parsing reads `message.tool_calls[]` (each `{ function: { name, arguments } }`); `arguments` may be object or JSON string. One `tool_call` event per call; streaming chunks accumulated by index so that when Ollama streams tool-call deltas (e.g. Granite3.2), the provider merges arguments and emits once per index with final args. No new config; see §3 for version/model requirements.
+
+**Recommended models for tool use:** **Granite 3.2** (e.g. `ollama pull granite3.2` or `ibm-granite3.2`) and other [Ollama models that support tool calling](https://ollama.com/search?c=tool). Use `validate-model -- --modelId=<id> --fullSuite` to confirm tool and reasoning checks pass for your model.
+
+**Capabilities (e.g. Granite 3.2):** The provider supports streaming tool calls: when Ollama streams `message.tool_calls` across chunks (name in one chunk, arguments in another), the provider accumulates by index and emits one `tool_call` event per call with the final merged arguments. This matches behavior used by models like Granite 3.2. Tool-call and reasoning validation are covered by `validate-model --fullSuite`. See **§7** for model capabilities and Granite 3.2 details.
+
+---
+
+## 7. Ollama models and capabilities (Granite 3.2)
+
+This section summarizes which Ollama models support tool use, how to validate them, and notes specific to **Granite 3.2**.
+
+### Recommended models for tool use
+
+- **Granite 3.2** — Strong choice for tool use and reasoning in a single model. Pull with `ollama pull granite3.2` (or `ibm-granite3.2`). Use `ollamaModelName: "granite3.2"` (or the exact name from `ollama list`). The provider already handles Granite 3.2’s streaming tool-call deltas (name then arguments streamed per index); no extra provider tweaks are required.
+- **Other tool-capable models** — Discover current models at [Ollama: tool calling](https://ollama.com/search?c=tool). Any model that supports the Ollama tools API will work with this provider; behavior is best-effort per PMR §8.
+
+### Validation
+
+- Run the full capability suite before relying on tool use:  
+  `npm run validate-model -- --modelId=<your-ollama-model-id> --fullSuite`
+- This runs the **toolCall** and **reasoning** checks. Pass means the model is recorded in the validation store and can be used with `useOnlyValidatedFallbacks` if desired.
+- If validation fails, ensure Ollama is up to date and the model supports tool calling; see [Ollama API](https://github.com/ollama/ollama/blob/main/docs/api.md) and the model’s card on ollama.com.
+
+### Streaming tool_calls
+
+Ollama may stream tool-call content (e.g. `function.name` in one chunk, `function.arguments` in later chunks). The provider accumulates by call index and emits one `tool_call` event per call when the arguments form valid JSON (or on `done`). No additional provider changes are needed for Granite 3.2 or other models that stream tool calls in this way.
 
 ---
 

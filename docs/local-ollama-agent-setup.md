@@ -7,7 +7,7 @@ This guide walks through running CursorClaw with a **local Ollama** model as the
 ## 1. Prerequisites
 
 - **Ollama** installed and running (e.g. `ollama serve` or the Ollama app). Default API: `http://localhost:11434`.
-- **Model pulled:** e.g. `ollama pull llama3.2` (or another model that fits your RAM/VRAM). For tool use and reasoning, prefer a model that supports tools (see [Ollama tool-call support](Ollama-tool-call-support.md)).
+- **Model pulled:** e.g. `ollama pull llama3.2`, `ollama pull granite3.2` (or another model that fits your RAM/VRAM). For **tool use and reasoning**, prefer a model that supports tools—e.g. **Granite 3.2** (`granite3.2` / `ibm-granite3.2`) or others; see [Ollama tool-call support](Ollama-tool-call-support.md).
 
 ---
 
@@ -108,3 +108,5 @@ The Ollama provider supports **tool-call** flow: it sends tools to the Ollama AP
 - **Runtime tool use** works: the agent receives `tool_call` events and can execute tools and continue the loop.
 
 If the model or Ollama does not support tools, the agent still runs for text-only turns. See [Ollama-tool-call-support.md](Ollama-tool-call-support.md) and [PMR](PMR-provider-model-resilience.md) §8 for version/model requirements and best-effort behavior.
+
+**Granite 3.2:** For strong tool use and reasoning with a single model, consider **Granite 3.2** (e.g. `ollama pull granite3.2`). Configure it with `ollamaModelName: "granite3.2"` (or the exact name shown by `ollama list`). Run `npm run validate-model -- --modelId=<your-granite-model-id> --fullSuite` to confirm tool-call and reasoning checks pass.
