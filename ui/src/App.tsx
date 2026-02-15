@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate, NavLink, useNavigate } from "react-router-dom";
 import { isAuthenticated, clearAuth } from "./api";
+import { ChatProvider } from "./contexts/ChatContext";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Chat from "./pages/Chat";
@@ -25,8 +26,9 @@ function Shell() {
   };
   return (
     <div className="app">
-      <div className="app-shell">
-        <nav className="nav">
+      <ChatProvider>
+        <div className="app-shell">
+          <nav className="nav">
           <NavLink to="/" end className={({ isActive }) => (isActive ? "active" : "")}>
             Dashboard
           </NavLink>
@@ -64,7 +66,8 @@ function Shell() {
             <Route path="/trace" element={<Trace />} />
           </Routes>
         </main>
-      </div>
+        </div>
+      </ChatProvider>
       <footer className="footer">
         <span>CursorClaw</span>
         <button type="button" className="btn" onClick={handleLogout}>

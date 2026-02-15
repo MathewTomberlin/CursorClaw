@@ -1,25 +1,9 @@
 import { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { rpc, mapRpcError, openStream } from "../api";
-
-type ChannelKind = "dm" | "group" | "web" | "mobile";
-
-interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  at?: string;
-}
-
-/** Lifecycle event from /stream (queued, started, tool, assistant, compaction, completed, failed). */
-interface StreamEvent {
-  type: string;
-  sessionId?: string;
-  runId?: string;
-  payload?: { call?: { name?: string }; content?: string; error?: string; reason?: string };
-  at?: string;
-}
+import { rpc, mapRpcError } from "../api";
+import { useChat } from "../contexts/ChatContext";
+import type { StreamEvent } from "../contexts/ChatContext";
 
 function formatStreamEventLabel(ev: StreamEvent): string {
   switch (ev.type) {
@@ -44,48 +28,31 @@ function formatStreamEventLabel(ev: StreamEvent): string {
   }
 }
 
-const STORAGE_KEY_PREFIX = "cursorclaw_chat_";
-
-function loadThread(sessionId: string): ChatMessage[] {
-  try {
-    const raw = sessionStorage.getItem(STORAGE_KEY_PREFIX + sessionId);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as ChatMessage[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveThread(sessionId: string, messages: ChatMessage[]): void {
-  try {
-    sessionStorage.setItem(STORAGE_KEY_PREFIX + sessionId, JSON.stringify(messages));
-  } catch {
-    // ignore
-  }
-}
-
-function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-}
-
 export default function Chat() {
-  const [sessionId, setSessionId] = useState("demo-session");
-  const [channelId, setChannelId] = useState("dm:demo-session");
-  const [channelKind, setChannelKind] = useState<ChannelKind>("dm");
-  const [messages, setMessages] = useState<ChatMessage[]>(() => loadThread("demo-session"));
+  const {
+    sessionId,
+    setSessionId,
+    channelId,
+    setChannelId,
+    channelKind,
+    setChannelKind,
+    messages,
+    loading,
+    streamEvents,
+    currentRunId,
+    loadingStartedAt,
+    error,
+    setError,
+    runTurn: runTurnFromContext,
+    clearThread
+  } = useChat();
+
   const [input, setInput] = useState("");
-  const [streamEvents, setStreamEvents] = useState<StreamEvent[]>([]);
-  const [currentRunId, setCurrentRunId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [channelConfigOpen, setChannelConfigOpen] = useState(false);
   const [chatSendResult, setChatSendResult] = useState<string | null>(null);
   const [chatSendError, setChatSendError] = useState<string | null>(null);
   const [channelSendText, setChannelSendText] = useState("");
-  const streamRef = useRef<EventSource | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
   const [, setLoadingTick] = useState(0);
 
   // While loading, tick every 500ms so "Working…" fallback can appear after delay
@@ -95,115 +62,16 @@ export default function Chat() {
     return () => clearInterval(interval);
   }, [loading, loadingStartedAt]);
 
-  // Persist thread when session or messages change
-  useEffect(() => {
-    if (sessionId.trim()) saveThread(sessionId.trim(), messages);
-  }, [sessionId, messages]);
-
-  // Load thread when session changes
-  useEffect(() => {
-    const sid = sessionId.trim();
-    if (sid) setMessages(loadThread(sid));
-  }, [sessionId]);
-
-  // Keep lifecycle stream open for current session so we receive status events before/during run
-  useEffect(() => {
-    const sid = sessionId.trim();
-    if (!sid) return;
-    if (streamRef.current) {
-      streamRef.current.close();
-      streamRef.current = null;
-    }
-    const es = openStream(sid);
-    streamRef.current = es;
-    es.onmessage = (ev) => {
-      try {
-        const data = JSON.parse(ev.data) as StreamEvent;
-        setStreamEvents((prev) => [...prev, data]);
-      } catch {
-        // ignore
-      }
-    };
-    es.onerror = () => {
-      es.close();
-      streamRef.current = null;
-    };
-    return () => {
-      es.close();
-      if (streamRef.current === es) streamRef.current = null;
-    };
-  }, [sessionId]);
-
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, streamEvents]);
 
-  useEffect(() => {
-    return () => {
-      if (streamRef.current) {
-        streamRef.current.close();
-        streamRef.current = null;
-      }
-    };
-  }, []);
-
   const runTurn = async () => {
     const text = input.trim();
-    if (!text || !sessionId.trim() || !channelId.trim()) {
-      setError("Session ID, channel ID, and message are required.");
-      return;
-    }
-    setError(null);
-    setCurrentRunId(null);
-    setLoading(true);
-    setLoadingStartedAt(Date.now());
+    if (!text) return;
     setInput("");
-
-    const userMsg: ChatMessage = {
-      id: generateId(),
-      role: "user",
-      content: text,
-      at: new Date().toISOString()
-    };
-    setMessages((prev) => [...prev, userMsg]);
-
-    try {
-      // Stream is already open from useEffect; we only clear events for this turn
-
-      const messageHistory = [...messages, userMsg];
-      const apiMessages = messageHistory
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m) => ({ role: m.role, content: m.content }));
-
-      const runRes = await rpc<{ runId: string }>("agent.run", {
-        session: { sessionId: sessionId.trim(), channelId: channelId.trim(), channelKind },
-        messages: apiMessages
-      });
-      const runId = runRes.result?.runId;
-      if (!runId) throw new Error("No runId returned");
-      setCurrentRunId(runId);
-      const waitRes = await rpc<{ assistantText: string; events?: unknown[] }>("agent.wait", { runId });
-      const out = waitRes.result;
-      const assistantText = out?.assistantText ?? "";
-
-      const assistantMsg: ChatMessage = {
-        id: generateId(),
-        role: "assistant",
-        content: assistantText,
-        at: new Date().toISOString()
-      };
-      setMessages((prev) => [...prev, assistantMsg]);
-    } catch (e) {
-      setError(
-        e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } })
-      );
-      setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
-    } finally {
-      setLoading(false);
-      setLoadingStartedAt(null);
-      setCurrentRunId(null);
-    }
+    await runTurnFromContext(text);
   };
 
   // Events for the current run: filter by runId once we have it, else show recent events so "Queued" can appear before runId
@@ -256,17 +124,6 @@ export default function Chat() {
     }
   };
 
-  const clearThread = () => {
-    setMessages([]);
-    if (sessionId.trim()) {
-      try {
-        sessionStorage.removeItem(STORAGE_KEY_PREFIX + sessionId.trim());
-      } catch {
-        // ignore
-      }
-    }
-  };
-
   return (
     <div className="chat-page">
       <div className="chat-layout">
@@ -306,7 +163,7 @@ export default function Chat() {
               </div>
               <div className="form-group">
                 <label>Channel kind</label>
-                <select value={channelKind} onChange={(e) => setChannelKind(e.target.value as ChannelKind)}>
+                <select value={channelKind} onChange={(e) => setChannelKind(e.target.value as "dm" | "group" | "web" | "mobile")}>
                   <option value="dm">dm</option>
                   <option value="group">group</option>
                   <option value="web">web</option>

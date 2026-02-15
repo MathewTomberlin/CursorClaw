@@ -147,7 +147,7 @@ export default function Dashboard() {
               </button>
               {restarting && (
                 <p style={{ fontSize: "0.875rem", color: "var(--text-muted)", marginTop: "0.5rem" }}>
-                  Building if needed, then restarting. This page will disconnect.
+                  Building, then restarting. This page will disconnect.
                 </p>
               )}
               {!restarting && (

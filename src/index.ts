@@ -472,23 +472,15 @@ async function main(): Promise<void> {
     lifecycleStream,
     ...(existsSync(uiDist) ? { uiDistPath: uiDist } : {}),
     onRestart: async () => {
-      let buildRan = false;
       try {
-        const out = execSync("git status --porcelain -- src ui package.json ui/package.json tsconfig.json ui/tsconfig.json", {
-          cwd: workspaceDir,
-          encoding: "utf8",
-          maxBuffer: 1024 * 1024
-        });
-        if (out.trim().length > 0) {
-          execSync("npm run build", { cwd: workspaceDir, encoding: "utf8", stdio: "inherit" });
-          buildRan = true;
-        }
-      } catch {
-        // Not a git repo or git failed: skip build and just restart
+        execSync("npm run build", { cwd: workspaceDir, encoding: "utf8", stdio: "inherit" });
+      } catch (err) {
+        // Build failed: do not exit so the process keeps running and the user can fix errors.
+        throw err instanceof Error ? err : new Error(String(err));
       }
       // Exit with RESTART_EXIT_CODE so run-with-restart wrapper (npm run start:watch) re-runs in the same terminal.
       process.exit(RESTART_EXIT_CODE);
-      return { buildRan };
+      return { buildRan: true };
     },
     onActivity: () => {
       idleScheduler.noteActivity();

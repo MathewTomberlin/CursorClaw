@@ -153,7 +153,7 @@ export interface StatusPayload {
   incident: { proactiveSendsDisabled: boolean; toolIsolationEnabled: boolean };
 }
 
-/** Restart the framework (builds if there are source changes, then restarts). Requires admin/local auth. */
+/** Restart the framework (runs full build, then restarts). Requires admin/local auth. */
 export async function restartFramework(): Promise<{ buildRan?: boolean }> {
   const res = await rpc<{ buildRan?: boolean }>("admin.restart");
   return res.result ?? {};
