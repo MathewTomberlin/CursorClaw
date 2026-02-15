@@ -13,3 +13,10 @@ CLAW_HISTORY.log
 openclaw.json
 .env
 .env.local
+
+HEARTBEAT.md
+IDENTITY.md
+USER.md
+SOUL.md
+TOOLS.md
+CAPABILITIES.md
