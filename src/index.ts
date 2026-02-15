@@ -467,6 +467,7 @@ async function main(): Promise<void> {
   };
 
   const lifecycleStream = new InMemoryLifecycleStream();
+  const sessionStartMs = Date.now();
   const runtime = new AgentRuntime({
     config,
     adapter,
@@ -475,6 +476,7 @@ async function main(): Promise<void> {
     pluginHost,
     observationStore,
     decisionJournal,
+    sessionStartMs,
     failureLoopGuard: new FailureLoopGuard({
       escalationThreshold: config.reliability.failureEscalationThreshold
     }),

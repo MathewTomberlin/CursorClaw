@@ -200,6 +200,8 @@ export interface ProviderModelResilienceConfig {
   useOnlyValidatedFallbacks?: boolean;
   /** When true, allow validation probe to run against paid APIs (e.g. OpenAI). Default false. */
   runValidationAgainstPaidApis?: boolean;
+  /** When true and useOnlyValidatedFallbacks is true, if no validated model exists allow one attempt with the unfiltered chain and log a warning; if that fails, throw as usual. Default false. */
+  allowOneUnvalidatedAttempt?: boolean;
 }
 
 export interface ContinuityConfig {
@@ -225,8 +227,15 @@ export interface ContinuityConfig {
   memoryMaxChars?: number;
   /** When rolling window is enabled, trimmed lines can be appended here (e.g. "memory/MEMORY-archive.md"). Omit to drop without archiving. */
   memoryArchivePath?: string;
-  /** Number of recent decision journal entries to replay into the system prompt (default 5, clamped 1–100). */
+  /** Number of recent decision journal entries to replay into the system prompt (default 5, clamped 1–100). Used when decisionJournalReplayMode is "count". */
   decisionJournalReplayCount?: number;
+  /**
+   * How to select which decision journal entries to replay: "count" (default) = last N entries;
+   * "sinceLastSession" = entries since process start; "sinceHours" = entries within the last N hours (use decisionJournalReplaySinceHours).
+   */
+  decisionJournalReplayMode?: "count" | "sinceLastSession" | "sinceHours";
+  /** When decisionJournalReplayMode is "sinceHours", replay entries from the last N hours (default 24). Capped at 168 (1 week). */
+  decisionJournalReplaySinceHours?: number;
 }
 
 export interface CursorClawConfig {
@@ -413,7 +422,9 @@ export const DEFAULT_CONFIG: CursorClawConfig = {
     memoryEmbeddingsMaxRecords: 3_000,
     memorySizeWarnChars: 28_800,
     substrateSizeWarnChars: 60_000,
-    decisionJournalReplayCount: 5
+    decisionJournalReplayCount: 5,
+    decisionJournalReplayMode: "count",
+    decisionJournalReplaySinceHours: 24
   }
 };
 

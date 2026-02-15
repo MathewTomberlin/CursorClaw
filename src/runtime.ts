@@ -193,6 +193,8 @@ export interface AgentRuntimeOptions {
   recordRecentTopic?: (profileRoot: string, sessionId: string, topic: string) => Promise<void>;
   /** When set, called for main session; if it returns a string, injected once as a system notice (e.g. "Previous run was interrupted by process restart"). */
   getInterruptedRunNotice?: () => Promise<string | undefined>;
+  /** Process start time (ms since epoch). Used for decision journal replay mode "sinceLastSession". */
+  sessionStartMs?: number;
 }
 
 export class AgentRuntime {
@@ -937,7 +939,14 @@ export class AgentRuntime {
         100,
         Math.max(1, this.options.config.continuity?.decisionJournalReplayCount ?? 5)
       );
-      const recentDecisions = await this.options.decisionJournal.readRecent(limit);
+      const mode = this.options.config.continuity?.decisionJournalReplayMode ?? "count";
+      const recentDecisions = await this.options.decisionJournal.readEntriesForReplay({
+        limit,
+        mode,
+        sinceHours: this.options.config.continuity?.decisionJournalReplaySinceHours ?? 24,
+        maxEntries: 100,
+        ...(this.options.sessionStartMs !== undefined && { sessionStartMs: this.options.sessionStartMs })
+      });
       if (recentDecisions.length > 0) {
         systemMessages.push({
           role: "system",
