@@ -43,6 +43,8 @@ Optional trusted identity header enforcement:
 }
 ```
 
+**Profile-scoped RPCs:** For multi-agent setups, `params` may include an optional `profileId` string. When present, the request is executed in the context of that agent profile (substrate, memory, approvals, etc.). When omitted, the gateway uses the default profile. Single-agent deployments ignore this and use the single profile. Profile-scoped methods include: `heartbeat.poll`, `heartbeat.getFile`, `heartbeat.update`, `memory.*`, `substrate.*`, `skills.list`, `skills.fetchFromUrl`, `skills.analyze`, `skills.install`, `skills.credentials.set`, `skills.credentials.delete`, `skills.credentials.list`, `provider.credentials.set`, `provider.credentials.delete`, `provider.credentials.list`, `provider.models.list`, `approval.*`, `cron.list`/`cron.add`, `workspace.status`/`workspace.semantic_search`, `trace.ingest`, `advisor.file_change`/`advisor.explain_function`, `incident.bundle`, `chat.getThread`, and `thread.set`. `agent.run` accepts `session.profileId` to run the turn in that profile's context.
+
 ### Success response
 
 ```json
@@ -99,6 +101,8 @@ Returns operational snapshot including:
 
 - `gateway`
 - `defaultModel`
+- `profiles` — array of `{ id, root, modelId? }`; when no profiles are configured, `[{ id: "default", root: "." }]`
+- `defaultProfileId` — id of the default profile
 - `queueWarnings`
 - `runtimeMetrics`
 - `schedulerBacklog`
@@ -115,6 +119,8 @@ Method scope rules (`METHOD_SCOPES`):
 - `agent.run`: local, remote, admin
 - `agent.wait`: local, remote, admin
 - `chat.send`: local, remote, admin
+- `chat.getThread`: local, remote, admin
+- `thread.set`: local, remote, admin
 - `cron.add`: admin, local
 - `cron.list`: admin, local
 - `incident.bundle`: admin
@@ -127,10 +133,27 @@ Method scope rules (`METHOD_SCOPES`):
 - `trace.ingest`: local, remote, admin
 - `advisor.explain_function`: local, remote, admin
 - `config.get`: admin, local
+- `profile.list`: admin, local
+- `profile.create`: admin, local
+- `profile.delete`: admin, local
 - `substrate.list`: admin, local
 - `substrate.get`: admin, local
 - `substrate.update`: admin, local
 - `substrate.reload`: admin, local
+- `heartbeat.poll`: local, remote, admin
+- `heartbeat.getFile`: admin, local
+- `heartbeat.update`: admin, local
+- `skills.fetchFromUrl`: admin, local
+- `skills.list`: admin, local
+- `skills.analyze`: admin, local
+- `skills.install`: admin, local
+- `skills.credentials.set`: admin, local
+- `skills.credentials.delete`: admin, local
+- `skills.credentials.list`: admin, local
+- `provider.credentials.set`: admin, local
+- `provider.credentials.delete`: admin, local
+- `provider.credentials.list`: admin, local
+- `provider.models.list`: admin, local
 
 ---
 
@@ -165,18 +188,18 @@ Waits for a run started by `agent.run`.
 `params`:
 
 - `runId: string` (required)
+- `block?: boolean` (optional, default `false`). When `true`, the request blocks until the run completes (same as previous behavior). When `false`, if the run is still in progress the server returns immediately with `{ status: "pending", runId }` so the client can poll and avoid long-lived connection timeouts ("Failed to fetch").
 
-Returns full `TurnResult` when complete, including:
+Returns:
 
-- `runId`
-- `assistantText`
-- `events`
-- optional confidence fields (`confidenceScore`, `confidenceRationale`, `requiresHumanHint`)
+- If run is still in progress and `block` is not `true`: `{ status: "pending", runId }`.
+- When complete: full `TurnResult` including `assistantText`, `events`, and optional confidence fields.
 
 Important behavior:
 
 - Completed/failed run entries are consumed after retrieval.
 - A second `agent.wait` on same run usually returns `NOT_FOUND`.
+- The UI polls `agent.wait` without `block` to avoid browser/proxy timeouts on long turns.
 
 ---
 
@@ -198,6 +221,37 @@ Behavior:
 - If `proactive=true` and incident mode disabled proactive sends, returns `FORBIDDEN`.
 - Behavior policy may pace/block a send and return `{ delivered: false, reason: "paced" }`.
 - Greeting policy can prepend `"Hi! "` in eligible new-thread cases.
+
+---
+
+### 5.3.1 `chat.getThread`
+
+Returns the persisted chat thread (message list) for a session so desktop and mobile (e.g. via Tailscale) see the same messages. Profile-scoped; when `profileId` is omitted, the default profile is used.
+
+`params`:
+
+- `sessionId: string` (required)
+
+Returns:
+
+- `messages: Array<{ id: string; role: "user" | "assistant"; content: string; at?: string }>`
+
+When the thread store is not configured or the session has no persisted thread, returns `{ messages: [] }`. The thread is updated on each `agent.run` (request message list is stored), when the run completes (assistant reply is appended), and when the client calls `thread.set`.
+
+---
+
+### 5.3.2 `thread.set`
+
+Persists the full chat thread for a session so that other clients (e.g. desktop and Tailscale) see the same messages. Profile-scoped via optional `params.profileId`. Use after the UI updates the message list (e.g. after a streamed assistant message) so the server state stays in sync.
+
+`params`:
+
+- `sessionId: string` (required)
+- `messages: Array<{ role: string; content: string }>` (required)
+
+Returns:
+
+- `ok: true` when the thread store is configured and write succeeded. If the thread store is not configured, the call still returns `{ ok: true }` (no-op).
 
 ---
 
@@ -403,11 +457,76 @@ Returns current runtime config with secrets redacted (admin, local).
 
 No params.
 
-Returns the same shape as [Configuration Reference](configuration-reference.md); `gateway.auth.token` and `gateway.auth.password` are replaced with `{ redacted: true, length?: number }`.
+Returns the same shape as [Configuration Reference](configuration-reference.md); `gateway.auth.token` and `gateway.auth.password` are replaced with `{ redacted: true, length?: number }`. Includes `profiles` when present.
 
 ---
 
-### 5.16 `substrate.list`
+### 5.15.1 `config.reload`
+
+Reloads config from disk (`openclaw.json` or `CURSORCLAW_CONFIG_PATH`). The in-memory config is replaced immediately; heartbeat interval and other live settings apply on the next tick without restart. Requires `workspaceRoot` to be configured (admin, local).
+
+No params.
+
+Returns `{ ok: true }`.
+
+---
+
+### 5.15.2 `config.patch`
+
+Merges a partial config into the current config and writes to disk. Only top-level keys in the allowlist are merged (e.g. `heartbeat`, `autonomyBudget`, `memory`, `reflection`, `session`, `compaction`, `workspaces`, `contextCompression`, `networkTrace`, `metrics`, `reliability`, `tools`, `substrate`, `profiles`). You can also pass `gateway` with **only** `bindAddress` and/or `bind`: `{ gateway: { bindAddress: "100.64.1.1" } }` (e.g. for Tailscale). Gateway auth, `defaultModel`, and `models` are not patchable. Changes apply in memory immediately; a change to `gateway.bindAddress` or `gateway.bind` takes effect only after restart. Requires `workspaceRoot` (admin, local). Requests from Tailscale IPs (100.x) are treated as local, so you can set the bind address and use Restart from another Tailscale device.
+
+`params`: partial config object, e.g. `{ heartbeat: { everyMs: 60000, enabled: true } }` or `{ gateway: { bindAddress: "100.64.1.1" } }`.
+
+Returns `{ ok: true }`.
+
+---
+
+### 5.16 `profile.list`
+
+Returns the list of agent profiles and the default profile id (admin, local).
+
+No params.
+
+Returns:
+
+```json
+{
+  "profiles": [ { "id": "default", "root": "." }, { "id": "assistant", "root": "profiles/assistant", "modelId": null } ],
+  "defaultProfileId": "default"
+}
+```
+
+When no profiles are configured, returns `profiles: [{ id: "default", root: "." }]` and `defaultProfileId: "default"`.
+
+---
+
+### 5.17 `profile.create`
+
+Creates a new agent profile and persists config (admin, local). Requires `workspaceRoot` to be configured on the gateway.
+
+`params`:
+
+- `id: string` (required) — unique profile id
+- `root: string` (required) — workspace-relative path for the profile root; must resolve under workspace (no path traversal)
+
+Creates the profile root directory (mkdir -p). If no profiles exist yet, adds a default profile plus the new one. Returns `{ profile: { id, root }, configPath }`. Fails with `BAD_REQUEST` if id is empty, duplicate, or root is outside workspace.
+
+---
+
+### 5.18 `profile.delete`
+
+Deletes an agent profile and persists config (admin, local). Requires `workspaceRoot` to be configured.
+
+`params`:
+
+- `id: string` (required) — profile id to remove
+- `removeDirectory?: boolean` — if true, deletes the profile root directory (only if under workspace)
+
+Returns `{ ok: true }`. Fails with `BAD_REQUEST` if there are no profiles (single default mode) or if deleting the only profile. Fails with `NOT_FOUND` if the profile id does not exist.
+
+---
+
+### 5.19 `substrate.list`
 
 Returns which substrate files exist and their workspace-relative paths (admin, local). Requires substrate config to be present.
 
@@ -426,7 +545,7 @@ Returns:
 
 ---
 
-### 5.17 `substrate.get`
+### 5.20 `substrate.get`
 
 Returns substrate content for the UI. If `key` is omitted, returns full `SubstrateContent`; if `key` is provided, returns `{ [key]: string | undefined }` (admin, local).
 
@@ -438,7 +557,7 @@ Edits take effect on the next agent turn without restart (runtime reads from sto
 
 ---
 
-### 5.18 `substrate.update`
+### 5.21 `substrate.update`
 
 Writes content for one substrate key to the workspace file and updates the in-memory cache (admin, local). Path is resolved from config; must be under workspace root. Only allowed keys: agents, identity, soul, birth, capabilities, user, tools.
 
@@ -451,11 +570,95 @@ Returns `{ ok: true }`. On path traversal or invalid key, returns `BAD_REQUEST`.
 
 ---
 
-### 5.19 `substrate.reload`
+### 5.22 `substrate.reload`
 
 Re-reads all substrate files from disk and replaces the in-memory cache (admin, local). Use when files were edited outside the UI so the next turn uses the new content.
 
 No params. Returns `{ ok: true }`.
+
+---
+
+### 5.23 `skills.install`
+
+Fetches (if URL given) or uses provided definition, runs safety check, then runs the install section in a restricted context (profile `skills/install/<skillId>`). Records the skill in the profile's installed manifest (admin, local). Requires profile root.
+
+`params`:
+
+- **Option A:** `url: string` (required) — fetch skill.md from URL, parse, safety-check, then install.
+- **Option B:** `definition: object` (required) and `sourceUrl: string` (required) — use pre-fetched definition; `definition` must have `description`, `install`, `credentials`, `usage` (strings).
+- `skillId?: string` — optional id for the skill; default derived from URL path or `"skill"`.
+
+If safety check fails, returns `BAD_REQUEST` with reason. If install script fails, returns `result: { installed: false, skillId, error, stdout, stderr }`. On success returns `result: { installed: true, skillId, credentialNames, stdout, stderr }`. Credential names are parsed from the Credentials section (backticked names); the user can set values via `skills.credentials.set`.
+
+---
+
+### 5.24 `skills.credentials.set`
+
+Stores a credential value for a skill (admin, local). Profile-scoped; requires profile root. Values are never returned to the agent or included in prompts or logs.
+
+`params`: `skillId: string`, `keyName: string`, `value: string`. All required. `skillId` and `keyName` must match `[a-zA-Z0-9_-]+`.
+
+Returns `{ ok: true }`.
+
+---
+
+### 5.25 `skills.credentials.delete`
+
+Removes a credential for a skill (admin, local). Profile-scoped.
+
+`params`: `skillId: string`, `keyName: string`. Both required.
+
+Returns `{ deleted: boolean }` — `true` if the key existed and was removed.
+
+---
+
+### 5.26 `skills.credentials.list`
+
+Lists credential **names** for a skill (no values). Profile-scoped.
+
+`params`: `skillId: string` (required).
+
+Returns `{ names: string[] }`.
+
+---
+
+### 5.27 `provider.credentials.set`
+
+Stores a provider API key (or other credential) for a profile (admin, local). Used when a model provider config uses `apiKeyRef: "profile:providerId"` or `"profile:providerId.keyName"`. Profile-scoped; requires profile root. Values are never returned to the agent or included in prompts or logs.
+
+`params`: `providerId: string`, `keyName: string`, `value: string`. All required. `providerId` and `keyName` must match `[a-zA-Z0-9_-]+`. Typical provider ids: `openai-compatible`. Default key name is `apiKey`.
+
+Returns `{ ok: true }`.
+
+---
+
+### 5.28 `provider.credentials.delete`
+
+Removes a provider credential by key name. Profile-scoped.
+
+`params`: `providerId: string`, `keyName: string`. Both required.
+
+Returns `{ deleted: boolean }` — `true` if the key existed and was removed.
+
+---
+
+### 5.29 `provider.credentials.list`
+
+Lists credential **names** for a provider (no values). Profile-scoped.
+
+`params`: `providerId: string` (required).
+
+Returns `{ names: string[] }`.
+
+---
+
+### 5.30 `provider.models.list`
+
+Lists models available from a provider (for discovery when configuring profile or model). Profile context is used for openai-compatible API key resolution when `apiKeyRef` is profile-scoped. Supported providers: `ollama` (GET baseURL/api/tags), `openai-compatible` (GET baseURL/models with Bearer), `cursor-agent-cli` (config-only model ids). Never logs API keys.
+
+`params`: `providerId: string` (required). Optional `profileId` for profile context.
+
+Returns either `{ models: { id: string, name?: string }[] }` on success, or `{ error: { code: string, message: string } }` on provider/network error (e.g. `NO_CREDENTIAL`, `UNAUTHORIZED`, `PROVIDER_ERROR`, `NETWORK_ERROR`, `UNKNOWN_PROVIDER`).
 
 ## 6) RPC error codes in practice
 

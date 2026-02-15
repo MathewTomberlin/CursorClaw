@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import { rpc, mapRpcError } from "../api";
+import { rpcWithProfile, mapRpcError } from "../api";
+import { useProfile } from "../contexts/ProfileContext";
 
 interface SubstrateKeyInfo {
   key: string;
@@ -18,6 +19,7 @@ const KEY_LABELS: Record<string, string> = {
 };
 
 export default function Substrate() {
+  const { selectedProfileId } = useProfile();
   const [list, setList] = useState<SubstrateKeyInfo[]>([]);
   const [content, setContent] = useState<Record<string, string>>({});
   const [edits, setEdits] = useState<Record<string, string>>({});
@@ -28,17 +30,17 @@ export default function Substrate() {
 
   const fetchList = useCallback(async () => {
     try {
-      const res = await rpc("substrate.list");
+      const res = await rpcWithProfile("substrate.list", undefined, selectedProfileId);
       const result = res.result as { keys: SubstrateKeyInfo[] };
       setList(result?.keys ?? []);
     } catch {
       setList([]);
     }
-  }, []);
+  }, [selectedProfileId]);
 
   const fetchContent = useCallback(async () => {
     try {
-      const res = await rpc("substrate.get");
+      const res = await rpcWithProfile("substrate.get", undefined, selectedProfileId);
       const result = (res.result ?? {}) as Record<string, string | undefined>;
       const next: Record<string, string> = {};
       for (const k of ["agents", "identity", "soul", "birth", "capabilities", "user", "tools"]) {
@@ -49,7 +51,7 @@ export default function Substrate() {
     } catch {
       setContent({});
     }
-  }, []);
+  }, [selectedProfileId]);
 
   useEffect(() => {
     (async () => {
@@ -77,7 +79,7 @@ export default function Substrate() {
     setSaving(key);
     setError(null);
     try {
-      await rpc("substrate.update", { key, content: value });
+      await rpcWithProfile("substrate.update", { key, content: value }, selectedProfileId);
       setContent((prev) => ({ ...prev, [key]: value }));
       setEdits((prev) => {
         const next = { ...prev };
@@ -97,7 +99,7 @@ export default function Substrate() {
     setReloading(true);
     setError(null);
     try {
-      await rpc("substrate.reload");
+      await rpcWithProfile("substrate.reload", undefined, selectedProfileId);
       await fetchList();
       await fetchContent();
     } catch (e) {

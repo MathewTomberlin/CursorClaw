@@ -179,6 +179,31 @@ function isPrivateIpv4(ip: string): boolean {
   return ranges.some(([start, end]) => n >= start && n <= end);
 }
 
+/** Allowed for gateway bind: loopback, link-local, private, Tailscale (100.64.0.0/10). Excludes 0.0.0.0. */
+export function isSafeBindAddress(ip: string): boolean {
+  if (isIP(ip) === 4) {
+    const n = ipToLong(ip);
+    if (n < 0) return false;
+    if (n >= ipToLong("0.0.0.0") && n <= ipToLong("0.255.255.255")) return false;
+    const ranges: Array<[number, number]> = [
+      [ipToLong("10.0.0.0"), ipToLong("10.255.255.255")],
+      [ipToLong("127.0.0.0"), ipToLong("127.255.255.255")],
+      [ipToLong("169.254.0.0"), ipToLong("169.254.255.255")],
+      [ipToLong("172.16.0.0"), ipToLong("172.31.255.255")],
+      [ipToLong("192.168.0.0"), ipToLong("192.168.255.255")],
+      [ipToLong("100.64.0.0"), ipToLong("100.127.255.255")]
+    ];
+    return ranges.some(([start, end]) => n >= start && n <= end);
+  }
+  if (isIP(ip) === 6) {
+    const normalized = ip.toLowerCase();
+    if (normalized === "::1") return true;
+    if (/^fe[89ab]/i.test(normalized)) return true; // fe80::/10 link-local
+    return false;
+  }
+  return false;
+}
+
 function parseMappedIpv4(ip: string): string | null {
   const lower = ip.toLowerCase();
   const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(lower);
@@ -188,7 +213,7 @@ function parseMappedIpv4(ip: string): string | null {
   return mapped[1] ?? null;
 }
 
-function isPrivateIp(ip: string): boolean {
+export function isPrivateIp(ip: string): boolean {
   if (isIP(ip) === 4) {
     return isPrivateIpv4(ip);
   }
@@ -215,6 +240,33 @@ function isPrivateIp(ip: string): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * Validates gateway.bindAddress: resolves hostname to IP(s) and ensures all are safe to bind
+ * (loopback, link-local, private, Tailscale). Throws with a clear message if invalid.
+ */
+export async function validateBindAddress(bindAddress: string): Promise<void> {
+  const trimmed = bindAddress.trim();
+  if (!trimmed) {
+    throw new Error("gateway.bindAddress must be a non-empty address");
+  }
+  const normalized = trimmed.replace(/^\[/, "").replace(/\]$/, "");
+  if (isIP(normalized)) {
+    if (!isSafeBindAddress(normalized)) {
+      throw new Error(
+        `gateway.bindAddress '${bindAddress}' is not allowed: use loopback (127.x, ::1), link-local (169.254.x), private (10.x, 172.16-31.x, 192.168.x), or Tailscale (100.64-100.127.x). Do not use 0.0.0.0 (use gateway.bind instead).`
+      );
+    }
+    return;
+  }
+  const resolved = await resolveHostAddresses(normalized);
+  const unsafe = resolved.filter((ip) => !isSafeBindAddress(ip));
+  if (unsafe.length) {
+    throw new Error(
+      `gateway.bindAddress '${bindAddress}' resolves to non-allowed address(es): ${unsafe.join(", ")}. Only loopback, link-local, private, or Tailscale (100.x) addresses are allowed.`
+    );
+  }
 }
 
 async function resolveHostAddresses(hostname: string): Promise<string[]> {

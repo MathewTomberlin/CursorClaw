@@ -1,12 +1,16 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  getDefaultProfileId,
+  getModelIdForProfile,
+  loadConfig,
   loadConfigFromDisk,
   resolveConfigPath,
+  resolveProfileRoot,
   validateStartupConfig
 } from "../src/config.js";
 
@@ -160,5 +164,93 @@ describe("config security startup rules", () => {
     });
     expect(config.gateway.auth.token).toBe("explicit-token");
     expect(config.gateway.bodyLimitBytes).toBe(33333);
+  });
+});
+
+describe("agent profile resolution", () => {
+  it("uses workspaceDir as single profile root when no profiles configured", () => {
+    const config = loadConfig();
+    expect(getDefaultProfileId(config)).toBe("default");
+    const workspaceDir = join("tmp", "workspace");
+    const expectedRoot = resolve(workspaceDir);
+    expect(resolveProfileRoot(workspaceDir, config)).toBe(expectedRoot);
+    expect(resolveProfileRoot(workspaceDir, config, "default")).toBe(expectedRoot);
+  });
+
+  it("returns first profile id and resolves profile roots when profiles configured", () => {
+    const config = loadConfig({
+      profiles: [
+        { id: "main", root: "." },
+        { id: "assistant", root: "profiles/assistant" }
+      ]
+    });
+    expect(getDefaultProfileId(config)).toBe("main");
+    const workspaceDir = join("app", "project");
+    const base = resolve(workspaceDir);
+    expect(resolveProfileRoot(workspaceDir, config)).toBe(base);
+    expect(resolveProfileRoot(workspaceDir, config, "main")).toBe(base);
+    expect(resolveProfileRoot(workspaceDir, config, "assistant")).toBe(join(base, "profiles", "assistant"));
+  });
+
+  it("rejects profile root outside workspace (path traversal)", () => {
+    const config = loadConfig({
+      profiles: [{ id: "evil", root: "../../etc" }]
+    });
+    expect(() => resolveProfileRoot("/app/workspace", config, "evil")).toThrow(
+      /profile root must be under workspace/
+    );
+  });
+});
+
+describe("getModelIdForProfile", () => {
+  it("returns defaultModel when no profiles configured", () => {
+    const config = loadConfig();
+    expect(getModelIdForProfile(config, "default")).toBe(config.defaultModel);
+  });
+
+  it("returns defaultModel when profile has no modelId", () => {
+    const config = loadConfig({
+      profiles: [
+        { id: "main", root: "." },
+        { id: "assistant", root: "profiles/assistant" }
+      ]
+    });
+    expect(getModelIdForProfile(config, "main")).toBe(config.defaultModel);
+    expect(getModelIdForProfile(config, "assistant")).toBe(config.defaultModel);
+  });
+
+  it("returns profile modelId when set and exists in config.models", () => {
+    const config = loadConfig({
+      models: {
+        "cursor-auto": {
+          provider: "cursor-agent-cli",
+          timeoutMs: 60_000,
+          authProfiles: ["default"],
+          fallbackModels: [],
+          enabled: true
+        },
+        "fallback-model": {
+          provider: "fallback-model",
+          timeoutMs: 5_000,
+          authProfiles: ["default"],
+          fallbackModels: [],
+          enabled: true
+        }
+      },
+      defaultModel: "cursor-auto",
+      profiles: [
+        { id: "main", root: "." },
+        { id: "assistant", root: "profiles/assistant", modelId: "fallback-model" }
+      ]
+    });
+    expect(getModelIdForProfile(config, "main")).toBe("cursor-auto");
+    expect(getModelIdForProfile(config, "assistant")).toBe("fallback-model");
+  });
+
+  it("falls back to defaultModel when profile modelId is not in config.models", () => {
+    const config = loadConfig({
+      profiles: [{ id: "other", root: "other", modelId: "nonexistent-model" }]
+    });
+    expect(getModelIdForProfile(config, "other")).toBe(config.defaultModel);
   });
 });

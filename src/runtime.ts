@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
-import type { CursorClawConfig } from "./config.js";
+import { getDefaultProfileId, getModelIdForProfile, type CursorClawConfig } from "./config.js";
 import type { DecisionJournal } from "./decision-journal.js";
 import type { MemoryStore } from "./memory.js";
 import type { CursorAgentModelAdapter } from "./model-adapter.js";
@@ -26,7 +26,7 @@ import type { QueueBackend } from "./queue/types.js";
 import { InMemoryQueueBackend } from "./queue/in-memory-backend.js";
 import type { LifecycleStream } from "./lifecycle-stream/types.js";
 import type { SubstrateContent } from "./substrate/index.js";
-import type { PolicyDecisionLog, SessionContext, ToolCall } from "./types.js";
+import type { PolicyDecisionLog, SendTurnOptions, SessionContext, ToolCall, ToolExecuteContext } from "./types.js";
 import { ToolRouter, classifyCommandIntent } from "./tools.js";
 
 type RuntimeMessage = {
@@ -178,13 +178,19 @@ export interface AgentRuntimeOptions {
   onEvent?: (event: RuntimeEvent) => void;
   /** When set, used each turn to get current substrate (Identity, Soul, etc.) for the system prompt. */
   getSubstrate?: () => SubstrateContent;
+  /** When set, used to resolve profile root for the current turn (e.g. for profile-scoped provider API keys). */
+  getProfileRoot?: (profileId: string) => string | undefined;
+  /** When set, used for main session only to load MEMORY.md + memory/today+yesterday and inject into system prompt. */
+  getSessionMemoryContext?: (profileRoot: string) => Promise<string | undefined>;
+  /** When set, called for main session; if it returns a string, injected once as a system notice (e.g. "Previous run was interrupted by process restart"). */
+  getInterruptedRunNotice?: () => Promise<string | undefined>;
 }
 
 export class AgentRuntime {
   private readonly queue: SessionQueue;
   private readonly promptPluginHost: PluginHost;
   private readonly decisionLogs: PolicyDecisionLog[] = [];
-  private readonly sessionHandles = new Map<string, string>();
+  private readonly sessionHandles = new Map<string, { id: string; model: string; authProfile?: string }>();
   private readonly metrics = {
     turnsStarted: 0,
     turnsCompleted: 0,
@@ -197,6 +203,8 @@ export class AgentRuntime {
   private static readonly MULTI_PATH_RESOLUTION_MAX = 100;
   /** Session IDs that have had at least one turn (used to inject BIRTH only on first turn per session). */
   private readonly sessionsWithTurn = new Set<string>();
+  /** Current runId per session so heartbeat can be cancelled when user sends a message. */
+  private readonly currentRunIdBySession = new Map<string, string>();
 
   constructor(private readonly options: AgentRuntimeOptions) {
     const queueBackend = options.queueBackend ?? new InMemoryQueueBackend();
@@ -246,6 +254,17 @@ export class AgentRuntime {
     return adapter.getMetrics?.();
   }
 
+  /**
+   * Cancel the in-flight turn for a session (e.g. heartbeat:main) so user turns can run first.
+   * No-op if that session has no running turn. Used when agent.run is received for a user session.
+   */
+  cancelTurnForSession(sessionId: string): void {
+    const runId = this.currentRunIdBySession.get(sessionId);
+    if (runId) {
+      void this.options.adapter.cancel(runId).catch(() => {});
+    }
+  }
+
   startTurn(request: TurnRequest): { runId: string; promise: Promise<TurnResult> } {
     const runId = randomUUID();
     const promise = this.scheduleTurn(runId, request);
@@ -263,6 +282,7 @@ export class AgentRuntime {
       request,
       execute: async () => {
         const sessionId = request.session.sessionId;
+        this.currentRunIdBySession.set(sessionId, runId);
         const scrubScopeId = `${sessionId}:${runId}`;
         const shouldForceMultiPath =
           this.options.failureLoopGuard?.requiresStepBack(sessionId) ?? false;
@@ -379,21 +399,28 @@ export class AgentRuntime {
           });
           const turnProvenance = inboundRisk >= 70 ? ("untrusted" as const) : ("operator" as const);
 
+          const profileId = request.session.profileId ?? getDefaultProfileId(this.options.config);
+          const profileRoot = this.options.getProfileRoot?.(profileId);
+
+          const sendOptions: SendTurnOptions = {
+            turnId: runId,
+            timeoutMs: this.options.config.session.turnTimeoutMs,
+            ...(profileRoot !== undefined && profileRoot !== "" ? { profileRoot } : {})
+          };
           const adapterStream = this.options.adapter.sendTurn(
             modelSession,
             promptMessages,
             this.options.toolRouter.list(),
-            {
-              turnId: runId,
-              timeoutMs: this.options.config.session.turnTimeoutMs
-            }
+            sendOptions
           );
           let emittedCount = 2;
           for await (const event of adapterStream) {
             if (event.type === "assistant_delta") {
               const rawContent = String((event.data as { content?: string })?.content ?? "");
               const content = this.scrubText(rawContent, scrubScopeId);
-              if (content.length >= assistantText.length && content.startsWith(assistantText)) {
+              if (content === assistantText) {
+                // Exact duplicate (e.g. CLI sent deltas then full message); skip emit
+              } else if (content.length >= assistantText.length && content.startsWith(assistantText)) {
                 assistantText = content;
                 emit("assistant", { content });
               } else if (content.length >= 15 && assistantText.includes(content)) {
@@ -409,11 +436,16 @@ export class AgentRuntime {
               if (!checkpointHandle && this.shouldCreateCheckpoint(call)) {
                 checkpointHandle = await this.options.gitCheckpointManager?.createCheckpoint(runId) ?? null;
               }
-              const output = await this.options.toolRouter.execute(call, {
+              const profileRootForTool = this.options.getProfileRoot?.(request.session.profileId ?? getDefaultProfileId(this.options.config));
+              const toolContext: ToolExecuteContext = {
                 auditId: runId,
                 decisionLogs: this.decisionLogs,
-                provenance: turnProvenance
-              });
+                provenance: turnProvenance,
+                ...(profileRootForTool !== undefined && profileRootForTool !== "" ? { profileRoot: profileRootForTool } : {}),
+                ...(request.session.channelKind !== undefined ? { channelKind: request.session.channelKind } : {}),
+                ...(request.session.sessionId !== undefined ? { sessionId: request.session.sessionId } : {})
+              };
+              const output = await this.options.toolRouter.execute(call, toolContext);
               const safeCall = this.scrubUnknown(call, scrubScopeId) as ToolCall;
               const safeOutput = this.scrubUnknown(output, scrubScopeId);
               this.metrics.toolCalls += 1;
@@ -584,6 +616,7 @@ export class AgentRuntime {
           await this.snapshot(runId, sessionId, events);
           throw error;
         } finally {
+          this.currentRunIdBySession.delete(sessionId);
           this.options.privacyScrubber?.clearScope(scrubScopeId);
         }
       },
@@ -609,24 +642,16 @@ export class AgentRuntime {
   }
 
   private async ensureModelSession(context: SessionContext) {
-    const existingId = this.sessionHandles.get(context.sessionId);
-    if (existingId) {
-      const handle: {
-        id: string;
-        model: string;
-        authProfile?: string;
-      } = {
-        id: existingId,
-        model: this.options.config.defaultModel
-      };
-      const profile = this.options.config.models[this.options.config.defaultModel]?.authProfiles[0];
-      if (profile !== undefined) {
-        handle.authProfile = profile;
-      }
-      return handle;
-    }
-    const handle = await this.options.adapter.createSession(context);
-    this.sessionHandles.set(context.sessionId, handle.id);
+    const stored = this.sessionHandles.get(context.sessionId);
+    if (stored) return stored;
+    const profileId = context.profileId ?? getDefaultProfileId(this.options.config);
+    const modelId = getModelIdForProfile(this.options.config, profileId);
+    const handle = await this.options.adapter.createSession(context, { modelId });
+    this.sessionHandles.set(context.sessionId, {
+      id: handle.id,
+      model: handle.model,
+      ...(handle.authProfile !== undefined ? { authProfile: handle.authProfile } : {})
+    });
     return handle;
   }
 
@@ -701,6 +726,29 @@ export class AgentRuntime {
         role: "system",
         content: this.scrubText(`User:\n\n${substrate.user.trim()}`, scopeId)
       });
+    }
+
+    if (isMainSession && this.options.getSessionMemoryContext && this.options.getProfileRoot) {
+      const profileId = request.session.profileId ?? getDefaultProfileId(this.options.config);
+      const profileRoot = this.options.getProfileRoot(profileId);
+      if (profileRoot) {
+        const memoryContext = await this.options.getSessionMemoryContext(profileRoot);
+        if (memoryContext?.trim()) {
+          systemMessages.push({
+            role: "system",
+            content: this.scrubText(`Session memory (for continuity):\n\n${memoryContext.trim()}`, scopeId)
+          });
+        }
+      }
+    }
+    if (isMainSession && this.options.getInterruptedRunNotice) {
+      const notice = await this.options.getInterruptedRunNotice();
+      if (notice?.trim()) {
+        systemMessages.push({
+          role: "system",
+          content: this.scrubText(notice.trim(), scopeId)
+        });
+      }
     }
 
     const isFirstTurnThisSession = !this.sessionsWithTurn.has(request.session.sessionId);

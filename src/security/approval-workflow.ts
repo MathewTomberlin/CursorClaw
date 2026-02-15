@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 import {
   type Capability,
@@ -25,17 +27,85 @@ export interface ApprovalRequest {
   deniedReason?: string;
 }
 
+const APPROVAL_REQUESTS_FILE = "approval-requests.json";
+
 export interface ApprovalWorkflowOptions {
   capabilityStore: CapabilityStore;
   defaultGrantTtlMs: number;
   defaultGrantUses: number;
+  /** When set, requests are loaded from and saved to this directory (per-profile persistence). */
+  stateDir?: string;
 }
 
 export class ApprovalWorkflow {
   private readonly requests = new Map<string, ApprovalRequest>();
   private readonly requestsByFingerprint = new Map<string, string>();
+  private readonly stateDir: string | undefined;
 
-  constructor(private readonly options: ApprovalWorkflowOptions) {}
+  constructor(private readonly options: ApprovalWorkflowOptions) {
+    this.stateDir = options.stateDir;
+  }
+
+  /** Load persisted requests from stateDir. No-op if stateDir not set or file missing. */
+  async load(): Promise<void> {
+    if (!this.stateDir) {
+      return;
+    }
+    const path = join(this.stateDir, APPROVAL_REQUESTS_FILE);
+    try {
+      const raw = readFileSync(path, "utf-8");
+      const data = JSON.parse(raw) as { requests: ApprovalRequest[] };
+      if (Array.isArray(data.requests)) {
+        for (const req of data.requests) {
+          if (req.id && req.status) {
+            this.requests.set(req.id, {
+              id: req.id,
+              createdAt: req.createdAt,
+              updatedAt: req.updatedAt,
+              status: req.status,
+              tool: req.tool,
+              intent: req.intent,
+              plan: req.plan,
+              args: req.args,
+              requiredCapabilities: req.requiredCapabilities ?? [],
+              provenance: req.provenance,
+              grants: req.grants ?? [],
+              ...(req.deniedReason !== undefined && { deniedReason: req.deniedReason })
+            });
+            if (req.status === "pending") {
+              const fp = stableFingerprint(
+                req.tool,
+                req.intent,
+                req.plan,
+                req.requiredCapabilities ?? [],
+                req.provenance
+              );
+              this.requestsByFingerprint.set(fp, req.id);
+            }
+          }
+        }
+      }
+    } catch {
+      // No file or invalid: start fresh.
+    }
+  }
+
+  private persist(): void {
+    if (!this.stateDir) {
+      return;
+    }
+    try {
+      mkdirSync(this.stateDir, { recursive: true });
+      const requests = [...this.requests.values()].map(cloneRequest);
+      writeFileSync(
+        join(this.stateDir, APPROVAL_REQUESTS_FILE),
+        JSON.stringify({ requests }, null, 0),
+        "utf-8"
+      );
+    } catch {
+      // Best-effort; do not throw into request/resolve paths.
+    }
+  }
 
   request(input: CapabilityApprovalInput): ApprovalRequest {
     this.expireStaleRequests();
@@ -69,6 +139,7 @@ export class ApprovalWorkflow {
     };
     this.requests.set(request.id, request);
     this.requestsByFingerprint.set(fingerprint, request.id);
+    this.persist();
     return { ...request };
   }
 
@@ -103,6 +174,7 @@ export class ApprovalWorkflow {
     if (args.decision === "deny") {
       request.status = "denied";
       request.deniedReason = args.reason ?? "denied";
+      this.persist();
       return cloneRequest(request);
     }
     const ttlMs = args.grantTtlMs ?? this.options.defaultGrantTtlMs;
@@ -121,10 +193,12 @@ export class ApprovalWorkflow {
     }
     request.status = "approved";
     request.grants = grants;
+    this.persist();
     return cloneRequest(request);
   }
 
   private expireStaleRequests(now = Date.now()): void {
+    let mutated = false;
     for (const request of this.requests.values()) {
       if (request.status !== "pending") {
         continue;
@@ -134,7 +208,11 @@ export class ApprovalWorkflow {
       if (ageMs > 24 * 60 * 60_000) {
         request.status = "expired";
         request.updatedAt = new Date(now).toISOString();
+        mutated = true;
       }
+    }
+    if (mutated) {
+      this.persist();
     }
   }
 }

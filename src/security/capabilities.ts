@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 import type { ExecIntent } from "../tools.js";
 
@@ -29,8 +31,67 @@ export interface CapabilityApprovalInput {
   provenance?: Provenance;
 }
 
+const CAPABILITY_GRANTS_FILE = "capability-grants.json";
+
+export interface CapabilityStoreOptions {
+  /** When set, grants are loaded from and saved to this directory (per-profile persistence). */
+  stateDir?: string;
+}
+
 export class CapabilityStore {
   private readonly grants = new Map<Capability, CapabilityGrant[]>();
+  private readonly stateDir: string | undefined;
+
+  constructor(options: CapabilityStoreOptions = {}) {
+    this.stateDir = options.stateDir;
+  }
+
+  /** Load persisted grants from stateDir. No-op if stateDir not set or file missing. */
+  async load(): Promise<void> {
+    if (!this.stateDir) {
+      return;
+    }
+    const path = join(this.stateDir, CAPABILITY_GRANTS_FILE);
+    try {
+      const raw = readFileSync(path, "utf-8");
+      const data = JSON.parse(raw) as { grants: CapabilityGrant[] };
+      if (Array.isArray(data.grants)) {
+        for (const grant of data.grants) {
+          if (grant.capability && typeof grant.usesRemaining === "number") {
+            const existing = this.grants.get(grant.capability as Capability) ?? [];
+            existing.push({
+              id: grant.id,
+              capability: grant.capability as Capability,
+              scope: grant.scope,
+              issuedAt: grant.issuedAt,
+              expiresAt: grant.expiresAt,
+              usesRemaining: grant.usesRemaining
+            });
+            this.grants.set(grant.capability as Capability, existing);
+          }
+        }
+      }
+    } catch {
+      // No file or invalid: start fresh.
+    }
+  }
+
+  private persist(): void {
+    if (!this.stateDir) {
+      return;
+    }
+    try {
+      mkdirSync(this.stateDir, { recursive: true });
+      const grants = this.listActive();
+      writeFileSync(
+        join(this.stateDir, CAPABILITY_GRANTS_FILE),
+        JSON.stringify({ grants }, null, 0),
+        "utf-8"
+      );
+    } catch {
+      // Best-effort; do not throw into grant/consume paths.
+    }
+  }
 
   grant(args: {
     capability: Capability;
@@ -50,6 +111,7 @@ export class CapabilityStore {
     const existing = this.grants.get(args.capability) ?? [];
     existing.push(grant);
     this.grants.set(args.capability, existing);
+    this.persist();
     return grant;
   }
 
@@ -90,6 +152,7 @@ export class CapabilityStore {
       capability,
       entries.filter((entry) => entry.usesRemaining > 0)
     );
+    this.persist();
   }
 
   private pruneExpired(now: number): void {

@@ -73,7 +73,7 @@ describe("autonomy orchestrator integration", () => {
     expect(runCount).toBeGreaterThanOrEqual(1);
   });
 
-  it("honors heartbeat autonomy budget limits", async () => {
+  it("runs scheduled heartbeats regardless of autonomy budget", async () => {
     vi.useFakeTimers();
     const dir = await mkdtemp(join(tmpdir(), "cursorclaw-orchestrator-heartbeat-"));
     tempDirs.push(dir);
@@ -115,7 +115,8 @@ describe("autonomy orchestrator integration", () => {
     orchestrator.start();
     await vi.advanceTimersByTimeAsync(300);
     await orchestrator.stop();
-    expect(heartbeatTurns).toBe(0);
+    // Scheduled heartbeats bypass budget (bypassBudget: true) so they always run.
+    expect(heartbeatTurns).toBeGreaterThanOrEqual(1);
   });
 
   it("exposes workflow runtime through orchestrator dispatch path", async () => {
@@ -222,6 +223,7 @@ describe("autonomy orchestrator integration", () => {
       }
     });
 
+    vi.useFakeTimers();
     let scanCount = 0;
     const orchestrator = new AutonomyOrchestrator({
       cronService: cron,
@@ -241,9 +243,9 @@ describe("autonomy orchestrator integration", () => {
 
     orchestrator.start();
     await vi.advanceTimersByTimeAsync(250);
-    for (let i = 0; i < 10; i++) {
-      await Promise.resolve();
-    }
+    vi.useRealTimers();
+    await new Promise((r) => setTimeout(r, 80));
+    vi.useFakeTimers();
     await orchestrator.stop();
     expect(scanCount).toBeGreaterThanOrEqual(1);
     expect(orchestrator.getState().latestIntegrityFindings.length).toBeGreaterThanOrEqual(1);

@@ -1,7 +1,9 @@
 import { useState } from "react";
-import { rpc, mapRpcError } from "../api";
+import { rpcWithProfile, mapRpcError } from "../api";
+import { useProfile } from "../contexts/ProfileContext";
 
 export default function Trace() {
+  const { selectedProfileId } = useProfile();
   const [method, setMethod] = useState("GET");
   const [url, setUrl] = useState("");
   const [status, setStatus] = useState("200");
@@ -30,7 +32,7 @@ export default function Trace() {
         latencyMs: latencyNum
       };
       if (sessionId.trim()) params.sessionId = sessionId.trim();
-      const res = await rpc("trace.ingest", params);
+      const res = await rpcWithProfile("trace.ingest", params, selectedProfileId);
       setResult(res.result);
     } catch (e) {
       setError(e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } }));

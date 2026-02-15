@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { rpc, mapRpcError } from "../api";
+import { rpcWithProfile, mapRpcError } from "../api";
+import { useProfile } from "../contexts/ProfileContext";
 
 type Status = "pending" | "approved" | "denied" | "expired";
 
@@ -13,6 +14,7 @@ interface ApprovalRequest {
 }
 
 export default function Approvals() {
+  const { selectedProfileId } = useProfile();
   const [statusFilter, setStatusFilter] = useState<Status | "">("pending");
   const [requests, setRequests] = useState<ApprovalRequest[]>([]);
   const [grants, setGrants] = useState<unknown[]>([]);
@@ -31,8 +33,8 @@ export default function Approvals() {
     setLoading(true);
     try {
       const [listRes, capRes] = await Promise.all([
-        rpc<{ requests: ApprovalRequest[] }>("approval.list", statusFilter ? { status: statusFilter } : undefined),
-        rpc<{ grants: unknown[] }>("approval.capabilities")
+        rpcWithProfile<{ requests: ApprovalRequest[] }>("approval.list", statusFilter ? { status: statusFilter } : undefined, selectedProfileId),
+        rpcWithProfile<{ grants: unknown[] }>("approval.capabilities", undefined, selectedProfileId)
       ]);
       setRequests(listRes.result?.requests ?? []);
       setGrants(capRes.result?.grants ?? []);
@@ -45,7 +47,7 @@ export default function Approvals() {
 
   useEffect(() => {
     load();
-  }, [statusFilter]);
+  }, [statusFilter, selectedProfileId]);
 
   const openResolve = (r: ApprovalRequest) => {
     if (r.status !== "pending") return;
@@ -71,7 +73,7 @@ export default function Approvals() {
       if (ttl !== undefined && Number.isFinite(ttl) && ttl > 0) params.grantTtlMs = ttl;
       const uses = resolveGrantUses.trim() ? Number.parseInt(resolveGrantUses, 10) : undefined;
       if (uses !== undefined && Number.isFinite(uses) && uses > 0) params.grantUses = uses;
-      await rpc("approval.resolve", params);
+      await rpcWithProfile("approval.resolve", params, selectedProfileId);
       setResolveTarget(null);
       await load();
     } catch (e) {

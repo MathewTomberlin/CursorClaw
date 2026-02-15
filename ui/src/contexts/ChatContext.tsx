@@ -7,7 +7,8 @@ import {
   useState,
   type ReactNode
 } from "react";
-import { rpc, mapRpcError, openStream } from "../api";
+import { rpc, mapRpcError, openStream, getThread, setThread } from "../api";
+import { useProfile } from "./ProfileContext";
 
 export type ChannelKind = "dm" | "group" | "web" | "mobile";
 
@@ -84,6 +85,7 @@ interface ChatProviderProps {
 }
 
 export function ChatProvider({ children }: ChatProviderProps) {
+  const { selectedProfileId } = useProfile();
   const [sessionId, setSessionId] = useState("demo-session");
   const [channelId, setChannelId] = useState("dm:demo-session");
   const [channelKind, setChannelKind] = useState<ChannelKind>("dm");
@@ -94,17 +96,40 @@ export function ChatProvider({ children }: ChatProviderProps) {
   const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const streamRef = useRef<EventSource | null>(null);
+  /** Only sync to server after we've loaded from server for this session/profile (avoids overwriting server with sessionStorage on first paint). */
+  const serverLoadDoneRef = useRef(false);
 
-  // Persist thread when messages change (use current sessionId; don't persist on sessionId change to avoid overwriting the new session's thread)
-  useEffect(() => {
-    if (sessionId.trim()) saveThread(sessionId.trim(), messages);
-  }, [messages]); // eslint-disable-line react-hooks/exhaustive-deps -- intentionally use latest sessionId when messages change
-
-  // Load thread when session changes
+  // Load thread from server when session or profile changes (shared message list for desktop and mobile)
   useEffect(() => {
     const sid = sessionId.trim();
-    if (sid) setMessages(loadThread(sid));
-  }, [sessionId]);
+    if (!sid || !selectedProfileId) return;
+    serverLoadDoneRef.current = false;
+    let cancelled = false;
+    getThread(sid, selectedProfileId)
+      .then(({ messages: serverMessages }) => {
+        if (!cancelled && Array.isArray(serverMessages)) setMessages(serverMessages);
+        if (!cancelled) serverLoadDoneRef.current = true;
+      })
+      .catch(() => {
+        if (!cancelled) setMessages(loadThread(sid));
+        if (!cancelled) serverLoadDoneRef.current = true;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, selectedProfileId]);
+
+  // Persist thread when messages change: sessionStorage (backup) and server (shared view for desktop/Tailscale)
+  useEffect(() => {
+    const sid = sessionId.trim();
+    if (!sid) return;
+    saveThread(sid, messages);
+    if (selectedProfileId && serverLoadDoneRef.current) {
+      setThread(sid, selectedProfileId, messages).catch(() => {
+        // Offline or server unavailable; sessionStorage already updated
+      });
+    }
+  }, [messages, sessionId, selectedProfileId]);
 
   // Keep lifecycle stream open for current session (survives tab switch)
   useEffect(() => {
@@ -170,15 +195,31 @@ export function ChatProvider({ children }: ChatProviderProps) {
           .map((m) => ({ role: m.role, content: m.content }));
 
         const runRes = await rpc<{ runId: string }>("agent.run", {
-          session: { sessionId: sessionId.trim(), channelId: channelId.trim(), channelKind },
+          session: { sessionId: sessionId.trim(), channelId: channelId.trim(), channelKind, profileId: selectedProfileId },
           messages: apiMessages
         });
         const runId = runRes.result?.runId;
         if (!runId) throw new Error("No runId returned");
         setCurrentRunId(runId);
 
-        const waitRes = await rpc<{ assistantText: string; events?: unknown[] }>("agent.wait", { runId });
-        const out = waitRes.result;
+        // Poll agent.wait instead of one long-lived request to avoid browser/proxy timeouts ("Failed to fetch")
+        const POLL_INTERVAL_MS = 2000;
+        const POLL_TIMEOUT_MS = 10 * 60 * 1000; // 10 min
+        const startedAt = Date.now();
+        let out: { status?: string; runId?: string; assistantText?: string; events?: unknown[] } | undefined;
+        for (;;) {
+          const waitRes = await rpc<{ status?: string; runId?: string; assistantText?: string; events?: unknown[] }>(
+            "agent.wait",
+            { runId }
+          );
+          out = waitRes.result;
+          if (out && (out as { status?: string }).status === "pending") {
+            if (Date.now() - startedAt > POLL_TIMEOUT_MS) throw new Error("Turn timed out. Please try again.");
+            await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+            continue;
+          }
+          break;
+        }
         const assistantText = out?.assistantText ?? "";
 
         const assistantMsg: ChatMessage = {
@@ -199,19 +240,23 @@ export function ChatProvider({ children }: ChatProviderProps) {
         setCurrentRunId(null);
       }
     },
-    [sessionId, channelId, channelKind, messages]
+    [sessionId, channelId, channelKind, messages, selectedProfileId]
   );
 
   const clearThread = useCallback(() => {
     setMessages([]);
-    if (sessionId.trim()) {
+    const sid = sessionId.trim();
+    if (sid) {
       try {
-        sessionStorage.removeItem(STORAGE_KEY_PREFIX + sessionId.trim());
+        sessionStorage.removeItem(STORAGE_KEY_PREFIX + sid);
       } catch {
         // ignore
       }
+      if (selectedProfileId) {
+        setThread(sid, selectedProfileId, []).catch(() => {});
+      }
     }
-  }, [sessionId]);
+  }, [sessionId, selectedProfileId]);
 
   const value: ChatContextValue = {
     sessionId,

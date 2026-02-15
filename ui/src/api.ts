@@ -85,21 +85,43 @@ export function mapRpcError(res: { status?: number; error?: RpcError }): string 
   return `Request failed${status}.`;
 }
 
+/** Turn network/fetch failures into a user-friendly message (e.g. "Failed to fetch" → connection hint). */
+function normalizeFetchError(base: string, err: unknown): Error {
+  const msg = err instanceof Error ? err.message : String(err);
+  const isNetworkFailure =
+    msg === "Failed to fetch" ||
+    msg === "Load failed" ||
+    msg === "NetworkError when attempting to fetch resource." ||
+    (err instanceof TypeError && msg.toLowerCase().includes("fetch"));
+  if (isNetworkFailure) {
+    const hint = base
+      ? `Check that CursorClaw is running (e.g. \`npm run start\`) and reachable at ${base}.`
+      : "Set the gateway URL (e.g. the host's Tailscale URL like http://100.x.x.x:8787) and ensure the server is bound to 0.0.0.0 or that address.";
+    return new Error(`Cannot reach the gateway. ${hint}`);
+  }
+  return err instanceof Error ? err : new Error(msg);
+}
+
 export async function rpc<T = unknown>(method: string, params?: Record<string, unknown>): Promise<RpcResponse<T>> {
   const base = getBaseUrl();
   const token = getToken();
-  const res = await fetch(`${base}/rpc`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
-    },
-    body: JSON.stringify({
-      version: "2.0",
-      method,
-      ...(params !== undefined ? { params } : {})
-    })
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${base}/rpc`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({
+        version: "2.0",
+        method,
+        ...(params !== undefined ? { params } : {})
+      })
+    });
+  } catch (err) {
+    throw normalizeFetchError(base, err);
+  }
   let data: RpcResponse<T>;
   try {
     data = (await res.json()) as RpcResponse<T>;
@@ -124,9 +146,24 @@ export async function rpc<T = unknown>(method: string, params?: Record<string, u
   return data;
 }
 
+/** Call RPC with profileId merged into params. Use for profile-scoped RPCs (substrate, memory, heartbeat, approval, cron, workspace, etc.). */
+export async function rpcWithProfile<T = unknown>(
+  method: string,
+  params: Record<string, unknown> | undefined,
+  profileId: string
+): Promise<RpcResponse<T>> {
+  const merged = { ...(params ?? {}), profileId };
+  return rpc<T>(method, merged);
+}
+
 export async function getHealth(): Promise<{ ok: boolean; time: string }> {
   const base = getBaseUrl();
-  const res = await fetch(`${base}/health`);
+  let res: Response;
+  try {
+    res = await fetch(`${base}/health`);
+  } catch (err) {
+    throw normalizeFetchError(base, err);
+  }
   if (!res.ok) throw new Error("Health check failed.");
   return res.json();
 }
@@ -134,16 +171,21 @@ export async function getHealth(): Promise<{ ok: boolean; time: string }> {
 export async function getStatus(): Promise<StatusPayload> {
   const base = getBaseUrl();
   const token = getToken();
-  const res = await fetch(`${base}/status`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {}
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${base}/status`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    });
+  } catch (err) {
+    throw normalizeFetchError(base, err);
+  }
   if (!res.ok) throw new Error("Status check failed.");
   return res.json();
 }
 
-/** Poll for a proactive message from a heartbeat turn. Returns the message if one was pending (and clears it). */
-export async function heartbeatPoll(): Promise<{ result: string; proactiveMessage?: string }> {
-  const res = await rpc<{ result: string; proactiveMessage?: string }>("heartbeat.poll");
+/** Poll for a proactive message from a heartbeat turn for the given profile. Returns the message if one was pending (and clears it). */
+export async function heartbeatPoll(profileId: string): Promise<{ result: string; proactiveMessage?: string }> {
+  const res = await rpcWithProfile<{ result: string; proactiveMessage?: string }>("heartbeat.poll", undefined, profileId);
   const payload = res.result;
   return payload != null && typeof payload === "object" ? payload : { result: "ok" };
 }
@@ -162,9 +204,18 @@ export async function updateHeartbeat(content: string): Promise<void> {
   await rpc("heartbeat.update", { content });
 }
 
+export interface ProfileInfo {
+  id: string;
+  root: string;
+  modelId?: string;
+}
+
 export interface StatusPayload {
   gateway: string;
   defaultModel: string;
+  /** Agent profiles for the profile selector; when absent or empty, backend uses single default profile. */
+  profiles?: ProfileInfo[];
+  defaultProfileId?: string;
   queueWarnings: string[];
   /** If present, the agent sent a proactive message during a heartbeat (e.g. BIRTH); poll heartbeat.poll to consume. */
   pendingProactiveMessage?: string;
@@ -187,10 +238,179 @@ export interface StatusPayload {
   incident: { proactiveSendsDisabled: boolean; toolIsolationEnabled: boolean };
 }
 
+/** Create a new agent profile. Requires admin/local auth. */
+export async function profileCreate(id: string, root: string): Promise<{ profile: ProfileInfo; configPath: string }> {
+  const res = await rpc<{ profile: ProfileInfo; configPath: string }>("profile.create", { id: id.trim(), root: root.trim() });
+  const out = res.result;
+  if (!out?.profile) throw new Error("Invalid response from profile.create");
+  return out;
+}
+
+/** Delete an agent profile. Fails if it is the only profile. Requires admin/local auth. */
+export async function profileDelete(id: string, removeDirectory?: boolean): Promise<void> {
+  await rpc("profile.delete", { id: id.trim(), removeDirectory: removeDirectory === true });
+}
+
+/** Reload config from disk (openclaw.json). Applies without restart. Requires admin/local auth. */
+export async function configReload(): Promise<void> {
+  await rpc("config.reload");
+}
+
+/** Patch config with allowed keys (e.g. heartbeat, autonomyBudget). Writes to disk and applies in memory without restart. Requires admin/local auth. */
+export async function configPatch(partial: Record<string, unknown>): Promise<void> {
+  await rpc("config.patch", partial);
+}
+
 /** Restart the framework (runs full build, then restarts). Requires admin/local auth. */
 export async function restartFramework(): Promise<{ buildRan?: boolean }> {
   const res = await rpc<{ buildRan?: boolean }>("admin.restart");
   return res.result ?? {};
+}
+
+/** Get persisted chat thread for a session (shared across desktop and mobile). Uses current profile when profileId is passed via rpcWithProfile. */
+export async function getThread(
+  sessionId: string,
+  profileId: string
+): Promise<{ messages: Array<{ id: string; role: "user" | "assistant"; content: string; at?: string }> }> {
+  const res = await rpcWithProfile<{ messages: Array<{ id: string; role: "user" | "assistant"; content: string; at?: string }> }>(
+    "chat.getThread",
+    { sessionId: sessionId.trim() },
+    profileId
+  );
+  const out = res.result;
+  if (out == null || typeof out !== "object" || !Array.isArray((out as { messages?: unknown }).messages)) {
+    return { messages: [] };
+  }
+  return out as { messages: Array<{ id: string; role: "user" | "assistant"; content: string; at?: string }> };
+}
+
+/** Persist chat thread for a session so desktop and Tailscale see the same messages. */
+export async function setThread(
+  sessionId: string,
+  profileId: string,
+  messages: Array<{ role: string; content: string }>
+): Promise<void> {
+  await rpcWithProfile<{ ok?: boolean }>(
+    "thread.set",
+    {
+      sessionId: sessionId.trim(),
+      messages: messages.map((m) => ({ role: m.role, content: m.content }))
+    },
+    profileId
+  );
+}
+
+/** Installed skill record (id, sourceUrl, installedAt, credentialNames). Values never returned. */
+export interface InstalledSkillRecord {
+  id: string;
+  sourceUrl: string;
+  installedAt: string;
+  credentialNames: string[];
+}
+
+/** List installed skills for the profile. Requires admin/local auth. */
+export async function skillsList(profileId: string): Promise<InstalledSkillRecord[]> {
+  const res = await rpcWithProfile<{ skills: InstalledSkillRecord[] }>("skills.list", undefined, profileId);
+  const skills = res.result?.skills;
+  return Array.isArray(skills) ? skills : [];
+}
+
+/** Set a credential value for a skill. Value is never logged. Requires admin/local auth. */
+export async function skillsCredentialsSet(
+  profileId: string,
+  skillId: string,
+  keyName: string,
+  value: string
+): Promise<void> {
+  await rpcWithProfile("skills.credentials.set", { skillId, keyName, value }, profileId);
+}
+
+/** Delete a credential for a skill. Requires admin/local auth. */
+export async function skillsCredentialsDelete(
+  profileId: string,
+  skillId: string,
+  keyName: string
+): Promise<boolean> {
+  const res = await rpcWithProfile<{ deleted?: boolean }>(
+    "skills.credentials.delete",
+    { skillId, keyName },
+    profileId
+  );
+  return res.result?.deleted === true;
+}
+
+/** List credential names (no values) for a skill. Requires admin/local auth. */
+export async function skillsCredentialsList(
+  profileId: string,
+  skillId: string
+): Promise<string[]> {
+  const res = await rpcWithProfile<{ names?: string[] }>(
+    "skills.credentials.list",
+    { skillId },
+    profileId
+  );
+  const names = res.result?.names;
+  return Array.isArray(names) ? names : [];
+}
+
+/** List credential names (no values) for a provider. Requires admin/local auth. */
+export async function providerCredentialsList(
+  profileId: string,
+  providerId: string
+): Promise<string[]> {
+  const res = await rpcWithProfile<{ names?: string[] }>(
+    "provider.credentials.list",
+    { providerId },
+    profileId
+  );
+  const names = res.result?.names;
+  return Array.isArray(names) ? names : [];
+}
+
+/** Set a provider API key/credential. Value is never logged. Requires admin/local auth. */
+export async function providerCredentialsSet(
+  profileId: string,
+  providerId: string,
+  keyName: string,
+  value: string
+): Promise<void> {
+  await rpcWithProfile("provider.credentials.set", { providerId, keyName, value }, profileId);
+}
+
+/** Delete a provider credential. Requires admin/local auth. */
+export async function providerCredentialsDelete(
+  profileId: string,
+  providerId: string,
+  keyName: string
+): Promise<boolean> {
+  const res = await rpcWithProfile<{ deleted?: boolean }>(
+    "provider.credentials.delete",
+    { providerId, keyName },
+    profileId
+  );
+  return res.result?.deleted === true;
+}
+
+/** Result of provider.models.list: either models or an error (e.g. network, 401). */
+export interface ProviderModelsListResult {
+  models?: Array<{ id: string; name?: string }>;
+  error?: { code: string; message: string };
+}
+
+/** List models from a provider (e.g. Ollama tags, OpenAI-compatible /models). For discovery only; profile model selection still uses config. Requires admin/local auth. */
+export async function providerModelsList(
+  profileId: string,
+  providerId: string
+): Promise<ProviderModelsListResult> {
+  const res = await rpcWithProfile<{ models?: Array<{ id: string; name?: string }>; error?: { code: string; message: string } }>(
+    "provider.models.list",
+    { providerId },
+    profileId
+  );
+  const out = res.result;
+  if (out == null || typeof out !== "object") return {};
+  if ("error" in out && out.error) return { error: out.error };
+  return { models: Array.isArray(out.models) ? out.models : [] };
 }
 
 /** Opens SSE to /stream. Note: EventSource cannot send Authorization header; use same-origin or future stream-ticket flow for auth. */

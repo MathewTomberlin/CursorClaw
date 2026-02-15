@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import type { TurnResult } from "./runtime.js";
@@ -8,6 +8,8 @@ type RunStatus = "pending" | "completed" | "failed" | "interrupted";
 export interface PersistedRunRecord {
   runId: string;
   sessionId: string;
+  /** When set, used to resolve profile root for thread store (append assistant on completion). */
+  profileId?: string;
   status: RunStatus;
   createdAt: string;
   updatedAt: string;
@@ -40,8 +42,15 @@ export class RunStore {
       const raw = await readFile(this.options.stateFile, "utf8");
       const parsed = JSON.parse(raw) as PersistedRunStoreFile;
       this.records.clear();
+      // Dedupe by runId (keep last occurrence) so corrupted or merged file never has duplicate runIds.
+      const byRunId = new Map<string, PersistedRunRecord>();
       for (const record of parsed.runs ?? []) {
-        this.records.set(record.runId, record);
+        if (record && typeof record.runId === "string") {
+          byRunId.set(record.runId, record);
+        }
+      }
+      for (const [id, record] of byRunId) {
+        this.records.set(id, record);
       }
     } catch {
       // No state yet.
@@ -49,12 +58,13 @@ export class RunStore {
     this.loaded = true;
   }
 
-  async createPending(runId: string, sessionId: string): Promise<void> {
+  async createPending(runId: string, sessionId: string, profileId?: string): Promise<void> {
     await this.ensureLoaded();
     const now = new Date().toISOString();
     this.records.set(runId, {
       runId,
       sessionId,
+      ...(profileId !== undefined ? { profileId } : {}),
       status: "pending",
       createdAt: now,
       updatedAt: now
@@ -127,6 +137,17 @@ export class RunStore {
     return changed;
   }
 
+  /** True if any run is currently marked interrupted (e.g. after process restart). */
+  async hasInterruptedRuns(): Promise<boolean> {
+    await this.ensureLoaded();
+    for (const record of this.records.values()) {
+      if (record.status === "interrupted") {
+        return true;
+      }
+    }
+    return false;
+  }
+
   async get(runId: string): Promise<PersistedRunRecord | undefined> {
     await this.ensureLoaded();
     const record = this.records.get(runId);
@@ -174,7 +195,9 @@ export class RunStore {
       const payload: PersistedRunStoreFile = {
         runs: [...this.records.values()]
       };
-      await writeFile(this.options.stateFile, JSON.stringify(payload, null, 2), "utf8");
+      const tmpFile = this.options.stateFile + ".tmp";
+      await writeFile(tmpFile, JSON.stringify(payload, null, 2), "utf8");
+      await rename(tmpFile, this.options.stateFile);
     });
     await this.writeChain;
   }

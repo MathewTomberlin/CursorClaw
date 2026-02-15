@@ -25,6 +25,8 @@ In `openclaw.json`, set the model with **`promptAsArg: true`** and args like:
 
 On Windows with `agent.cmd`, use `"command": "agent.cmd"` and the same `args`. The adapter will append **`--approve-mcps`** and **`--force`** (headless workaround for MCP approvals), then the user message as the last argument, and will **not** write JSON to stdin.
 
+**Long prompts (Windows):** Windows limits command-line length (~8191 chars). If the user message exceeds a safe length (~4000 chars), the adapter **does not** pass it as an argument; it writes the prompt to the CLI’s stdin and closes it. The CLI must then read the initial prompt from stdin when no positional prompt is given. If the official Cursor CLI does not support reading the prompt from stdin, use shorter prompts or a custom CLI that accepts turn JSON on stdin.
+
 ### 2. Stdin turn JSON (custom CLIs)
 
 If your CLI reads a single JSON turn from stdin and emits NDJSON on stdout, **do not** set `promptAsArg`. Use args such as `["auto"]` or whatever your CLI expects. The adapter will write one line of turn JSON to stdin.
@@ -78,7 +80,7 @@ All output events must match:
 }
 ```
 
-The adapter also accepts `protocol` (version handshake), `system`, `user`, `thinking`, and `interaction_query` (Cursor CLI stream annotations); these are ignored and not forwarded. Cursor CLI `assistant` events (with `message.content[].text`) are mapped to `assistant_delta` only when the text is short (≤300 chars); longer events are the redundant final full message and are dropped so the reply is not duplicated (with `--stream-partial-output` the CLI sends deltas then the full message). A final `result` event is treated as end-of-turn and converted to a `done` event so the stream is accepted. Cursor CLI `tool_call` events may use a nested shape (e.g. `tool_call.name` / `tool_call.arguments`); when the nested name is a registered CursorClaw tool, the adapter normalizes and forwards them. Contract-shaped tool calls (`data.name` + `data.args`) are also forwarded when the name is known.
+The adapter also accepts `protocol` (version handshake), `system`, `user`, `thinking`, and `interaction_query` (Cursor CLI stream annotations); these are ignored and not forwarded. Cursor CLI `assistant` events (with `message.content[].text`) are always mapped to `assistant_delta` and forwarded in full; the runtime deduplicates if the CLI already sent the same content via incremental deltas (e.g. with `--stream-partial-output`). A final `result` event is treated as end-of-turn and converted to a `done` event so the stream is accepted. Cursor CLI `tool_call` events may use a nested shape (e.g. `tool_call.name` / `tool_call.arguments`); when the nested name is a registered CursorClaw tool, the adapter normalizes and forwards them. Contract-shaped tool calls (`data.name` + `data.args`) are also forwarded when the name is known.
 
 ### `assistant_delta`
 

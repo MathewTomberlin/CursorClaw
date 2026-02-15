@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
-import { getHeartbeatFile, updateHeartbeat, mapRpcError } from "../api";
+import { rpcWithProfile, mapRpcError } from "../api";
+import { useProfile } from "../contexts/ProfileContext";
 
 export default function Heartbeat() {
+  const { selectedProfileId } = useProfile();
   const [content, setContent] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -9,7 +11,11 @@ export default function Heartbeat() {
 
   const fetchContent = useCallback(async () => {
     try {
-      const { content: text } = await getHeartbeatFile();
+      const res = await rpcWithProfile<{ content: string }>("heartbeat.getFile", undefined, selectedProfileId);
+      const payload = res.result;
+      const text = payload != null && typeof payload === "object" && typeof (payload as { content?: string }).content === "string"
+        ? (payload as { content: string }).content
+        : "";
       setContent(text);
       setError(null);
     } catch (e) {
@@ -19,7 +25,7 @@ export default function Heartbeat() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedProfileId]);
 
   useEffect(() => {
     void fetchContent();
@@ -29,7 +35,7 @@ export default function Heartbeat() {
     setSaving(true);
     setError(null);
     try {
-      await updateHeartbeat(content);
+      await rpcWithProfile("heartbeat.update", { content }, selectedProfileId);
     } catch (e) {
       setError(
         e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } })

@@ -13,3 +13,13 @@ CLAW_HISTORY.log
 openclaw.json
 .env
 .env.local
+
+# Substrate / agent profile — generated or edited locally; do not track
+AGENTS.md
+BIRTH.md
+HEARTBEAT.md
+IDENTITY.md
+USER.md
+SOUL.md
+TOOLS.md
+CAPABILITIES.md

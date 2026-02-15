@@ -1,7 +1,9 @@
 import { useState } from "react";
-import { rpc, mapRpcError } from "../api";
+import { rpcWithProfile, mapRpcError } from "../api";
+import { useProfile } from "../contexts/ProfileContext";
 
 export default function Workspace() {
+  const { selectedProfileId } = useProfile();
   const [status, setStatus] = useState<unknown>(null);
   const [statusLoading, setStatusLoading] = useState(false);
   const [query, setQuery] = useState("");
@@ -22,7 +24,7 @@ export default function Workspace() {
     setError(null);
     setStatusLoading(true);
     try {
-      const res = await rpc("workspace.status");
+      const res = await rpcWithProfile("workspace.status", undefined, selectedProfileId);
       setStatus(res.result);
     } catch (e) {
       setError(e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } }));
@@ -39,7 +41,7 @@ export default function Workspace() {
     setError(null);
     setSearchLoading(true);
     try {
-      const res = await rpc("workspace.semantic_search", { query: query.trim() });
+      const res = await rpcWithProfile("workspace.semantic_search", { query: query.trim() }, selectedProfileId);
       setSearchResults(res.result);
     } catch (e) {
       setError(e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } }));
@@ -58,11 +60,11 @@ export default function Workspace() {
     setFileChangeLoading(true);
     setFileChangeResult(null);
     try {
-      const res = await rpc("advisor.file_change", {
+      const res = await rpcWithProfile("advisor.file_change", {
         channelId: fileChangeChannelId.trim() || "system",
         files,
         enqueue: fileChangeEnqueue
-      });
+      }, selectedProfileId);
       setFileChangeResult(res.result);
     } catch (e) {
       setError(e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } }));
@@ -82,7 +84,7 @@ export default function Workspace() {
     setExplainLoading(true);
     setExplainResult(null);
     try {
-      const res = await rpc("advisor.explain_function", { modulePath, symbol });
+      const res = await rpcWithProfile("advisor.explain_function", { modulePath, symbol }, selectedProfileId);
       setExplainResult(res.result);
     } catch (e) {
       setError(e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } }));

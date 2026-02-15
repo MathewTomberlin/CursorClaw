@@ -78,7 +78,7 @@ describe("gateway + orchestrator integration", () => {
     });
     const incidentCommander = new IncidentCommander();
     const app = buildGateway({
-      config,
+      getConfig: () => config,
       runtime,
       cronService,
       auth: new AuthService({

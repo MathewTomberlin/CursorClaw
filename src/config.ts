@@ -1,9 +1,16 @@
 import type { HeartbeatConfig } from "./types.js";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { writeFile } from "node:fs/promises";
+import { dirname, join, resolve, sep } from "node:path";
 
 export interface GatewayConfig {
   bind: "loopback" | "0.0.0.0";
+  /**
+   * When set, the gateway listens on this address instead of the host derived from `bind`.
+   * Use for Tailscale: set to the host's Tailscale IP (e.g. 100.x.x.x) so only Tailnet traffic is accepted.
+   * Allowed: loopback (127.x, ::1), link-local (169.254.x), private (10.x, 172.16–31.x, 192.168.x), Tailscale CGNAT (100.64.0.0/10).
+   */
+  bindAddress?: string;
   bodyLimitBytes: number;
   auth: {
     mode: "token" | "password" | "none";
@@ -35,7 +42,7 @@ export interface CompactionConfig {
 }
 
 export interface ModelProviderConfig {
-  provider: "cursor-agent-cli" | "fallback-model";
+  provider: "cursor-agent-cli" | "fallback-model" | "ollama" | "openai-compatible";
   command?: string;
   args?: string[];
   /** If true, pass last user message as final CLI arg (e.g. Cursor CLI -p --output-format stream-json). */
@@ -44,6 +51,14 @@ export interface ModelProviderConfig {
   authProfiles: string[];
   fallbackModels: string[];
   enabled: boolean;
+  /** Reference into credential store for API key (never plaintext in config). Used by OpenAI-compatible etc. */
+  apiKeyRef?: string;
+  /** Provider-specific: Ollama model name (e.g. llama3.2, granite3.2). */
+  ollamaModelName?: string;
+  /** Provider-specific: base URL for OpenAI-compatible or Ollama (e.g. http://localhost:11434). */
+  baseURL?: string;
+  /** Provider-specific: OpenAI-compatible model id (e.g. gpt-4o-mini, gpt-4o). */
+  openaiModelId?: string;
 }
 
 export interface ToolsConfig {
@@ -132,6 +147,14 @@ export interface MetricsConfig {
   intervalSeconds?: number;
 }
 
+/** Optional per-agent profile: isolated root for substrate, memory, heartbeat, cron, etc. */
+export interface AgentProfileConfig {
+  id: string;
+  root: string;
+  /** Optional model id for this profile; must exist in config.models. When absent, config.defaultModel is used. */
+  modelId?: string;
+}
+
 /** Optional substrate file paths (workspace-relative). Defaults: AGENTS.md, IDENTITY.md, SOUL.md, BIRTH.md, CAPABILITIES.md, USER.md, TOOLS.md in workspace root. */
 export interface SubstrateConfig {
   agentsPath?: string;
@@ -143,6 +166,19 @@ export interface SubstrateConfig {
   toolsPath?: string;
   /** When true, include a short capabilities summary in the system prompt (default false). */
   includeCapabilitiesInPrompt?: boolean;
+}
+
+export interface ContinuityConfig {
+  /** When true (default), run BOOT.md once at process startup when the file exists at profile root. */
+  bootEnabled?: boolean;
+  /** When true (default), inject MEMORY.md + memory/today+yesterday into main-session system prompt at turn start. */
+  sessionMemoryEnabled?: boolean;
+  /** Max characters for session memory injection (default 32000). Only used when sessionMemoryEnabled is true. */
+  sessionMemoryCap?: number;
+  /** When true, enable optional memory-embedding index and recall_memory tool for main session (default false). */
+  memoryEmbeddingsEnabled?: boolean;
+  /** Max memory records to keep in the embedding index (default 3000). Only used when memoryEmbeddingsEnabled is true. */
+  memoryEmbeddingsMaxRecords?: number;
 }
 
 export interface CursorClawConfig {
@@ -169,6 +205,10 @@ export interface CursorClawConfig {
   };
   /** Optional. When present, substrate files (Identity, Soul, Birth, etc.) are loaded from workspace and injected into the prompt. */
   substrate?: SubstrateConfig;
+  /** Optional. Continuity behavior (BOOT.md at startup). */
+  continuity?: ContinuityConfig;
+  /** Optional. When set, each agent has an isolated profile directory. When absent, workspaceDir is the single profile root. */
+  profiles?: AgentProfileConfig[];
 }
 
 export type DeepPartial<T> = {
@@ -314,6 +354,13 @@ export const DEFAULT_CONFIG: CursorClawConfig = {
   autonomyBudget: {
     maxPerHourPerChannel: 4,
     maxPerDayPerChannel: 20
+  },
+  continuity: {
+    bootEnabled: true,
+    sessionMemoryEnabled: true,
+    sessionMemoryCap: 32_000,
+    memoryEmbeddingsEnabled: false,
+    memoryEmbeddingsMaxRecords: 3_000
   }
 };
 
@@ -336,12 +383,93 @@ function merge<T extends object>(base: T, override?: DeepPartial<T>): T {
   return out as T;
 }
 
+/** Top-level config keys safe to patch via config.patch (excludes gateway, defaultModel, models). */
+export const PATCHABLE_CONFIG_KEYS: (keyof CursorClawConfig)[] = [
+  "heartbeat",
+  "autonomyBudget",
+  "memory",
+  "reflection",
+  "session",
+  "compaction",
+  "workspaces",
+  "contextCompression",
+  "networkTrace",
+  "metrics",
+  "reliability",
+  "tools",
+  "substrate",
+  "continuity",
+  "profiles"
+];
+
+/** Merges a partial config into current, only for allowed top-level keys. Used by config.patch. */
+export function mergeConfigPatch(
+  current: CursorClawConfig,
+  partial: DeepPartial<CursorClawConfig>,
+  allowedKeys: (keyof CursorClawConfig)[]
+): CursorClawConfig {
+  const filtered: DeepPartial<CursorClawConfig> = {};
+  for (const k of allowedKeys) {
+    const v = (partial as Record<string, unknown>)[k as string];
+    if (v !== undefined) {
+      (filtered as Record<string, unknown>)[k as string] = v;
+    }
+  }
+  return merge(current, filtered) as CursorClawConfig;
+}
+
 export function loadConfig(raw?: DeepPartial<CursorClawConfig>): CursorClawConfig {
   const config = merge(DEFAULT_CONFIG, raw);
   if (config.gateway.auth.mode !== "none" && !config.gateway.auth.token && !config.gateway.auth.password) {
     throw new Error("secure config requires gateway auth token or password");
   }
   return config;
+}
+
+/** Default profile id when no profiles are configured, or the first profile id when they are. */
+export function getDefaultProfileId(config: CursorClawConfig): string {
+  const list = config.profiles;
+  if (!list?.length) return "default";
+  const first = list[0];
+  return first?.id ?? "default";
+}
+
+/**
+ * Resolve the model id to use for a given profile.
+ * When no profiles are configured, returns config.defaultModel.
+ * When the profile has modelId set (and it exists in config.models), returns that; otherwise config.defaultModel.
+ */
+export function getModelIdForProfile(config: CursorClawConfig, profileId: string): string {
+  const list = config.profiles;
+  if (!list?.length) return config.defaultModel;
+  const profile = list.find((p) => p.id === profileId) ?? list[0];
+  const modelId = profile?.modelId ?? config.defaultModel;
+  if (config.models[modelId]) return modelId;
+  return config.defaultModel;
+}
+
+/**
+ * Resolve the absolute profile root for the given profile.
+ * When no profiles are configured, returns workspaceDir (single-agent mode).
+ * Profile root is always resolved under workspaceDir to prevent path traversal.
+ */
+export function resolveProfileRoot(
+  workspaceDir: string,
+  config: CursorClawConfig,
+  profileId?: string
+): string {
+  const list = config.profiles;
+  if (!list?.length) return resolve(workspaceDir);
+  const id = profileId ?? getDefaultProfileId(config);
+  const profile = list.find((p) => p.id === id) ?? list[0];
+  if (!profile) throw new Error("profiles configured but no profile found");
+  const base = resolve(workspaceDir);
+  const candidate = resolve(base, profile.root);
+  const prefix = base.endsWith(sep) ? base : base + sep;
+  if (candidate !== base && !candidate.startsWith(prefix)) {
+    throw new Error(`profile root must be under workspace: ${profile.root}`);
+  }
+  return candidate;
 }
 
 export interface LoadConfigFromDiskOptions {
@@ -402,4 +530,26 @@ export function validateStartupConfig(
 
 export function isDevMode(env: NodeJS.ProcessEnv = process.env): boolean {
   return /^(1|true|yes)$/i.test(env.CURSORCLAW_DEV_MODE ?? "");
+}
+
+/**
+ * Writes config to disk at resolveConfigPath(options).
+ * Uses atomic write (temp file then rename). Ensures parent directory exists.
+ */
+export async function writeConfigToDisk(
+  config: CursorClawConfig,
+  options: LoadConfigFromDiskOptions = {}
+): Promise<string> {
+  const configPath = resolveConfigPath(options);
+  const dir = dirname(configPath);
+  if (!existsSync(dir)) {
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(dir, { recursive: true });
+  }
+  const tmpPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
+  const json = JSON.stringify(config, null, 2);
+  await writeFile(tmpPath, json, "utf8");
+  const { rename } = await import("node:fs/promises");
+  await rename(tmpPath, configPath);
+  return configPath;
 }

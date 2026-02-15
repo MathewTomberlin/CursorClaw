@@ -45,7 +45,8 @@ Dev-mode detection:
   "models": {},
   "defaultModel": "cursor-auto",
   "autonomyBudget": {},
-  "substrate": {}
+  "substrate": {},
+  "continuity": {}
 }
 ```
 
@@ -68,6 +69,7 @@ Defaults:
 Fields:
 
 - `bind`: `"loopback"` or `"0.0.0.0"`
+- `bindAddress`: optional. When set, the gateway listens on this address instead of the host implied by `bind`. Use for Tailscale: set to the host’s Tailscale IP (e.g. `100.x.x.x`) so only Tailnet traffic is accepted. Allowed: loopback (127.x, ::1), link-local (169.254.x), private (10.x, 172.16–31.x, 192.168.x), Tailscale CGNAT (100.64.0.0/10). You can set it in the Dashboard (Config → Gateway bind address) or via `config.patch` with `{ gateway: { bindAddress: "100.x.x.x" } }`; restart is required for the change to take effect. From another Tailscale device you can open the Dashboard and use Restart (requests from Tailscale IPs are treated as local). Invalid or unsafe values are rejected at startup or when patching with a clear error.
 - `bodyLimitBytes`: max HTTP body size
 - `auth.mode`: `"token" | "password" | "none"`
 - `auth.token`, `auth.password`
@@ -322,6 +324,8 @@ Model object fields:
 
 ## 4.15 `autonomyBudget`
 
+Limits how many proactive/autonomy actions run per channel per hour and per day. **Scheduled heartbeats are not limited** (they always run on their interval). Other proactive flows (e.g. queued intents) respect this budget.
+
 Defaults:
 
 ```json
@@ -331,7 +335,9 @@ Defaults:
 }
 ```
 
-Optional:
+Optional **quiet hours** (UTC): when set, the budget denies runs whose hour (UTC) falls inside the window. To **disable quiet hours**, omit `quietHours` from your config (or do not set `autonomyBudget.quietHours`).
+
+Example (22:00–06:00 UTC = no runs during that window):
 
 ```json
 {
@@ -341,6 +347,8 @@ Optional:
   }
 }
 ```
+
+If you see "heartbeat skipped: budget limit or quiet hours", it was from an older build; in current code, scheduled heartbeats bypass the budget and are never skipped for limit or quiet hours.
 
 ## 4.16 `substrate`
 
@@ -380,6 +388,39 @@ Path defaults (workspace root): `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `BIRTH.md
 - When **HEARTBEAT.md** is missing, empty, or comments-only, set `heartbeat.skipWhenEmpty: true` to skip issuing a heartbeat API call for that cycle; see `heartbeat` section.
 
 **BOOT.md (future):** Short startup instructions; when implemented, would run at process/gateway startup (e.g. send welcome, run check). Not injected into the chat system prompt. Optional memory layer (MEMORY.md, memory/YYYY-MM-DD.md) for session-start continuity is documented as future work in the implementation spec.
+
+## 4.17 `continuity`
+
+Optional. Controls BOOT.md at startup, session-start memory injection, and optional memory-embedding index.
+
+Defaults:
+
+```json
+{
+  "bootEnabled": true,
+  "sessionMemoryEnabled": true,
+  "sessionMemoryCap": 32000,
+  "memoryEmbeddingsEnabled": false,
+  "memoryEmbeddingsMaxRecords": 3000
+}
+```
+
+- **bootEnabled:** When true (default), run BOOT.md once at process startup when the file exists at profile root.
+- **sessionMemoryEnabled:** When true (default), inject MEMORY.md and memory/today+yesterday into the main-session system prompt at turn start. See docs/memory.md.
+- **sessionMemoryCap:** Max characters for that injection (default 32000). Only used when sessionMemoryEnabled is true.
+- **memoryEmbeddingsEnabled:** When true, maintain a memory-embedding index and enable the recall_memory tool for the main session (default false).
+- **memoryEmbeddingsMaxRecords:** Max records in the embedding index (default 3000). Only used when memoryEmbeddingsEnabled is true.
+
+## Token and context limits
+
+The runtime limits prompt size in several places. There is **no per-model or per-provider context token cap** yet; providers may truncate or fail when the prompt exceeds the model’s context window.
+
+- **session.maxMessagesPerTurn** (default 10_000): Max messages accepted per request; the runtime compacts long threads to a smaller window. Users are not blocked from sending more; compaction retains a recent window and injects a summary.
+- **session.maxMessageChars** (default 8_000): Per-message character limit. Used by the runtime to cap individual system messages and to derive the total system prompt budget.
+- **continuity.sessionMemoryCap** (default 32_000): Cap on session-start memory injection (MEMORY.md + memory/today+yesterday) in characters. See § 4.17 and docs/memory.md.
+- **Runtime system prompt budget:** The runtime applies `applySystemPromptBudget`: each system message is capped at `session.maxMessageChars`, and the combined system messages are capped at about 1.5× that value (total system budget). Excess is truncated (conversation history and optional context are trimmed first; core system blocks are preserved in the current implementation).
+
+So critical system blocks (AGENTS, SOUL, USER, memory summary) are preserved up to the per-message and total budget; there is no optional per-model `maxContextTokens` yet to pre-truncate before sending to small-context models (e.g. 8K local models). Future work may add per-model caps and priority-aware truncation.
 
 ## 5) Environment variables used at runtime
 

@@ -52,6 +52,8 @@ export interface SessionContext {
   channelId: string;
   userId?: string;
   channelKind: ChannelKind;
+  /** When set, used to resolve per-profile model (and future profile-scoped state). */
+  profileId?: string;
 }
 
 export type LifecycleEventType =
@@ -98,10 +100,17 @@ export interface ModelSessionHandle {
 export interface SendTurnOptions {
   turnId: string;
   timeoutMs?: number;
+  /** When set, used to resolve profile-scoped apiKeyRef (e.g. profile:openai-compatible). */
+  profileRoot?: string;
+}
+
+export interface CreateSessionOptions {
+  /** Override model id for this session (e.g. from profile); must exist in config.models. */
+  modelId?: string;
 }
 
 export interface ModelAdapter {
-  createSession(context: SessionContext): Promise<ModelSessionHandle>;
+  createSession(context: SessionContext, options?: CreateSessionOptions): Promise<ModelSessionHandle>;
   sendTurn(
     session: ModelSessionHandle,
     messages: Array<{ role: string; content: string }>,
@@ -135,6 +144,12 @@ export interface ToolExecuteContext {
   auditId: string;
   decisionLogs: PolicyDecisionLog[];
   provenance?: "system" | "operator" | "untrusted";
+  /** Profile root for the current turn (used by profile-scoped tools e.g. recall_memory). */
+  profileRoot?: string;
+  /** Channel kind (e.g. "web" for main session). Used to restrict tools to main session when required. */
+  channelKind?: string;
+  /** Session id for the current turn (e.g. "main"). Used by profile-scoped tools e.g. remember_this. */
+  sessionId?: string;
 }
 
 export interface ToolDefinition {
