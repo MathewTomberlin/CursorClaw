@@ -2,7 +2,7 @@
 
 Exploration of how user messages are received, how heartbeats run, and where we could add “interrupt to respond” so the agent can prioritize replying to the user over an in-flight heartbeat.
 
-**Status: Implemented.** When a user sends a message (`agent.run` with a session other than `heartbeat:main`), the gateway calls `runtime.cancelTurnForSession("heartbeat:main")` so any in-flight heartbeat turn is cancelled. The user turn runs in its own session queue; the next heartbeat is scheduled as usual in the orchestrator's `runHeartbeat().finally()`. User-facing responsiveness is prioritized; heartbeat work resumes on the next scheduled tick.
+**Status: Implemented.** When a user sends a message (`agent.run` with a session other than `heartbeat:main`), the gateway calls `runtime.cancelTurnForSession("heartbeat:main")` and `markHeartbeatInterrupted()` so any in-flight heartbeat turn is cancelled. The user turn runs in its own session queue; the next heartbeat is scheduled as usual in the orchestrator's `runHeartbeat().finally()`. User-facing responsiveness is prioritized. On the next heartbeat tick, the agent receives an explicit resume notice ("The previous heartbeat was interrupted by a user message. Continue with ROADMAP.md and HEARTBEAT.md as appropriate.") so it can continue planned work. Heartbeat work thus resumes with continuity on the next scheduled tick.
 
 ## 1. How user messages are received
 
@@ -117,8 +117,9 @@ This keeps the exploration in one place and gives a clear path to add interrupt-
 
 ## 7. Implementation (current)
 
-Approach A is in place:
+Approach A is in place, with resume continuity:
 
-- **Runtime** (`src/runtime.ts`): Tracks `currentRunIdBySession` per session; `cancelTurnForSession(sessionId)` calls `adapter.cancel(runId)` for that session's in-flight run.
-- **Gateway** (`src/gateway.ts`): On `agent.run`, when `session.sessionId !== "heartbeat:main"`, calls `deps.runtime.cancelTurnForSession("heartbeat:main")` before `runtime.startTurn`. User turn runs in its own queue; any in-flight heartbeat is cancelled.
+- **Runtime** (`src/runtime.ts`): Tracks `currentRunIdBySession` per session; `cancelTurnForSession(sessionId)` calls `adapter.cancel(runId)` for that session's in-flight run. A formal "Planning and automation" system block is injected when substrate (AGENTS or ROADMAP) is present, so the agent natively knows: user messages always interrupt heartbeat work; next heartbeat continues from ROADMAP and HEARTBEAT.md.
+- **Gateway** (`src/gateway.ts`): On `agent.run`, when `session.sessionId !== "heartbeat:main"`, calls `deps.runtime.cancelTurnForSession("heartbeat:main")` and `deps.markHeartbeatInterrupted?.()`. User turn runs in its own queue; any in-flight heartbeat is cancelled.
+- **Index** (`src/index.ts`): Maintains `heartbeatInterruptedByUserRef`; when the next heartbeat turn runs, if the ref was set, the heartbeat user message is prefixed with a resume notice and the ref is cleared.
 - **Orchestrator**: Unchanged; `runHeartbeat().finally(() => scheduleHeartbeat(0))` ensures the next heartbeat is always scheduled. Cancelled turns reject; `finally` still runs.

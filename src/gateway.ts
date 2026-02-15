@@ -135,6 +135,8 @@ export interface GatewayDependencies {
   getPendingProactiveMessage?: () => string | null;
   /** If set, heartbeat.poll calls this to return and clear the pending proactive message. */
   takePendingProactiveMessage?: () => string | null;
+  /** When set, called when a user message triggers cancellation of in-flight heartbeat so the next heartbeat can show a resume notice. */
+  markHeartbeatInterrupted?: () => void;
 }
 
 /** Resolve profile context for profile-scoped RPCs. Uses getProfileContext when present, otherwise builds a one-off context from deps (single-profile). */
@@ -436,6 +438,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         // Interrupt in-flight heartbeat so user turn can run immediately; heartbeat will reschedule.
         if (session.sessionId !== "heartbeat:main") {
           deps.runtime.cancelTurnForSession("heartbeat:main");
+          deps.markHeartbeatInterrupted?.();
         }
         // Runtime compacts via applyUserMessageFreshness; no user-facing message limit.
         const started = deps.runtime.startTurn({ session, messages });

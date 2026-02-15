@@ -31,7 +31,7 @@ Implemented primarily in `src/runtime.ts`.
    - optional deep scan (`DeepScanService`)
    - optional confidence gate (`ConfidenceModel`) that can return a human-hint request before model invocation
 4. Prompt is assembled from:
-   - optional substrate (Identity, Soul, User in main session, Birth on first turn, optional Capabilities/Tools summary) when `config.substrate` is set; see `src/substrate/` and docs/configuration-reference.md §4.16
+   - optional substrate (Identity, Soul, User in main session, Birth on first turn, optional Capabilities/Tools summary, ROADMAP planning file) when `config.substrate` is set; see `src/substrate/` and docs/configuration-reference.md §4.16. When substrate includes AGENTS or ROADMAP, a formal "Planning and automation" system block is injected so the agent natively plans and automates work (milestones, heartbeats, user prioritization).
    - fresh user messages (last 8 max)
    - contradiction annotations
    - multi-path/deep-scan system hints
