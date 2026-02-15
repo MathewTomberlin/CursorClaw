@@ -305,7 +305,34 @@ Notes:
 
 Destructive command detection is signature-based (`src/security/destructive-denylist.ts`). Patterns block recursive force-remove, raw device writes, filesystem format, and redirects to devices. The denylist may need updates for new shells or environments; no attestation of custom tool definitions is enforced.
 
-## 4.14 `models` and `defaultModel`
+## 4.14 `tools.gh` (read-only GitHub PRs)
+
+Optional read-only GitHub integration via the GitHub CLI (`gh`). When enabled, the agent gets a dedicated tool `gh_pr_read` that can run **only** `gh pr list` and `gh pr view` (by number or branch). No PR creation, merge, or other mutating operations.
+
+Defaults:
+
+```json
+{
+  "enabled": false,
+  "repoScope": null
+}
+```
+
+Fields:
+
+- **`enabled`:** When `true`, the `gh_pr_read` tool is registered. Default `false`.
+- **`repoScope` (optional):** When set (e.g. `"owner/repo"`), every `gh` call is made with `--repo owner/repo` so the agent cannot target other repositories.
+
+**Authentication:** No token is passed in tool arguments or config. The operator must either:
+
+1. Run `gh auth login` on the host where CursorClaw runs so the process inherits the session, or  
+2. Set `GH_TOKEN` or `GITHUB_TOKEN` in the **environment** of the CursorClaw process (e.g. a fine-grained PAT with minimal scope: read-only for Pull requests and Repository metadata for the repo).
+
+**Approval:** `gh_pr_read` is treated as network-impacting; it uses the same capability/approval model as other network read operations (e.g. `process.exec` and `net.fetch`). See the approval workflow and capability store for your profile.
+
+**Docs:** See `docs/GH.1-read-only-github-integration.md` for the full implementation guide and security notes.
+
+## 4.15 `models` and `defaultModel`
 
 Default model map:
 
@@ -326,7 +353,7 @@ Model object fields:
 - `summarizeOldTurns?: boolean` — Optional (TU.4). When `true` and the prompt is over `maxContextTokens`, the runtime replaces the oldest messages (all but the last) with a single rule-based summary before applying the cap. Off by default; no change to truncation when disabled.
 - `summarizeOldTurnsMaxTokens?: number` — Optional. Max tokens for the summary of earlier turns when `summarizeOldTurns` is true. Default 200.
 
-## 4.15 `autonomyBudget`
+## 4.16 `autonomyBudget`
 
 Limits how many proactive/autonomy actions run per channel per hour and per day. **Scheduled heartbeats are not limited** (they always run on their interval). Other proactive flows (e.g. queued intents) respect this budget.
 
@@ -354,7 +381,7 @@ Example (22:00–06:00 UTC = no runs during that window):
 
 If you see "heartbeat skipped: budget limit or quiet hours", it was from an older build; in current code, scheduled heartbeats bypass the budget and are never skipped for limit or quiet hours.
 
-## 4.16 `substrate`
+## 4.17 `substrate`
 
 Optional. When present, workspace markdown files (AGENTS, Identity, Soul, Birth, etc.) are loaded at startup and injected into the system prompt for every turn, including heartbeat.
 
@@ -401,7 +428,7 @@ User messages are prioritized over background work. When a user sends a message 
 
 **BOOT.md (future):** Short startup instructions; when implemented, would run at process/gateway startup (e.g. send welcome, run check). Not injected into the chat system prompt. Optional memory layer (MEMORY.md, memory/YYYY-MM-DD.md) for session-start continuity is documented as future work in the implementation spec.
 
-## 4.17 `continuity`
+## 4.18 `continuity`
 
 Optional. Controls BOOT.md at startup, session-start memory injection, and optional memory-embedding index.
 
