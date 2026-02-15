@@ -26,7 +26,7 @@ import type { QueueBackend } from "./queue/types.js";
 import { InMemoryQueueBackend } from "./queue/in-memory-backend.js";
 import type { LifecycleStream } from "./lifecycle-stream/types.js";
 import type { SubstrateContent } from "./substrate/index.js";
-import type { PolicyDecisionLog, SessionContext, ToolCall } from "./types.js";
+import type { PolicyDecisionLog, SendTurnOptions, SessionContext, ToolCall, ToolExecuteContext } from "./types.js";
 import { ToolRouter, classifyCommandIntent } from "./tools.js";
 
 type RuntimeMessage = {
@@ -180,6 +180,10 @@ export interface AgentRuntimeOptions {
   getSubstrate?: () => SubstrateContent;
   /** When set, used to resolve profile root for the current turn (e.g. for profile-scoped provider API keys). */
   getProfileRoot?: (profileId: string) => string | undefined;
+  /** When set, used for main session only to load MEMORY.md + memory/today+yesterday and inject into system prompt. */
+  getSessionMemoryContext?: (profileRoot: string) => Promise<string | undefined>;
+  /** When set, called for main session; if it returns a string, injected once as a system notice (e.g. "Previous run was interrupted by process restart"). */
+  getInterruptedRunNotice?: () => Promise<string | undefined>;
 }
 
 export class AgentRuntime {
@@ -384,15 +388,16 @@ export class AgentRuntime {
           const profileId = request.session.profileId ?? getDefaultProfileId(this.options.config);
           const profileRoot = this.options.getProfileRoot?.(profileId);
 
+          const sendOptions: SendTurnOptions = {
+            turnId: runId,
+            timeoutMs: this.options.config.session.turnTimeoutMs,
+            ...(profileRoot !== undefined && profileRoot !== "" ? { profileRoot } : {})
+          };
           const adapterStream = this.options.adapter.sendTurn(
             modelSession,
             promptMessages,
             this.options.toolRouter.list(),
-            {
-              turnId: runId,
-              timeoutMs: this.options.config.session.turnTimeoutMs,
-              profileRoot
-            }
+            sendOptions
           );
           let emittedCount = 2;
           for await (const event of adapterStream) {
@@ -415,11 +420,15 @@ export class AgentRuntime {
               if (!checkpointHandle && this.shouldCreateCheckpoint(call)) {
                 checkpointHandle = await this.options.gitCheckpointManager?.createCheckpoint(runId) ?? null;
               }
-              const output = await this.options.toolRouter.execute(call, {
+              const toolContext: ToolExecuteContext = {
                 auditId: runId,
                 decisionLogs: this.decisionLogs,
                 provenance: turnProvenance
-              });
+              };
+              const profileRootForTool = this.options.getProfileRoot?.(request.session.profileId ?? getDefaultProfileId(this.options.config));
+              if (profileRootForTool !== undefined) toolContext.profileRoot = profileRootForTool;
+              if (request.session.channelKind !== undefined) toolContext.channelKind = request.session.channelKind;
+              const output = await this.options.toolRouter.execute(call, toolContext);
               const safeCall = this.scrubUnknown(call, scrubScopeId) as ToolCall;
               const safeOutput = this.scrubUnknown(output, scrubScopeId);
               this.metrics.toolCalls += 1;
@@ -699,6 +708,29 @@ export class AgentRuntime {
         role: "system",
         content: this.scrubText(`User:\n\n${substrate.user.trim()}`, scopeId)
       });
+    }
+
+    if (isMainSession && this.options.getSessionMemoryContext && this.options.getProfileRoot) {
+      const profileId = request.session.profileId ?? getDefaultProfileId(this.options.config);
+      const profileRoot = this.options.getProfileRoot(profileId);
+      if (profileRoot) {
+        const memoryContext = await this.options.getSessionMemoryContext(profileRoot);
+        if (memoryContext?.trim()) {
+          systemMessages.push({
+            role: "system",
+            content: this.scrubText(`Session memory (for continuity):\n\n${memoryContext.trim()}`, scopeId)
+          });
+        }
+      }
+    }
+    if (isMainSession && this.options.getInterruptedRunNotice) {
+      const notice = await this.options.getInterruptedRunNotice();
+      if (notice?.trim()) {
+        systemMessages.push({
+          role: "system",
+          content: this.scrubText(notice.trim(), scopeId)
+        });
+      }
     }
 
     const isFirstTurnThisSession = !this.sessionsWithTurn.has(request.session.sessionId);

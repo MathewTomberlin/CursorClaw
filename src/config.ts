@@ -168,6 +168,19 @@ export interface SubstrateConfig {
   includeCapabilitiesInPrompt?: boolean;
 }
 
+export interface ContinuityConfig {
+  /** When true (default), run BOOT.md once at process startup when the file exists at profile root. */
+  bootEnabled?: boolean;
+  /** When true (default), inject MEMORY.md + memory/today+yesterday into main-session system prompt at turn start. */
+  sessionMemoryEnabled?: boolean;
+  /** Max characters for session memory injection (default 32000). Only used when sessionMemoryEnabled is true. */
+  sessionMemoryCap?: number;
+  /** When true, enable optional memory-embedding index and recall_memory tool for main session (default false). */
+  memoryEmbeddingsEnabled?: boolean;
+  /** Max memory records to keep in the embedding index (default 3000). Only used when memoryEmbeddingsEnabled is true. */
+  memoryEmbeddingsMaxRecords?: number;
+}
+
 export interface CursorClawConfig {
   gateway: GatewayConfig;
   session: SessionConfig;
@@ -192,6 +205,8 @@ export interface CursorClawConfig {
   };
   /** Optional. When present, substrate files (Identity, Soul, Birth, etc.) are loaded from workspace and injected into the prompt. */
   substrate?: SubstrateConfig;
+  /** Optional. Continuity behavior (BOOT.md at startup). */
+  continuity?: ContinuityConfig;
   /** Optional. When set, each agent has an isolated profile directory. When absent, workspaceDir is the single profile root. */
   profiles?: AgentProfileConfig[];
 }
@@ -339,6 +354,13 @@ export const DEFAULT_CONFIG: CursorClawConfig = {
   autonomyBudget: {
     maxPerHourPerChannel: 4,
     maxPerDayPerChannel: 20
+  },
+  continuity: {
+    bootEnabled: true,
+    sessionMemoryEnabled: true,
+    sessionMemoryCap: 32_000,
+    memoryEmbeddingsEnabled: false,
+    memoryEmbeddingsMaxRecords: 3_000
   }
 };
 
@@ -376,6 +398,7 @@ export const PATCHABLE_CONFIG_KEYS: (keyof CursorClawConfig)[] = [
   "reliability",
   "tools",
   "substrate",
+  "continuity",
   "profiles"
 ];
 

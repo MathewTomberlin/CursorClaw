@@ -66,6 +66,7 @@ import {
   createMcpCallTool,
   createMcpListResourcesTool,
   createMcpReadResourceTool,
+  createRecallMemoryTool,
   createWebFetchTool,
   createWebSearchTool
 } from "./tools.js";
@@ -76,6 +77,8 @@ import { loadSubstrate, SubstrateStore } from "./substrate/index.js";
 import type { SubstrateContent } from "./substrate/index.js";
 import { WorkspaceCatalog } from "./workspaces/catalog.js";
 import { MultiRootIndexer } from "./workspaces/multi-root-indexer.js";
+import { MemoryEmbeddingIndex } from "./continuity/memory-embedding-index.js";
+import { loadSessionMemoryContext } from "./continuity/session-memory.js";
 
 /** Exit code used when restart is requested; run-with-restart wrapper will re-run the process in the same terminal. */
 export const RESTART_EXIT_CODE = 42;
@@ -255,6 +258,14 @@ async function main(): Promise<void> {
   }
 
   const memory = new MemoryStore({ workspaceDir: profileRoot });
+  let memoryEmbeddingIndex: MemoryEmbeddingIndex | null = null;
+  if (config.continuity?.memoryEmbeddingsEnabled) {
+    memoryEmbeddingIndex = new MemoryEmbeddingIndex({
+      stateFile: join(profileRoot, "tmp", "memory-embeddings.json"),
+      maxRecords: config.continuity.memoryEmbeddingsMaxRecords ?? 3_000
+    });
+    await memoryEmbeddingIndex.load();
+  }
   const configuredDetectors = config.privacy.detectors.filter(
     (detector): detector is SecretDetectorName => VALID_SECRET_DETECTORS.has(detector as SecretDetectorName)
   );
@@ -340,6 +351,19 @@ async function main(): Promise<void> {
     toolRouter.register(createMcpReadResourceTool({ registry: mcpRegistry }));
     toolRouter.register(createMcpCallTool({ registry: mcpRegistry, approvalGate }));
   }
+  if (config.continuity?.memoryEmbeddingsEnabled && memoryEmbeddingIndex) {
+    const defaultProfileRoot = profileRoot;
+    toolRouter.register(
+      createRecallMemoryTool({
+        getRecallResults: async (root, query, topK) => {
+          if (root !== defaultProfileRoot) return [];
+          const records = await memory.readAll();
+          await memoryEmbeddingIndex!.upsertFromRecords(records, config.memory.includeSecretsInPrompt);
+          return memoryEmbeddingIndex!.query({ query, topK });
+        }
+      })
+    );
+  }
 
   const confidenceModel = new ConfidenceModel();
   const deepScanService = new DeepScanService({
@@ -353,6 +377,22 @@ async function main(): Promise<void> {
   let recentBackgroundTestsPassing = false;
 
   const getSubstrate = (): SubstrateContent => defaultCtx.substrateStore!.get();
+
+  const runStore = new RunStore({
+    stateFile: join(profileRoot, "tmp", "run-store.json"),
+    maxCompletedRuns: 10_000
+  });
+  await runStore.load();
+  await runStore.markInFlightInterrupted();
+
+  let interruptedNoticeShown = false;
+  const getInterruptedRunNotice = async (): Promise<string | undefined> => {
+    if (interruptedNoticeShown) return undefined;
+    const had = await runStore.hasInterruptedRuns();
+    if (!had) return undefined;
+    interruptedNoticeShown = true;
+    return "Previous run was interrupted by process restart.";
+  };
 
   const lifecycleStream = new InMemoryLifecycleStream();
   const runtime = new AgentRuntime({
@@ -385,15 +425,15 @@ async function main(): Promise<void> {
     lifecycleStream,
     snapshotDir: join(profileRoot, "tmp", "snapshots"),
     getSubstrate,
-    getProfileRoot: (profileId: string) => profileContextMap.get(profileId)?.profileRoot ?? defaultCtx.profileRoot
+    getProfileRoot: (profileId: string) => profileContextMap.get(profileId)?.profileRoot ?? defaultCtx.profileRoot,
+    getSessionMemoryContext: (root: string) => {
+      const c = configRef.current.continuity;
+      if (c?.sessionMemoryEnabled === false) return Promise.resolve(undefined);
+      const cap = c?.sessionMemoryCap;
+      return loadSessionMemoryContext(root, cap != null ? { capChars: cap } : undefined);
+    },
+    getInterruptedRunNotice
   });
-
-  const runStore = new RunStore({
-    stateFile: join(profileRoot, "tmp", "run-store.json"),
-    maxCompletedRuns: 10_000
-  });
-  await runStore.load();
-  await runStore.markInFlightInterrupted();
 
   const heartbeat = new HeartbeatRunner(() => configRef.current.heartbeat);
   const budget = new AutonomyBudget(config.autonomyBudget);
@@ -699,6 +739,44 @@ async function main(): Promise<void> {
     host: bindHost,
     port
   });
+
+  // C.1 BOOT.md: run once at process startup when enabled and file exists
+  const bootEnabled = configRef.current.continuity?.bootEnabled !== false;
+  const bootPath = join(profileRoot, "BOOT.md");
+  if (bootEnabled && existsSync(bootPath)) {
+    try {
+      const bootContent = await readFile(bootPath, "utf8");
+      const trimmed = bootContent.trim();
+      if (trimmed.length > 0) {
+        const bootInstruction =
+          "[BOOT] Process just started. Execute the following once. If you have a welcome or status message for the user, write it in your reply; it will be delivered to the main chat. End your reply with BOOT_DONE.\n\n" +
+          trimmed;
+        const result = await runtime.runTurn({
+          session: {
+            sessionId: "boot:main",
+            channelId: "heartbeat:main",
+            channelKind: "web",
+            profileId: getDefaultProfileId(configRef.current)
+          },
+          messages: [{ role: "user", content: bootInstruction }]
+        });
+        const reply = result.assistantText.trim();
+        const doneMarker = "BOOT_DONE";
+        const doneIndex = reply.indexOf(doneMarker);
+        const messageToUser = doneIndex >= 0 ? reply.slice(0, doneIndex).trim() : reply;
+        if (messageToUser.length > 0) {
+          await channelHub.send({
+            channelId: "heartbeat:main",
+            text: messageToUser,
+            proactive: true
+          });
+        }
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("[CursorClaw] BOOT.md run failed:", (err as Error).message);
+    }
+  }
 
   const birthPath = join(profileRoot, config.substrate?.birthPath ?? "BIRTH.md");
   const heartbeatPathForStartup = join(profileRoot, "HEARTBEAT.md");

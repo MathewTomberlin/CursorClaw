@@ -696,3 +696,38 @@ export function createMcpCallTool(args: {
     }
   };
 }
+
+export interface RecallMemoryResult {
+  recordId: string;
+  text: string;
+  category: string;
+  score: number;
+}
+
+/** Main-session-only tool: recall memory by semantic similarity. Requires profileRoot and channelKind in context. */
+export function createRecallMemoryTool(args: {
+  getRecallResults: (profileRoot: string, query: string, topK: number) => Promise<RecallMemoryResult[]>;
+}): ToolDefinition {
+  return {
+    name: "recall_memory",
+    description: "Recall relevant entries from long-term memory by semantic similarity. Use when you need to find past context (decisions, preferences, facts) without loading the full memory file. Only available in the main web session.",
+    schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", minLength: 1, description: "Natural language query (e.g. 'Operator preferences about deployments')" },
+        top_k: { type: "integer", minimum: 1, maximum: 20, default: 5, description: "Max number of memory entries to return (default 5)" }
+      },
+      required: ["query"],
+      additionalProperties: false
+    },
+    riskLevel: "low",
+    execute: async (rawArgs: unknown, ctx?: ToolExecuteContext) => {
+      const parsed = rawArgs as { query: string; top_k?: number };
+      if (ctx?.channelKind !== "web" || !ctx?.profileRoot) {
+        return { error: "recall_memory is only available in the main session." };
+      }
+      const results = await args.getRecallResults(ctx.profileRoot, parsed.query, parsed.top_k ?? 5);
+      return { results };
+    }
+  };
+}
