@@ -1,9 +1,39 @@
 import { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { rpc, mapRpcError } from "../api";
+import { rpc, mapRpcError, openStream } from "../api";
 
 type ChannelKind = "dm" | "group" | "web" | "mobile";
+
+/** Lifecycle event from /stream (queued, started, tool, assistant, compaction, completed, failed). */
+interface StreamEvent {
+  type: string;
+  sessionId?: string;
+  runId?: string;
+  payload?: { call?: { name?: string }; content?: string; error?: string; reason?: string };
+  at?: string;
+}
+
+function formatStreamEventLabel(ev: StreamEvent): string {
+  switch (ev.type) {
+    case "queued":
+      return "Queued";
+    case "started":
+      return "Started";
+    case "tool":
+      return ev.payload?.call?.name ? `Tool: ${ev.payload.call.name}` : "Tool call";
+    case "assistant":
+      return "Writing reply…";
+    case "compaction":
+      return ev.payload?.reason ? `Compacting: ${ev.payload.reason}` : "Compacting context…";
+    case "completed":
+      return "Completed";
+    case "failed":
+      return ev.payload?.error ? `Failed: ${ev.payload.error}` : "Failed";
+    default:
+      return ev.type || "Event";
+  }
+}
 
 export default function Chat() {
   const [sessionId, setSessionId] = useState("demo-session");
@@ -12,7 +42,7 @@ export default function Chat() {
   const [message, setMessage] = useState("");
   const [reply, setReply] = useState("");
   const [events, setEvents] = useState<unknown[]>([]);
-  const [streamEvents, setStreamEvents] = useState<unknown[]>([]);
+  const [streamEvents, setStreamEvents] = useState<StreamEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chatSendResult, setChatSendResult] = useState<string | null>(null);
@@ -44,19 +74,13 @@ export default function Chat() {
       streamRef.current = null;
     }
     try {
-      const runRes = await rpc<{ runId: string }>("agent.run", {
-        session: { sessionId: sessionId.trim(), channelId: channelId.trim(), channelKind },
-        messages: [{ role: "user", content: text }]
-      });
-      const runId = runRes.result?.runId;
-      if (!runId) throw new Error("No runId returned");
+      // Open stream before agent.run so we receive queued/started and all subsequent events
       try {
-        const { openStream } = await import("../api");
         const es = openStream(sessionId.trim());
         streamRef.current = es;
         es.onmessage = (ev) => {
           try {
-            const data = JSON.parse(ev.data);
+            const data = JSON.parse(ev.data) as StreamEvent;
             setStreamEvents((prev) => [...prev, data]);
             if (data.type === "completed" || data.type === "failed") {
               es.close();
@@ -73,6 +97,12 @@ export default function Chat() {
       } catch {
         // Stream optional; ignore
       }
+      const runRes = await rpc<{ runId: string }>("agent.run", {
+        session: { sessionId: sessionId.trim(), channelId: channelId.trim(), channelKind },
+        messages: [{ role: "user", content: text }]
+      });
+      const runId = runRes.result?.runId;
+      if (!runId) throw new Error("No runId returned");
       const waitRes = await rpc<{ assistantText: string; events?: unknown[] }>("agent.wait", { runId });
       const out = waitRes.result;
       if (out) {
@@ -85,6 +115,9 @@ export default function Chat() {
       setLoading(false);
     }
   };
+
+  const lastStreamEvent = streamEvents.length > 0 ? streamEvents[streamEvents.length - 1] : null;
+  const statusLabel = lastStreamEvent ? formatStreamEventLabel(lastStreamEvent) : "Running…";
 
   const sendChat = async () => {
     const text = message.trim();
@@ -131,13 +164,46 @@ export default function Chat() {
         <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={3} />
       </div>
       {error && <p className="error-msg">{error}</p>}
-      <button type="button" className="btn btn-primary" onClick={runTurn} disabled={loading}>
-        {loading ? "Running…" : "Send"}
-      </button>
-      {streamEvents.length > 0 && (
-        <div className="card" style={{ marginTop: "1rem" }}>
-          <h2>Live events</h2>
-          <pre style={{ fontSize: "0.75rem", overflow: "auto", maxHeight: "8rem" }}>{JSON.stringify(streamEvents, null, 2)}</pre>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+        <button type="button" className="btn btn-primary" onClick={runTurn} disabled={loading}>
+          {loading ? "Running…" : "Send"}
+        </button>
+        {loading && (
+          <span className="agent-status" style={{ fontSize: "0.9rem", color: "var(--text-muted, #666)" }} aria-live="polite">
+            {statusLabel}
+          </span>
+        )}
+      </div>
+      {(loading || streamEvents.length > 0) && (
+        <div className="card agent-activity" style={{ marginTop: "1rem" }}>
+          <h3 style={{ marginTop: 0, marginBottom: "0.5rem", fontSize: "1rem" }}>Agent activity</h3>
+          <ul
+            style={{
+              listStyle: "none",
+              padding: 0,
+              margin: 0,
+              fontSize: "0.85rem",
+              maxHeight: "10rem",
+              overflowY: "auto"
+            }}
+            aria-live="polite"
+          >
+            {streamEvents.map((ev, i) => (
+              <li
+                key={i}
+                style={{
+                  padding: "0.25rem 0",
+                  borderBottom: i < streamEvents.length - 1 ? "1px solid var(--border, #eee)" : "none"
+                }}
+              >
+                <span style={{ color: "var(--text-muted, #666)", marginRight: "0.5rem" }}>{ev.at ? new Date(ev.at).toLocaleTimeString() : ""}</span>
+                {formatStreamEventLabel(ev)}
+              </li>
+            ))}
+          </ul>
+          {loading && streamEvents.length === 0 && (
+            <p style={{ margin: 0, color: "var(--text-muted, #666)", fontSize: "0.85rem" }}>Connecting…</p>
+          )}
         </div>
       )}
       {reply && (
