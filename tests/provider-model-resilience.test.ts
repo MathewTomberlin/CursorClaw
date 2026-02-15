@@ -379,6 +379,8 @@ describe("useOnlyValidatedFallbacks policy (PMR Phase 3)", () => {
 
   describe("allowOneUnvalidatedAttempt", () => {
     it("uses unfiltered chain and logs warning when empty store and allowOneUnvalidatedAttempt true", async () => {
+      clearProviderCache();
+      registerProvider("fallback-model", () => new FallbackModelProvider());
       const dir = await mkdtemp(join(tmpdir(), "cursorclaw-pmr-allow-one-"));
       const storePath = join(dir, "store.json");
       try {
@@ -423,6 +425,8 @@ describe("useOnlyValidatedFallbacks policy (PMR Phase 3)", () => {
         expect(logs.some((l) => l.includes("allowing one unvalidated attempt"))).toBe(true);
       } finally {
         await rm(dir, { recursive: true }).catch(() => {});
+        clearProviderCache();
+        registerProvider("fallback-model", () => new FallbackModelProvider());
       }
     });
 

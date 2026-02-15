@@ -29,6 +29,50 @@ function formatStreamEventLabel(ev: StreamEvent): string {
   }
 }
 
+/** Isolated input so typing does not re-render the whole Chat page (fixes lag on phone/slow devices). */
+function ChatInput({
+  disabled,
+  onSubmit
+}: {
+  disabled: boolean;
+  onSubmit: (text: string) => void;
+}) {
+  const [value, setValue] = useState("");
+  const handleSubmit = () => {
+    const text = value.trim();
+    if (!text || disabled) return;
+    setValue("");
+    onSubmit(text);
+  };
+  return (
+    <div className="chat-input-row">
+      <textarea
+        className="chat-input"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            handleSubmit();
+          }
+        }}
+        placeholder="Message the agent…"
+        rows={2}
+        disabled={disabled}
+        aria-label="Message the agent"
+      />
+      <button
+        type="button"
+        className="btn btn-primary chat-send-btn"
+        onClick={() => handleSubmit()}
+        disabled={disabled || !value.trim()}
+      >
+        {disabled ? "Sending…" : "Send"}
+      </button>
+    </div>
+  );
+}
+
 export default function Chat() {
   const { selectedProfileId } = useProfile();
   const {
@@ -49,7 +93,6 @@ export default function Chat() {
     clearThread
   } = useChat();
 
-  const [input, setInput] = useState("");
   const [channelConfigOpen, setChannelConfigOpen] = useState(false);
   const [chatSendResult, setChatSendResult] = useState<string | null>(null);
   const [chatSendError, setChatSendError] = useState<string | null>(null);
@@ -107,11 +150,8 @@ export default function Chat() {
     };
   }, [selectedProfileId, setMessages]);
 
-  const runTurn = async () => {
-    const text = input.trim();
-    if (!text) return;
-    setInput("");
-    await runTurnFromContext(text);
+  const runTurn = (text: string) => {
+    void runTurnFromContext(text);
   };
 
   // Events for the current run: filter by runId once we have it, else show recent events so "Queued" can appear before runId
@@ -143,7 +183,7 @@ export default function Chat() {
 
 
   const sendToChannel = async () => {
-    const text = (channelSendText || input).trim();
+    const text = channelSendText.trim();
     if (!text || !channelId.trim()) {
       setChatSendError("Channel ID and message text are required.");
       return;
@@ -303,31 +343,7 @@ export default function Chat() {
 
           {error && <p className="error-msg" style={{ marginTop: "0.5rem" }}>{error}</p>}
 
-          <div className="chat-input-row">
-            <textarea
-              className="chat-input"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void runTurn();
-                }
-              }}
-              placeholder="Message the agent…"
-              rows={2}
-              disabled={loading}
-              aria-label="Message the agent"
-            />
-            <button
-              type="button"
-              className="btn btn-primary chat-send-btn"
-              onClick={() => void runTurn()}
-              disabled={loading || !input.trim()}
-            >
-              {loading ? "Sending…" : "Send"}
-            </button>
-          </div>
+          <ChatInput disabled={loading} onSubmit={runTurn} />
         </section>
       </div>
     </div>

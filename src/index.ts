@@ -189,6 +189,17 @@ async function main(): Promise<void> {
     profileContextMap = new Map([["default", defaultCtx]]);
   }
   const profileRoot = defaultCtx.profileRoot;
+  /** Resolve profile root for any profile id. Uses map when present; otherwise resolves from current config so profiles added via config.patch get correct paths (thread store, runtime). */
+  const getProfileRootForId = (profileId: string): string => {
+    const fromMap = profileContextMap.get(profileId)?.profileRoot;
+    if (fromMap) return fromMap;
+    const cfg = configRef.current;
+    const list = cfg.profiles;
+    if (list?.length && list.some((p) => p.id === profileId)) {
+      return resolveProfileRoot(workspaceDir, cfg, profileId);
+    }
+    return defaultCtx.profileRoot;
+  };
 
   if (
     !devMode &&
@@ -510,7 +521,7 @@ async function main(): Promise<void> {
     lifecycleStream,
     snapshotDir: join(profileRoot, "tmp", "snapshots"),
     getSubstrate,
-    getProfileRoot: (profileId: string) => profileContextMap.get(profileId)?.profileRoot ?? defaultCtx.profileRoot,
+    getProfileRoot: getProfileRootForId,
     getSessionMemoryContext: (root: string) => {
       const c = configRef.current.continuity;
       if (c?.sessionMemoryEnabled === false) return Promise.resolve(undefined);
@@ -654,10 +665,14 @@ async function main(): Promise<void> {
     idleScheduler.start();
   }
   const uiDist = join(workspaceDir, "ui", "dist");
+  let lastConfigWriteTime = 0;
   const gateway = buildGateway({
     getConfig: () => configRef.current,
     setConfig: (c) => {
       configRef.current = c;
+    },
+    onConfigWritten: () => {
+      lastConfigWriteTime = Date.now();
     },
     runtime,
     cronService: defaultCtx.cronService,
@@ -673,6 +688,7 @@ async function main(): Promise<void> {
     ...(defaultCtx.capabilityStore !== undefined ? { capabilityStore: defaultCtx.capabilityStore } : {}),
     defaultProfileId: getDefaultProfileId(configRef.current),
     getProfileContext: (profileId) => profileContextMap.get(profileId),
+    getProfileRoot: getProfileRootForId,
     lifecycleStream,
     workspaceDir: profileRoot,
     workspaceRoot: workspaceDir,
@@ -835,12 +851,14 @@ async function main(): Promise<void> {
   });
 
   // Config file watcher: reload when openclaw.json (or CURSORCLAW_CONFIG_PATH) changes so edits from another device apply without clicking Reload.
+  // Skip reload if we just wrote the file (config.patch / profile.create / profile.delete) to avoid racing and overwriting in-memory with a stale read.
   if (existsSync(configPath)) {
     let configReloadTimeout: ReturnType<typeof setTimeout> | null = null;
     watch(configPath, { persistent: false }, () => {
       if (configReloadTimeout) clearTimeout(configReloadTimeout);
       configReloadTimeout = setTimeout(() => {
         configReloadTimeout = null;
+        if (Date.now() - lastConfigWriteTime < 2000) return;
         try {
           configRef.current = loadConfigFromDisk({ cwd: workspaceDir });
           // eslint-disable-next-line no-console

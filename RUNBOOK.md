@@ -255,6 +255,55 @@ To use your local **Cursor-Agent CLI** (real model) instead of the fallback, add
 
 With `promptAsArg`: true the adapter passes the user message as the last CLI argument; the CLI must emit NDJSON on stdout. The adapter also appends **`--approve-mcps`** and **`--force`** in headless mode so the Cursor CLI can use MCP tools (e.g. web fetch, web search) without interactive approval. See [Cursor-Agent Adapter Contract](docs/cursor-agent-adapter.md).
 
+### Using a local Ollama agent (for testing)
+
+To run a **local Ollama** model so you can test CursorClaw without the Cursor-Agent CLI or a hosted API:
+
+1. **Install and start Ollama**
+   - Install from [ollama.com](https://ollama.com) (or e.g. `winget install Ollama.Ollama` on Windows, `brew install ollama` on macOS).
+   - Start Ollama: on most setups the Ollama app runs the server automatically. Default base URL: **`http://localhost:11434`**. To confirm it’s running:
+     ```powershell
+     Invoke-RestMethod -Uri "http://localhost:11434/api/tags"
+     ```
+     You should get a JSON list of models (or `{"models":[]}` if none pulled yet).
+
+2. **Pull a model**
+   - In a terminal: `ollama pull llama3.2` (or another model, e.g. `llama3.2`, `granite3.2`, `mistral`). Use a model that fits your RAM (e.g. 8GB+ for smaller 7B-class models).
+
+3. **Add an Ollama model to `openclaw.json`**
+   - In the `models` section add an entry with `provider: "ollama"` and `ollamaModelName` set to the model you pulled. Optionally set `defaultModel` to this model, or use it in a profile via the Config UI.
+   - Example (default on local Ollama, with fallback):
+     ```json
+     "defaultModel": "ollama-local",
+     "models": {
+       "ollama-local": {
+         "provider": "ollama",
+         "ollamaModelName": "llama3.2",
+         "baseURL": "http://localhost:11434",
+         "timeoutMs": 120000,
+         "authProfiles": ["default"],
+         "fallbackModels": ["fallback-default"],
+         "enabled": true
+       },
+       "fallback-default": {
+         "provider": "fallback-model",
+         "timeoutMs": 120000,
+         "authProfiles": ["default"],
+         "fallbackModels": [],
+         "enabled": true
+       }
+     }
+     ```
+   - Omit `baseURL` to use the default `http://localhost:11434`; set it if your Ollama server is on another host/port.
+
+4. **Restart CursorClaw** so it loads the new config.
+
+5. **Test the agent**
+   - **From the Web UI:** Open the Chat page, pick the profile that uses the Ollama model (or the default profile if you set `defaultModel`), and send a message.
+   - **From RPC:** Use the same `agent.run` / `agent.wait` flow as in Step 6; the reply will come from your local Ollama model.
+
+**Notes:** The Ollama provider streams text only; tool-call support depends on the model and may require future adapter work. For hardware requirements and best-effort behavior, see [Provider and Model Resilience](docs/PMR-provider-model-resilience.md) §8. To discover models from the UI, open Config → select a profile → set provider to **ollama** → click **Refresh from provider** → choose a model and Save.
+
 For a **production-like** setup:
 
 - Keep `gateway.bind: "loopback"` unless you need remote access (then use a reverse proxy and TLS).

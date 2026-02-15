@@ -21,6 +21,42 @@ interface HeartbeatConfig {
   maxMs?: number;
 }
 
+/** Isolated editor so typing does not re-render the whole Config page (fixes lag on phone/slow devices). */
+function RawJsonEditor({
+  initialValue,
+  onSave,
+  saveBusy,
+  saveError
+}: {
+  initialValue: string;
+  onSave: (value: string) => void;
+  saveBusy: boolean;
+  saveError: string | null;
+}) {
+  const [localValue, setLocalValue] = useState(initialValue);
+  useEffect(() => {
+    setLocalValue(initialValue);
+  }, [initialValue]);
+  return (
+    <>
+      <textarea
+        value={localValue}
+        onChange={(e) => setLocalValue(e.target.value)}
+        disabled={saveBusy}
+        rows={14}
+        style={{ width: "100%", fontFamily: "monospace", fontSize: "0.85rem", padding: "0.5rem", boxSizing: "border-box" }}
+        spellCheck={false}
+      />
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center", marginTop: "0.5rem" }}>
+        <button type="button" className="btn" onClick={() => onSave(localValue)} disabled={saveBusy}>
+          {saveBusy ? "Saving…" : "Save JSON"}
+        </button>
+        {saveError != null && saveError !== "" && <span className="error-msg">{saveError}</span>}
+      </div>
+    </>
+  );
+}
+
 export default function Config() {
   const [config, setConfig] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
@@ -73,9 +109,9 @@ export default function Config() {
     "heartbeat", "autonomyBudget", "memory", "reflection", "session", "compaction",
     "workspaces", "contextCompression", "networkTrace", "metrics", "reliability",
     "tools", "substrate", "continuity", "profiles", "providerModelResilience",
+    "models", "defaultModel",
     "gateway"
   ] as const;
-  const [rawJsonDraft, setRawJsonDraft] = useState<string>("");
   const [rawJsonSaveBusy, setRawJsonSaveBusy] = useState(false);
   const [rawJsonSaveError, setRawJsonSaveError] = useState<string | null>(null);
 
@@ -109,18 +145,15 @@ export default function Config() {
     return out;
   }, []);
 
+  // Refetch whenever we're on the Config page (mount or navigate back from another tab)
+  // so that saved changes are visible after switching tabs.
   useEffect(() => {
-    if (config != null && typeof config === "object") {
-      setRawJsonDraft(JSON.stringify(buildPatchableSubset(config as Record<string, unknown>), null, 2));
-    }
-  }, [config, buildPatchableSubset]);
-
-  useEffect(() => {
+    if (location.pathname !== "/config") return;
     (async () => {
       setLoading(true);
       await fetchConfig();
     })();
-  }, [fetchConfig]);
+  }, [location.pathname, fetchConfig]);
 
   useEffect(() => {
     if (location.hash === "#profiles" && profilesRef.current) {
@@ -334,11 +367,11 @@ export default function Config() {
     }
   };
 
-  const handleRawJsonSave = async () => {
+  const handleRawJsonSave = async (value: string) => {
     setRawJsonSaveBusy(true);
     setRawJsonSaveError(null);
     try {
-      const parsed = JSON.parse(rawJsonDraft) as Record<string, unknown>;
+      const parsed = JSON.parse(value) as Record<string, unknown>;
       if (typeof parsed !== "object" || parsed === null) {
         setRawJsonSaveError("JSON must be an object");
         return;
@@ -667,22 +700,14 @@ export default function Config() {
         <div className="config-section" style={{ marginBottom: "1rem" }}>
           <h4>Edit as JSON</h4>
           <p className="muted">
-            Edit any patchable section as JSON and Save to write to disk and apply immediately (no restart). Useful from phone or for bulk edits. Only these keys are applied: {PATCHABLE_KEYS.join(", ")}. For <code>gateway</code> only <code>bind</code> and <code>bindAddress</code> are applied.
+            Edit any patchable section as JSON and Save to write to disk and apply immediately (no restart). Useful from phone or for bulk edits. Only these keys are applied: {PATCHABLE_KEYS.join(", ")}. For <code>gateway</code> only <code>bind</code> and <code>bindAddress</code> are applied. Add <code>models</code> here (e.g. Ollama entries) so a profile&apos;s modelId is valid.
           </p>
-          <textarea
-            value={rawJsonDraft}
-            onChange={(e) => setRawJsonDraft(e.target.value)}
-            disabled={rawJsonSaveBusy}
-            rows={14}
-            style={{ width: "100%", fontFamily: "monospace", fontSize: "0.85rem", padding: "0.5rem", boxSizing: "border-box" }}
-            spellCheck={false}
+          <RawJsonEditor
+            initialValue={config != null && typeof config === "object" ? JSON.stringify(buildPatchableSubset(config as Record<string, unknown>), null, 2) : ""}
+            onSave={handleRawJsonSave}
+            saveBusy={rawJsonSaveBusy}
+            saveError={rawJsonSaveError}
           />
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center", marginTop: "0.5rem" }}>
-            <button type="button" className="btn" onClick={handleRawJsonSave} disabled={rawJsonSaveBusy}>
-              {rawJsonSaveBusy ? "Saving…" : "Save JSON"}
-            </button>
-            {rawJsonSaveError && <span className="error-msg">{rawJsonSaveError}</span>}
-          </div>
         </div>
 
         <h4>Raw config (read-only)</h4>
