@@ -48,6 +48,10 @@ describe("autonomy state persistence", () => {
     const memory = new MemoryStore({ workspaceDir: dir });
 
     let deliveredCount = 0;
+    let resolveDelivery: () => void;
+    const deliveryPromise = new Promise<void>((resolve) => {
+      resolveDelivery = resolve;
+    });
     const orchestrator = new AutonomyOrchestrator({
       cronService: cron,
       heartbeat,
@@ -63,6 +67,7 @@ describe("autonomy state persistence", () => {
       onHeartbeatTurn: async () => "HEARTBEAT_OK",
       onProactiveIntent: async () => {
         deliveredCount += 1;
+        resolveDelivery();
         return true;
       }
     });
@@ -74,6 +79,7 @@ describe("autonomy state persistence", () => {
       notBeforeMs: Date.now()
     });
     await vi.advanceTimersByTimeAsync(120);
+    await deliveryPromise;
     await orchestrator.stop();
 
     expect(deliveredCount).toBe(1);
