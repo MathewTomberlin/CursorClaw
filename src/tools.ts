@@ -499,7 +499,7 @@ export function createExecTool(args: {
           if (!approved) {
             const denial = args.approvalGate.getLastDenial?.();
             const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
-            throw new Error(`bin "${bin}" denied by allowlist policy${suffix}`);
+            return { stdout: "", stderr: `exec: bin "${bin}" denied by allowlist policy${suffix}. Use web_fetch for HTTP requests.\n` };
           }
         }
         if (intent !== "read-only") {
@@ -513,7 +513,7 @@ export function createExecTool(args: {
           if (!approved) {
             const denial = args.approvalGate.getLastDenial?.();
             const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
-            throw new Error(`command intent "${intent}" requires approval${suffix}`);
+            return { stdout: "", stderr: `exec: command intent "${intent}" requires approval${suffix}\n` };
           }
         }
         // Use current agent profile root so substrate/memory/heartbeat are profile-isolated. When profileRoot is set, cwd must stay under it.
@@ -546,7 +546,19 @@ export function createExecTool(args: {
             const [segBin, ...segBinArgs] = seg.split(/\s+/).filter(Boolean);
             if (!segBin) continue;
             if (!args.allowedBins.includes(segBin)) {
-              throw new Error(`bin "${segBin}" not in allowlist`);
+              const approved = await args.approvalGate.approve({
+                tool: "exec",
+                intent: classifyCommandIntent(seg),
+                plan: `bin "${segBin}" not in allowlist`,
+                args: parsed,
+                ...(provenance !== undefined && { provenance })
+              });
+              if (!approved) {
+                const denial = args.approvalGate.getLastDenial?.();
+                const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
+                lastResult = { stdout: "", stderr: `exec: bin "${segBin}" denied by allowlist policy${suffix}. Use web_fetch for HTTP requests.\n` };
+                break;
+              }
             }
             const segIntent = classifyCommandIntent(seg);
             if (segBin === "cat" || segBin === "type") {

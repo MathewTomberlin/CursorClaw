@@ -1,0 +1,32 @@
+{
+  "lastUpdated": "2026-02-16T05:54:35.856Z",
+  "results": {
+    "svjack/Qwen3-8b-heretic:latest": {
+      "passed": false,
+      "lastRun": "2026-02-16T05:54:03.989Z",
+      "checks": {
+        "toolCall": false,
+        "reasoning": false
+      },
+      "error": "model not in config: svjack/Qwen3-8b-heretic:latest"
+    },
+    "svjack/Qwen3-8b-heretic": {
+      "passed": false,
+      "lastRun": "2026-02-16T05:54:10.836Z",
+      "checks": {
+        "toolCall": false,
+        "reasoning": false
+      },
+      "error": "model not in config: svjack/Qwen3-8b-heretic"
+    },
+    "svjack/Qwen3-8B-heretic:latest": {
+      "passed": true,
+      "lastRun": "2026-02-16T05:54:35.856Z",
+      "checks": {
+        "toolCall": true,
+        "reasoning": true
+      },
+      "error": null
+    }
+  }
+}
