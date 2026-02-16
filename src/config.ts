@@ -408,7 +408,7 @@ export const DEFAULT_CONFIG: CursorClawConfig = {
       profile: "strict",
       allowBins: [
         "echo", "pwd", "ls", "cat", "node", "sed", "type", "head", "tee",
-        "rm", "tail", "mv", "cp", "mkdir", "touch", "grep", "wc", "dir"
+        "rm", "tail", "mv", "cp", "mkdir", "touch", "grep", "wc", "dir", "test"
       ],
       maxBufferBytes: 64 * 1024,
       maxChildProcessesPerTurn: 100

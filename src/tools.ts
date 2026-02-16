@@ -783,6 +783,23 @@ export function createExecTool(args: {
                 continue;
               }
             }
+            if (segBin === "test" && segIntent === "read-only" && segBinArgs.length >= 2) {
+              const flag = segBinArgs[0];
+              const pathArg = segBinArgs[1];
+              if (pathArg && (flag === "-f" || flag === "-d" || flag === "-e" || flag === "-s")) {
+                const pathResolved = resolve(cwd, pathArg);
+                ensureUnderProfile(pathResolved);
+                const s = await stat(pathResolved).catch(() => null);
+                const ok =
+                  flag === "-f" ? (s?.isFile() ?? false) :
+                  flag === "-d" ? (s?.isDirectory() ?? false) :
+                  flag === "-e" ? (s != null) :
+                  flag === "-s" ? (s != null && (s.size ?? 0) > 0) : false;
+                if (!ok) throw new Error("test: condition false");
+                lastResult = { stdout: "", stderr: "" };
+                continue;
+              }
+            }
             if (profileRoot) {
               for (const arg of segBinArgs) {
                 const pathResolved = resolve(cwd, arg);
@@ -1045,6 +1062,22 @@ export function createExecTool(args: {
               if (exists) await utimes(pathResolved, exists.mtime, new Date());
               else await writeFile(pathResolved, "");
             }
+            return { stdout: "", stderr: "" };
+          }
+        }
+        if (platform() === "win32" && bin === "test" && intent === "read-only" && binArgs.length >= 2) {
+          const flag = binArgs[0];
+          const pathArg = binArgs[1];
+          if (pathArg && (flag === "-f" || flag === "-d" || flag === "-e" || flag === "-s")) {
+            const pathResolved = resolve(cwd, pathArg);
+            ensureUnderProfile(pathResolved);
+            const s = await stat(pathResolved).catch(() => null);
+            const ok =
+              flag === "-f" ? (s?.isFile() ?? false) :
+              flag === "-d" ? (s?.isDirectory() ?? false) :
+              flag === "-e" ? (s != null) :
+              flag === "-s" ? (s != null && (s.size ?? 0) > 0) : false;
+            if (!ok) throw new Error("test: condition false");
             return { stdout: "", stderr: "" };
           }
         }

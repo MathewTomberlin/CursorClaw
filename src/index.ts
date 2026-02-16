@@ -108,7 +108,8 @@ const STRICT_EXEC_BINS = new Set([
   "touch",
   "grep",
   "wc",
-  "dir"
+  "dir",
+  "test"
 ]);
 const VALID_SECRET_DETECTORS = new Set(DEFAULT_SECRET_SCANNER_DETECTORS);
 
