@@ -81,6 +81,10 @@ When tools are sent, the Ollama provider and runtime work together so the model 
 - **`toolTurnContext: "minimal"`:** For Qwen3 8B (and similar Ollama models), set this on the model so only the latest user message is sent; see “Why Ollama models may not call tools” above.
 - **Runtime prompt:** The runtime injects a generic tool-use nudge for all providers, and when the active model is Ollama it adds a **second, stronger system message** that explicitly requires the model to use the provided tools: read substrate or any file via exec (cat/type/head), and **when editing** to use sed for targeted changes only—read the file first, then sed to change the specific line or section; do not overwrite the whole file with echo unless the user asked to replace the entire file. The exec tool description states it is the primary way to read or modify substrate and codebase files and reinforces targeted-edits behavior.
 
+### Future improvement: context-aware system behavior
+
+The minimal system/tool-focused behavior above improves **reliable tool calling** but can reduce the quality of **user-facing or creatively generated text** (e.g. roleplay, summaries, explanations) because the model is optimized for tool use, not for long-form or stylistic output. A desirable enhancement is to **infer when tools are needed** and apply minimal/tool-focused behavior only then, and **switch to richer text-generation behavior** when the turn is expected to produce user-facing or creative content—giving both reliable tool use when expected and better, more creative, contextual, and prompted text otherwise. This would require heuristics or signals (e.g. tool availability, user intent, or turn type) to choose the system/context mode per turn. See ROADMAP Optional for planning.
+
 ---
 
 ## 1. Goals and success criteria
@@ -96,7 +100,7 @@ When tools are sent, the Ollama provider and runtime work together so the model 
 - [x] With an Ollama model that supports tool use and when tools are provided: the request body includes a `tools` (or equivalent) field in the format required by the Ollama API version in use.
 - [x] Stream parsing detects tool-call content (exact shape depends on Ollama API: e.g. `message.tool_calls`, `delta.tool_calls`, or tool call in the final `message` when `done`). Emit one `tool_call` event per call with `name` and `args`; args may be accumulated from streamed JSON parts if the API streams per-call deltas.
 - [ ] `npm run validate-model -- --modelId=<ollama-model-id> --fullSuite` passes the **toolCall** check when the model and Ollama version support tool use.
-- [ ] At runtime, when the user sends a turn that triggers tool use (operator-verified), the agent receives `tool_call` events and can execute tools and continue the loop.
+- [x] At runtime, when the user sends a turn that triggers tool use (operator-verified), the agent receives `tool_call` events and can execute tools and continue the loop. **(E2E operator-driven test passed.)**
 - [x] When no tools are passed, or the model returns no tool calls, behavior is unchanged (no regression): only text deltas and `done` as today.
 - [x] No new required config; existing `provider: "ollama"`, `ollamaModelName`, and optional `baseURL` remain sufficient. Optional: document any Ollama version or model requirements (e.g. “tool use supported in Ollama 0.3+” or “model must support tools”) in configuration-reference or this guide.
 

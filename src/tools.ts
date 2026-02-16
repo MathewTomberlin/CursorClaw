@@ -1784,7 +1784,11 @@ export function createWebFetchTool(args: {
       let target = pinDnsTarget(await resolveSafeFetchTarget(parsed.url));
       for (let redirectCount = 0; redirectCount <= WEB_FETCH_MAX_REDIRECTS; redirectCount += 1) {
         const pathWithQuery = target.url.pathname + target.url.search;
-        const response = await fetchWithPinnedDns(target, pathWithQuery, { signal, timeoutMs: 10_000 });
+        const response = await fetchWithPinnedDns(target, pathWithQuery, {
+          signal,
+          timeoutMs: 10_000,
+          headers: WEB_FETCH_HEADERS
+        });
         if (!REDIRECT_STATUS_CODES.has(response.status)) {
           const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
           if (contentType && !ALLOWED_CONTENT_TYPE_PATTERN.test(contentType)) {
@@ -1799,11 +1803,15 @@ export function createWebFetchTool(args: {
             throw new Error(`web_fetch response exceeds byte limit (${WEB_FETCH_MAX_BODY_BYTES})`);
           }
           const text = new TextDecoder().decode(bytes);
-          return {
+          const out: { status: number; contentType: string; body: string; hint?: string } = {
             status: response.status,
             contentType: contentType || "unknown",
             body: wrapUntrustedContent(text)
           };
+          if (response.status === 403) {
+            out.hint = "Server returned 403 Forbidden. Some sites block automated requests; the body may be an access-denied or bot-detection page.";
+          }
+          return out;
         }
         if (redirectCount === WEB_FETCH_MAX_REDIRECTS) {
           throw new Error("web_fetch exceeded redirect limit");
@@ -1836,6 +1844,13 @@ const WEB_SEARCH_MAX_ABSTRACT_LEN = 2_000;
 const WEB_SEARCH_HTML_MAX_RESULTS = 12;
 const WEB_SEARCH_HTML_SNIPPET_MAX = 400;
 const WEB_SEARCH_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0 (CursorClaw web_search)";
+
+/** Browser-like headers for web_fetch to reduce bot blocking (e.g. news sites that deny requests without User-Agent). */
+const WEB_FETCH_HEADERS: Record<string, string> = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0 (CursorClaw web_fetch)",
+  Accept: "text/html, application/xhtml+xml, application/xml;q=0.9, */*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9"
+};
 
 /**
  * Parse DuckDuckGo HTML search page into result snippets (no API key).
