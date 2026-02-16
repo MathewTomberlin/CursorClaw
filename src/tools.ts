@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, unlink, utimes, writeFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { platform } from "node:os";
 
@@ -94,7 +94,7 @@ export function classifyCommandIntent(command: string): ExecIntent {
   if (/\b(curl|wget|scp|ssh|nc|nmap)\b/.test(normalized)) {
     return "network-impacting";
   }
-  if (/\b(rm|mv|cp|sed\s+-i|truncate|tee)\b/.test(normalized)) {
+  if (/\b(rm|mv|cp|sed\s+-i|truncate|tee|mkdir|touch)\b/.test(normalized)) {
     return "mutating";
   }
   if (/>/.test(normalized)) {
@@ -576,6 +576,208 @@ export function createExecTool(args: {
                 continue;
               }
             }
+            if (segBin === "rm" && segIntent === "mutating") {
+              const recursive = segBinArgs.some((a) => a === "-r" || a === "-rf" || a === "-fr" || a === "-R");
+              const paths = segBinArgs.filter((a) => !a.startsWith("-"));
+              if (paths.length > 0) {
+                for (const p of paths) {
+                  const pathResolved = resolve(cwd, p);
+                  ensureUnderProfile(pathResolved);
+                  const s = await stat(pathResolved).catch(() => null);
+                  if (s?.isDirectory()) {
+                    await rm(pathResolved, { recursive: true });
+                  } else {
+                    await unlink(pathResolved);
+                  }
+                }
+                lastResult = { stdout: "", stderr: "" };
+                continue;
+              }
+            }
+            if (segBin === "pwd" && segIntent === "read-only") {
+              lastResult = { stdout: cwd + "\n", stderr: "" };
+              continue;
+            }
+            if ((segBin === "ls" || segBin === "dir") && segIntent === "read-only") {
+              const paths = segBinArgs.filter((a) => !a.startsWith("-"));
+              const dirPath = paths.length > 0 ? resolve(cwd, paths[0]) : cwd;
+              ensureUnderProfile(dirPath);
+              const long = segBinArgs.some((a) => a === "-l" || a === "-la" || a === "-al");
+              const entries = await readdir(dirPath, { withFileTypes: true });
+              const names = entries.map((e) => e.name);
+              if (long) {
+                const lines = await Promise.all(
+                  entries.map(async (e) => {
+                    const p = resolve(dirPath, e.name);
+                    const s = await stat(p).catch(() => null);
+                    const size = s?.isFile() ? (s.size ?? 0) : 0;
+                    const mtime = s?.mtime ? s.mtime.toISOString().slice(0, 16).replace("T", " ") : "";
+                    const type = e.isDirectory() ? "d" : "-";
+                    return `${type}rw-r--r-- 1 1 ${String(size).padStart(8)} ${mtime} ${e.name}`;
+                  })
+                );
+                lastResult = { stdout: lines.join("\n") + "\n", stderr: "" };
+              } else {
+                lastResult = { stdout: names.join("\n") + (names.length ? "\n" : ""), stderr: "" };
+              }
+              continue;
+            }
+            if (segBin === "head" && segIntent === "read-only" && segBinArgs.length > 0) {
+              let n = 10;
+              const nonFlags = segBinArgs.filter((a) => !a.startsWith("-"));
+              const idxN = segBinArgs.findIndex((a) => a === "-n");
+              if (idxN !== -1 && segBinArgs[idxN + 1]) n = parseInt(segBinArgs[idxN + 1], 10) || 10;
+              else {
+                const dashN = segBinArgs.find((a) => /^-(\d+)$/.test(a));
+                if (dashN) n = parseInt(dashN.slice(1), 10) || 10;
+              }
+              const filePath = nonFlags[nonFlags.length - 1] ?? nonFlags[0];
+              if (filePath) {
+                const pathResolved = resolve(cwd, filePath);
+                ensureUnderProfile(pathResolved);
+                const content = await readFile(pathResolved, "utf8");
+                const lines = content.split(/\r?\n/);
+                lastResult = { stdout: lines.slice(0, n).join("\n") + (lines.length ? "\n" : ""), stderr: "" };
+              }
+              continue;
+            }
+            if (segBin === "tail" && segIntent === "read-only" && segBinArgs.length > 0) {
+              let n = 10;
+              const nonFlags = segBinArgs.filter((a) => !a.startsWith("-"));
+              const idxN = segBinArgs.findIndex((a) => a === "-n");
+              if (idxN !== -1 && segBinArgs[idxN + 1]) n = parseInt(segBinArgs[idxN + 1], 10) || 10;
+              else {
+                const dashN = segBinArgs.find((a) => /^-(\d+)$/.test(a));
+                if (dashN) n = parseInt(dashN.slice(1), 10) || 10;
+              }
+              const filePath = nonFlags[nonFlags.length - 1] ?? nonFlags[0];
+              if (filePath) {
+                const pathResolved = resolve(cwd, filePath);
+                ensureUnderProfile(pathResolved);
+                const content = await readFile(pathResolved, "utf8");
+                const lines = content.split(/\r?\n/);
+                lastResult = { stdout: lines.slice(-n).join("\n") + (lines.length ? "\n" : ""), stderr: "" };
+              }
+              continue;
+            }
+            if (segBin === "grep" && segIntent === "read-only" && segBinArgs.length >= 2) {
+              const withNum = segBinArgs.includes("-n");
+              const ignoreCase = segBinArgs.includes("-i");
+              const nonFlags = segBinArgs.filter((a) => !a.startsWith("-"));
+              const pattern = nonFlags[0];
+              const files = nonFlags.slice(1);
+              if (pattern && files.length > 0) {
+                const regex = new RegExp(pattern, ignoreCase ? "i" : "");
+                const out: string[] = [];
+                for (const f of files) {
+                  const pathResolved = resolve(cwd, f);
+                  ensureUnderProfile(pathResolved);
+                  const content = await readFile(pathResolved, "utf8").catch(() => "");
+                  const lines = content.split(/\r?\n/);
+                  lines.forEach((line, i) => {
+                    if (regex.test(line)) out.push(withNum ? `${i + 1}:${line}` : line);
+                  });
+                }
+                lastResult = { stdout: out.join("\n") + (out.length ? "\n" : ""), stderr: "" };
+              }
+              continue;
+            }
+            if (segBin === "wc" && segIntent === "read-only" && segBinArgs.length > 0) {
+              const flags = { lines: segBinArgs.includes("-l"), words: segBinArgs.includes("-w"), bytes: segBinArgs.includes("-c") };
+              const files = segBinArgs.filter((a) => !a.startsWith("-"));
+              if (files.length > 0) {
+                const out: string[] = [];
+                let totalL = 0, totalW = 0, totalC = 0;
+                for (const f of files) {
+                  const pathResolved = resolve(cwd, f);
+                  ensureUnderProfile(pathResolved);
+                  const content = await readFile(pathResolved, "utf8").catch(() => "");
+                  const lines = content.split(/\r?\n/);
+                  const l = lines.length;
+                  const w = content.split(/\s+/).filter(Boolean).length;
+                  const c = Buffer.byteLength(content, "utf8");
+                  totalL += l; totalW += w; totalC += c;
+                  const parts: string[] = [];
+                  if (flags.lines && !flags.words && !flags.bytes) parts.push(String(l));
+                  else if (flags.words && !flags.lines && !flags.bytes) parts.push(String(w));
+                  else if (flags.bytes && !flags.lines && !flags.words) parts.push(String(c));
+                  else parts.push(String(l), String(w), String(c));
+                  out.push(parts.map((p) => p.padStart(8)).join("") + " " + f);
+                }
+                if (files.length > 1) {
+                  const parts = flags.lines && !flags.words && !flags.bytes ? [String(totalL)] : flags.words && !flags.lines && !flags.bytes ? [String(totalW)] : flags.bytes && !flags.lines && !flags.words ? [String(totalC)] : [String(totalL), String(totalW), String(totalC)];
+                  out.push(parts.map((p) => p.padStart(8)).join("") + " total");
+                }
+                lastResult = { stdout: out.join("\n") + "\n", stderr: "" };
+              }
+              continue;
+            }
+            if (segBin === "tee" && segIntent === "mutating" && segBinArgs.length > 0) {
+              const append = segBinArgs.includes("-a");
+              const paths = segBinArgs.filter((a) => a !== "-a" && !a.startsWith("-"));
+              if (paths.length > 0) {
+                for (const p of paths) {
+                  const pathResolved = resolve(cwd, p);
+                  ensureUnderProfile(pathResolved);
+                  if (append) await appendFile(pathResolved, "");
+                  else await writeFile(pathResolved, "");
+                }
+                lastResult = { stdout: "", stderr: "" };
+                continue;
+              }
+            }
+            if (segBin === "mv" && segIntent === "mutating" && segBinArgs.length >= 2) {
+              const paths = segBinArgs.filter((a) => !a.startsWith("-"));
+              if (paths.length >= 2) {
+                const src = resolve(cwd, paths[0]);
+                const dest = resolve(cwd, paths[1]);
+                ensureUnderProfile(src);
+                ensureUnderProfile(dest);
+                await rename(src, dest);
+                lastResult = { stdout: "", stderr: "" };
+                continue;
+              }
+            }
+            if (segBin === "cp" && segIntent === "mutating" && segBinArgs.length >= 2) {
+              const paths = segBinArgs.filter((a) => !a.startsWith("-"));
+              if (paths.length >= 2) {
+                const src = resolve(cwd, paths[0]);
+                const dest = resolve(cwd, paths[1]);
+                ensureUnderProfile(src);
+                ensureUnderProfile(dest);
+                const s = await stat(src).catch(() => null);
+                if (s?.isDirectory()) await cp(src, dest, { recursive: true });
+                else await copyFile(src, dest);
+                lastResult = { stdout: "", stderr: "" };
+                continue;
+              }
+            }
+            if (segBin === "mkdir" && segIntent === "mutating" && segBinArgs.length > 0) {
+              const paths = segBinArgs.filter((a) => !a.startsWith("-"));
+              if (paths.length > 0) {
+                for (const p of paths) {
+                  const pathResolved = resolve(cwd, p);
+                  ensureUnderProfile(pathResolved);
+                  await mkdir(pathResolved, { recursive: true });
+                }
+                lastResult = { stdout: "", stderr: "" };
+                continue;
+              }
+            }
+            if (segBin === "touch" && segIntent === "mutating" && segBinArgs.length > 0) {
+              const paths = segBinArgs.filter((a) => !a.startsWith("-"));
+              if (paths.length > 0) {
+                for (const p of paths) {
+                  const pathResolved = resolve(cwd, p);
+                  ensureUnderProfile(pathResolved);
+                  const exists = await stat(pathResolved).catch(() => null);
+                  if (exists) await utimes(pathResolved, exists.mtime, new Date());
+                  else await writeFile(pathResolved, "");
+                }
+                lastResult = { stdout: "", stderr: "" };
+                continue;
+              }
+            }
             if (profileRoot) {
               for (const arg of segBinArgs) {
                 const pathResolved = resolve(cwd, arg);
@@ -650,6 +852,191 @@ export function createExecTool(args: {
               await writeFile(pathResolved, existing + sep + echo.content);
             } else {
               await writeFile(pathResolved, echo.content);
+            }
+            return { stdout: "", stderr: "" };
+          }
+        }
+        if (platform() === "win32" && bin === "rm" && intent === "mutating") {
+          const recursive = binArgs.some((a) => a === "-r" || a === "-rf" || a === "-fr" || a === "-R");
+          const paths = binArgs.filter((a) => !a.startsWith("-"));
+          if (paths.length > 0) {
+            for (const p of paths) {
+              const pathResolved = resolve(cwd, p);
+              ensureUnderProfile(pathResolved);
+              const s = await stat(pathResolved).catch(() => null);
+              if (s?.isDirectory()) {
+                await rm(pathResolved, { recursive: true });
+              } else {
+                await unlink(pathResolved);
+              }
+            }
+            return { stdout: "", stderr: "" };
+          }
+        }
+        if (platform() === "win32" && (bin === "pwd") && intent === "read-only") {
+          return { stdout: cwd + "\n", stderr: "" };
+        }
+        if (platform() === "win32" && (bin === "ls" || bin === "dir") && intent === "read-only") {
+          const paths = binArgs.filter((a) => !a.startsWith("-"));
+          const dirPath = paths.length > 0 ? resolve(cwd, paths[0]) : cwd;
+          ensureUnderProfile(dirPath);
+          const long = binArgs.some((a) => a === "-l" || a === "-la" || a === "-al");
+          const entries = await readdir(dirPath, { withFileTypes: true });
+          const names = entries.map((e) => e.name);
+          if (long) {
+            const lines = await Promise.all(
+              entries.map(async (e) => {
+                const p = resolve(dirPath, e.name);
+                const s = await stat(p).catch(() => null);
+                const size = s?.isFile() ? (s.size ?? 0) : 0;
+                const mtime = s?.mtime ? s.mtime.toISOString().slice(0, 16).replace("T", " ") : "";
+                const type = e.isDirectory() ? "d" : "-";
+                return `${type}rw-r--r-- 1 1 ${String(size).padStart(8)} ${mtime} ${e.name}`;
+              })
+            );
+            return { stdout: lines.join("\n") + "\n", stderr: "" };
+          }
+          return { stdout: names.join("\n") + (names.length ? "\n" : ""), stderr: "" };
+        }
+        if (platform() === "win32" && bin === "head" && intent === "read-only" && binArgs.length > 0) {
+          let n = 10;
+          const nonFlags = binArgs.filter((a) => !a.startsWith("-"));
+          const idxN = binArgs.findIndex((a) => a === "-n");
+          if (idxN !== -1 && binArgs[idxN + 1]) n = parseInt(binArgs[idxN + 1], 10) || 10;
+          else {
+            const dashN = binArgs.find((a) => /^-(\d+)$/.test(a));
+            if (dashN) n = parseInt(dashN.slice(1), 10) || 10;
+          }
+          const filePath = nonFlags[nonFlags.length - 1] ?? nonFlags[0];
+          if (filePath) {
+            const pathResolved = resolve(cwd, filePath);
+            ensureUnderProfile(pathResolved);
+            const content = await readFile(pathResolved, "utf8");
+            const lines = content.split(/\r?\n/);
+            return { stdout: lines.slice(0, n).join("\n") + (lines.length ? "\n" : ""), stderr: "" };
+          }
+        }
+        if (platform() === "win32" && bin === "tail" && intent === "read-only" && binArgs.length > 0) {
+          let n = 10;
+          const nonFlags = binArgs.filter((a) => !a.startsWith("-"));
+          const idxN = binArgs.findIndex((a) => a === "-n");
+          if (idxN !== -1 && binArgs[idxN + 1]) n = parseInt(binArgs[idxN + 1], 10) || 10;
+          else {
+            const dashN = binArgs.find((a) => /^-(\d+)$/.test(a));
+            if (dashN) n = parseInt(dashN.slice(1), 10) || 10;
+          }
+          const filePath = nonFlags[nonFlags.length - 1] ?? nonFlags[0];
+          if (filePath) {
+            const pathResolved = resolve(cwd, filePath);
+            ensureUnderProfile(pathResolved);
+            const content = await readFile(pathResolved, "utf8");
+            const lines = content.split(/\r?\n/);
+            return { stdout: lines.slice(-n).join("\n") + (lines.length ? "\n" : ""), stderr: "" };
+          }
+        }
+        if (platform() === "win32" && bin === "grep" && intent === "read-only" && binArgs.length >= 2) {
+          const withNum = binArgs.includes("-n");
+          const ignoreCase = binArgs.includes("-i");
+          const nonFlags = binArgs.filter((a) => !a.startsWith("-"));
+          const pattern = nonFlags[0];
+          const files = nonFlags.slice(1);
+          if (pattern && files.length > 0) {
+            const regex = new RegExp(pattern, ignoreCase ? "i" : "");
+            const out: string[] = [];
+            for (const f of files) {
+              const pathResolved = resolve(cwd, f);
+              ensureUnderProfile(pathResolved);
+              const content = await readFile(pathResolved, "utf8").catch(() => "");
+              const lines = content.split(/\r?\n/);
+              lines.forEach((line, i) => {
+                if (regex.test(line)) out.push(withNum ? `${i + 1}:${line}` : line);
+              });
+            }
+            return { stdout: out.join("\n") + (out.length ? "\n" : ""), stderr: "" };
+          }
+        }
+        if (platform() === "win32" && bin === "wc" && intent === "read-only" && binArgs.length > 0) {
+          const flags = { lines: binArgs.includes("-l"), words: binArgs.includes("-w"), bytes: binArgs.includes("-c") };
+          const files = binArgs.filter((a) => !a.startsWith("-"));
+          if (files.length > 0) {
+            const out: string[] = [];
+            let totalL = 0, totalW = 0, totalC = 0;
+            for (const f of files) {
+              const pathResolved = resolve(cwd, f);
+              ensureUnderProfile(pathResolved);
+              const content = await readFile(pathResolved, "utf8").catch(() => "");
+              const lines = content.split(/\r?\n/);
+              const l = lines.length;
+              const w = content.split(/\s+/).filter(Boolean).length;
+              const c = Buffer.byteLength(content, "utf8");
+              totalL += l; totalW += w; totalC += c;
+              const parts: string[] = flags.lines && !flags.words && !flags.bytes ? [String(l)] : flags.words && !flags.lines && !flags.bytes ? [String(w)] : flags.bytes && !flags.lines && !flags.words ? [String(c)] : [String(l), String(w), String(c)];
+              out.push(parts.map((p) => p.padStart(8)).join("") + " " + f);
+            }
+            if (files.length > 1) {
+              const parts = flags.lines && !flags.words && !flags.bytes ? [String(totalL)] : flags.words && !flags.lines && !flags.bytes ? [String(totalW)] : flags.bytes && !flags.lines && !flags.words ? [String(totalC)] : [String(totalL), String(totalW), String(totalC)];
+              out.push(parts.map((p) => p.padStart(8)).join("") + " total");
+            }
+            return { stdout: out.join("\n") + "\n", stderr: "" };
+          }
+        }
+        if (platform() === "win32" && bin === "tee" && intent === "mutating" && binArgs.length > 0) {
+          const append = binArgs.includes("-a");
+          const paths = binArgs.filter((a) => a !== "-a" && !a.startsWith("-"));
+          if (paths.length > 0) {
+            for (const p of paths) {
+              const pathResolved = resolve(cwd, p);
+              ensureUnderProfile(pathResolved);
+              if (append) await appendFile(pathResolved, "");
+              else await writeFile(pathResolved, "");
+            }
+            return { stdout: "", stderr: "" };
+          }
+        }
+        if (platform() === "win32" && bin === "mv" && intent === "mutating" && binArgs.length >= 2) {
+          const paths = binArgs.filter((a) => !a.startsWith("-"));
+          if (paths.length >= 2) {
+            const src = resolve(cwd, paths[0]);
+            const dest = resolve(cwd, paths[1]);
+            ensureUnderProfile(src);
+            ensureUnderProfile(dest);
+            await rename(src, dest);
+            return { stdout: "", stderr: "" };
+          }
+        }
+        if (platform() === "win32" && bin === "cp" && intent === "mutating" && binArgs.length >= 2) {
+          const paths = binArgs.filter((a) => !a.startsWith("-"));
+          if (paths.length >= 2) {
+            const src = resolve(cwd, paths[0]);
+            const dest = resolve(cwd, paths[1]);
+            ensureUnderProfile(src);
+            ensureUnderProfile(dest);
+            const s = await stat(src).catch(() => null);
+            if (s?.isDirectory()) await cp(src, dest, { recursive: true });
+            else await copyFile(src, dest);
+            return { stdout: "", stderr: "" };
+          }
+        }
+        if (platform() === "win32" && bin === "mkdir" && intent === "mutating" && binArgs.length > 0) {
+          const paths = binArgs.filter((a) => !a.startsWith("-"));
+          if (paths.length > 0) {
+            for (const p of paths) {
+              const pathResolved = resolve(cwd, p);
+              ensureUnderProfile(pathResolved);
+              await mkdir(pathResolved, { recursive: true });
+            }
+            return { stdout: "", stderr: "" };
+          }
+        }
+        if (platform() === "win32" && bin === "touch" && intent === "mutating" && binArgs.length > 0) {
+          const paths = binArgs.filter((a) => !a.startsWith("-"));
+          if (paths.length > 0) {
+            for (const p of paths) {
+              const pathResolved = resolve(cwd, p);
+              ensureUnderProfile(pathResolved);
+              const exists = await stat(pathResolved).catch(() => null);
+              if (exists) await utimes(pathResolved, exists.mtime, new Date());
+              else await writeFile(pathResolved, "");
             }
             return { stdout: "", stderr: "" };
           }
