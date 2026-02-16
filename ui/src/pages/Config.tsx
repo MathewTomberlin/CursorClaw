@@ -95,7 +95,7 @@ export default function Config() {
   const [providerKeyDeleteBusy, setProviderKeyDeleteBusy] = useState<string | null>(null);
 
   /** Model selection: refresh from provider and set profile modelId. */
-  const PROVIDER_IDS_WITH_MODEL_LIST = ["cursor-agent-cli", "ollama", "openai-compatible"];
+  const PROVIDER_IDS_WITH_MODEL_LIST = ["cursor-agent-cli", "ollama", "openai-compatible", "lm-studio"];
   const [modelListProviderId, setModelListProviderId] = useState("ollama");
   const [fetchedModels, setFetchedModels] = useState<Array<{ id: string; name?: string }>>([]);
   const [modelListLoading, setModelListLoading] = useState(false);
