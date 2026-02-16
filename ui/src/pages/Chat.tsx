@@ -31,16 +31,17 @@ function formatStreamEventLabel(ev: StreamEvent): string {
 
 /** Isolated input so typing does not re-render the whole Chat page (fixes lag on phone/slow devices). */
 function ChatInput({
-  disabled,
+  submitDisabled,
   onSubmit
 }: {
-  disabled: boolean;
+  /** When true, user can still type but Enter and the Send button do not submit (e.g. while agent is processing). */
+  submitDisabled: boolean;
   onSubmit: (text: string) => void;
 }) {
   const [value, setValue] = useState("");
   const handleSubmit = () => {
     const text = value.trim();
-    if (!text || disabled) return;
+    if (!text || submitDisabled) return;
     setValue("");
     onSubmit(text);
   };
@@ -58,16 +59,16 @@ function ChatInput({
         }}
         placeholder="Message the agent…"
         rows={2}
-        disabled={disabled}
         aria-label="Message the agent"
       />
       <button
         type="button"
         className="btn btn-primary chat-send-btn"
         onClick={() => handleSubmit()}
-        disabled={disabled || !value.trim()}
+        disabled={submitDisabled || !value.trim()}
+        title={submitDisabled ? "Waiting for agent…" : undefined}
       >
-        {disabled ? "Sending…" : "Send"}
+        {submitDisabled ? "Sending…" : "Send"}
       </button>
     </div>
   );
@@ -379,7 +380,7 @@ export default function Chat() {
 
           {error && <p className="error-msg" style={{ marginTop: "0.5rem" }}>{error}</p>}
 
-          <ChatInput disabled={loading} onSubmit={runTurn} />
+          <ChatInput submitDisabled={loading} onSubmit={runTurn} />
         </section>
       </div>
     </div>
