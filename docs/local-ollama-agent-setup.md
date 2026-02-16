@@ -133,6 +133,7 @@ If the model or Ollama does not support tools, the agent still runs for text-onl
 - **Connection refused / ECONNREFUSED:** Ollama is not running or not reachable at `baseURL`. Start Ollama (`ollama serve` or the Ollama app) and ensure the URL and port match your config.
 - **Model not found / 404:** The `ollamaModelName` in config must match the name from `ollama list`. Pull the model first: `ollama pull <name>`.
 - **Timeout / slow inference:** Local models (especially on CPU or limited VRAM) can be slow. Increase the model’s `timeoutMs` in config if requests often time out. See [PMR §8](PMR-provider-model-resilience.md#8-local-and-optional-providers-ollama) for graceful degradation and fallback behavior.
+- **Out of memory or very slow inference:** Use a smaller model or reduce context size (e.g. `maxContextTokens` in config). See [PMR §8.1](PMR-provider-model-resilience.md#81-minimum-hardware-and-model-size-constraints) for hardware guidance and the configuration reference for model/config options.
 - **Validation fails:** Run `npm run validate-model -- --modelId=<id> --fullSuite` and fix any reported errors (e.g. timeout, tool-call unsupported). See [PMR §8](PMR-provider-model-resilience.md#8-local-and-optional-providers-ollama) and [Ollama tool-call support](Ollama-tool-call-support.md) for version and model requirements.
 
 ---
