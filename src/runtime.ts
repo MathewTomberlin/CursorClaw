@@ -929,6 +929,13 @@ export class AgentRuntime {
           content: this.scrubText(`Soul:\n\n${substrate.soul.trim()}`, scopeId)
         });
       }
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(
+          "When to update which file: Use MEMORY.md and memory/YYYY-MM-DD for daily notes and \"remember this\". Use ROADMAP.md for goals and milestones—update it when you learn new goals or on heartbeats (status, next steps). Use IDENTITY.md and SOUL.md for who you are; TOOLS.md for env notes. When you learn something lasting, update the right file via exec (read first, then sed to change only that part).",
+          scopeId
+        )
+      });
       const lastIdx = userMessages.length - 1;
       const u = lastIdx >= 0 ? userMessages[lastIdx] : undefined;
       if (u !== undefined) {
@@ -971,6 +978,14 @@ export class AgentRuntime {
             )
           });
         }
+        // When to update substrate vs memory: steer durable/long-term info into substrate files.
+        systemMessages.push({
+          role: "system",
+          content: this.scrubText(
+            "Substrate vs memory — when to update what: Use MEMORY.md and memory/YYYY-MM-DD.md for daily context, \"remember this\", decisions, and raw logs (or remember_this/recall_memory). Use substrate files for durable, structural information: ROADMAP.md for goals and milestones (create or update when the user or context implies goals; on heartbeats update status or next steps); IDENTITY.md and SOUL.md for who you are and how you present; TOOLS.md for environment notes (hosts, preferences). When you learn something lasting—e.g. a new goal, a preference for how you behave, a new tool or device—update the right substrate file via exec (read the file first, then sed to change only the relevant part). On heartbeats, consider whether ROADMAP, IDENTITY, or TOOLS should be updated and do so when appropriate.",
+            scopeId
+          )
+        });
       }
       if (substrate.identity?.trim()) {
       systemMessages.push({
