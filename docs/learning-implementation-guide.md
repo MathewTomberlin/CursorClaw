@@ -58,3 +58,14 @@
 - **Resilience consumed the tick:** If the agent spent the tick fixing a build failure (tmp/last-build-failure.log) or addressing a blocker documented in ROADMAP Current state, it is acceptable to update Current state and Completed only and not advance a STUDY_GOALS topic this tick; advance STUDY_GOALS on the next tick once resilience is clear.
 - **Operator pause:** If the operator explicitly asks to pause study work or focus only on ROADMAP/resilience, skip STUDY_GOALS advancement until the operator indicates otherwise.
 - **Otherwise:** When Open is "idle until operator" and no resilience work is pending, advance one STUDY_GOALS topic per §4 and §10.
+
+## 12. Advancing a study topic in a heartbeat
+
+- **One topic, one step:** Each heartbeat (when not consumed by resilience) advances exactly one STUDY_GOALS topic by one step in the pipeline: research → notes → implementation guide → implement → validate → PR. The agent may pick a different topic than the previous tick.
+- **What counts as a step:** Adding or expanding a research note, writing or updating an implementation guide section, implementing code or config per a guide, adding or running tests, or opening/updating a PR. Updating the topic’s sub-note in STUDY_GOALS.md (e.g. "Next step: …") counts as documenting the step.
+- **Documenting:** After advancing, update that topic’s sub-note in STUDY_GOALS.md with what was done and the next step (if any). Optionally add a short ROADMAP Completed entry for the tick.
+
+## 13. Substrate-only advancement
+
+- **When no doc or code change:** A tick can advance learning by updating only substrate: ROADMAP Current state, ROADMAP Completed, and one or more STUDY_GOALS sub-notes (e.g. Continuity or Learning). That counts as one step for continuity and satisfies “advance one STUDY_GOALS topic” without adding a new implementation-guide section or code.
+- **Use case:** Open is "idle until operator", resilience is clear, and the agent runs the full HEARTBEAT checklist (resilience, build/tests, ROADMAP, STUDY_GOALS). The step is documenting the tick and keeping sub-notes current; no new § in docs is required.

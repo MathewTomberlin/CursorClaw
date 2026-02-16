@@ -663,6 +663,8 @@ export class AgentRuntime {
           let previousThinkingContent = "";
 
           while (true) {
+            // Only the last round's reply is kept for the turn result; prior rounds (e.g. before tool follow-up) are discarded.
+            assistantText = "";
             const messagesToSend =
               modelConfig?.no_think === true
                 ? applyNoThinkToMessages(currentMessages)
@@ -951,6 +953,7 @@ export class AgentRuntime {
             payload: actionEnvelope
           });
           await this.snapshot(runId, sessionId, events);
+          // Final message = last round's assistantText only (reset at start of each round). Extension point: if a model/CLI later provides an explicit "final user message" (e.g. field or lifecycle event), prefer that over assistantText when building the turn result.
           return {
             runId,
             assistantText,

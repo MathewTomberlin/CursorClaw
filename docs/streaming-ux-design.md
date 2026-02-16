@@ -79,6 +79,33 @@
 - [ ] **SC4** When the run completes, the streaming/thinking UI is cleared and only the final assistant message is shown in the thread.
 - [ ] **SC5** No regression: existing flows (no thinking, or CLI full-message-only) still complete and show the final message correctly.
 
+## Final message (multi-round / tool use)
+
+- **Last round only:** The value returned in the turn result (and shown in the message box) is **only the last round's reply**. The runtime resets `assistantText` at the **start of each** agent-loop round (top of `while (true)`). So when there are multiple rounds (e.g. tool calls and follow-up), only the final round's assistant content is kept; prior rounds' text is not accumulated into the final message.
+- **Streaming during run:** Non-final rounds may show as streaming updates that overwrite each other; the stream is cleared on `completed`, and only the final message remains in the thread.
+- **Extension point:** If a model or CLI later supports an explicit "this is the final user message" (e.g. a field or lifecycle event), the runtime can prefer that over "last round's assistant content" when building the turn result.
+
+### Final-message-only: success criteria
+
+- **SC1 (multi-round):** A run with one or more tool-call rounds ends with a final message that contains only the last round's reply (e.g. "Here's a concise analysis…"). It must not contain prior-round thinking/reply text (e.g. "Reading the key streaming components…", "Checking how the runtime…").
+- **SC2 (single-round):** A run with no tool calls still shows the full reply as the final message; no regression.
+- **SC3 (streaming):** During the run, non-final content can appear in the streaming bubble and be replaced by later content; on completion the bubble is cleared and only the final message remains in the thread.
+- **SC4 (thinking/tags):** Thinking and known thinking/tool/code tags do not appear in the final message or in the streaming text (existing `stripThinkingTags` behavior preserved; extend stripping for new tags only when they appear in adapter/model output).
+- **SC5 (early exit):** Hint-request and other early-return paths still set and return the intended message; no change in behavior.
+
+### Final-message-only: guardrails
+
+- **G1:** Do not reset `assistantText` on the early-exit path (hint-request, etc.); only at the top of the `while (true)` body.
+- **G2:** Within a round, keep existing logic that updates `assistantText` and `thisRoundContent` from `assistant_delta` (so tool-follow-up messages and streaming remain correct).
+- **G3:** Keep all post-loop cleanup (`stripThinkingTags`, dedup, etc.) so the last-round-only string is still normalized before return.
+- **G4:** Do not change the contract of assistant events or the UI's handling of `streamedContent` / `streamedThinkingContent` beyond what's already there; overwrite and clear-on-complete behavior stays as-is.
+- **G5:** If adding tool/code tag stripping, do it in a single place (e.g. shared helper) and apply consistently to the same content that is shown in stream and final message.
+
+### Tags (thinking / tool / code)
+
+- **Thinking:** Already stripped via `stripThinkingTags` (`<think>...</think>`, `<thinking>...</thinking>`). Keep as-is.
+- **Tool/code tags:** If the adapter or model later emits explicit tags for tool calls or code (e.g. `<tool_call>`, `<code>`), extend the stripping helper (or add a shared "strip non-user-visible tags" step) and apply it to content used for assistant events and to `assistantText` before post-loop cleanup. Only add stripping for tags that are actually present in the CLI/model output; if none are found, document "extend stripping if new tag formats appear" and skip implementation until a concrete format exists.
+
 ## Guardrails (Regression Prevention)
 
 - **G1** Do not remove or weaken the existing logic that clears `streamedContent` and `streamedThinkingContent` when the turn ends (e.g. in `runTurn`’s `finally`).
@@ -86,3 +113,4 @@
 - **G3** Thinking delta: if the adapter sends only deltas, `content` will not start with `previousThinkingContent` (or we’ll have empty previous), so we emit the chunk as-is; do not drop or double chunks.
 - **G4** Backend continues to send `assistant` with accumulated content (and optional `replace: true` where applicable); UI continues to set `streamedContent` to that value so the bubble grows.
 - **G5** Optional: add a simple test or script that asserts lifecycle event order for a mock run (e.g. `streaming` → optional `thinking`* → `final_message_start` → `assistant`* → `completed`).
+- **G6** Do not reset `assistantText` on early-exit paths (e.g. hint-request); only at the top of the `while (true)` body so only the last round's content becomes the final message.
