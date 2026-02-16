@@ -109,11 +109,11 @@ export function shouldUseMinimalToolContext(
 ): boolean {
   if (toolCount === 0) return false;
   const lower = lastUserContent.toLowerCase().trim();
-  // Richer/creative: prefer full context for explanations, summaries, open-ended chat
+  // Richer/conversational: prefer full context for explanations, chat, greetings, short replies
   const richer =
     /\b(explain|summarize|summarise|describe|what is|how does|why does|why is|tell me about|write a (short )?story|roleplay|chat)\b/i.test(
       lower
-    );
+    ) || /\b(hi|hello|hey|thanks|thank you|ok|okay|got it|what do you think|sure|yes|no|why\?|really)\b/i.test(lower);
   if (richer) return false;
   // Tool-intent: file/substrate/workspace/edit/run/update
   const toolIntent =
@@ -121,8 +121,8 @@ export function shouldUseMinimalToolContext(
       lower
     ) || /[\w-]+\.(md|ts|js|json|txt)\b/.test(lastUserContent);
   if (toolIntent) return true;
-  // Default when uncertain: minimal when tools provided (reliable tool use)
-  return true;
+  // Default when uncertain: use full context (conversational) so the model generates text instead of over-preferring tools.
+  return false;
 }
 
 interface SessionQueueState {
@@ -653,16 +653,16 @@ export class AgentRuntime {
 
           if (memoryStore) {
             await memoryStore.append({
-            sessionId: request.session.sessionId,
-            category: "turn-summary",
-            text: assistantText.slice(0, 500),
-            provenance: {
-              sourceChannel: request.session.channelId,
-              confidence: 0.8,
-              timestamp: new Date().toISOString(),
-              sensitivity: "operational"
-            }
-          });
+              sessionId: request.session.sessionId,
+              category: "turn-summary",
+              text: assistantText.slice(0, 500),
+              provenance: {
+                sourceChannel: request.session.channelId,
+                confidence: 0.8,
+                timestamp: new Date().toISOString(),
+                sensitivity: "operational"
+              }
+            });
           }
 
           this.metrics.turnsCompleted += 1;
@@ -906,7 +906,7 @@ export class AgentRuntime {
       systemMessages.push({
         role: "system",
         content: this.scrubText(
-          "Use the provided tools. To read a file call exec with command: cat FILENAME or type FILENAME. To edit a file: read it first, then use sed to change only the part that needs updating (e.g. sed -i 's/old/new/' FILE); do not overwrite the whole file with echo ... > FILE unless the user asked to replace the entire file. Workspace context is in AGENTS.md, IDENTITY.md, ROADMAP.md—read them with exec when needed.",
+          "Continuity: this turn is task-oriented; respond with tool calls. Use the provided tools. To read a file call exec with command: cat FILENAME or type FILENAME. To edit a file: read it first, then use sed to change only the part that needs updating (e.g. sed -i 's/old/new/' FILE); do not overwrite the whole file with echo ... > FILE unless the user asked to replace the entire file. Workspace context is in AGENTS.md, IDENTITY.md, ROADMAP.md—read them with exec when needed.",
           scopeId
         )
       });
@@ -957,26 +957,43 @@ export class AgentRuntime {
           content: this.scrubText(`Workspace rules (AGENTS):\n\n${substrate.agents.trim()}`, scopeId)
         });
       }
-      // Tool-use mandate immediately after rules so it is never truncated by system prompt budget. Critical for
-      // Ollama/local models (e.g. Qwen3 8B, Granite 3.2) which otherwise answer from context without calling tools.
+      // Tool instructions: in full context we give continuity (conversational vs task) so local models know when to generate text vs use tools.
       if (toolList.length > 0) {
-        systemMessages.push({
-          role: "system",
-          content: this.scrubText(
-            "You have access to tools. You must use them: to read or edit substrate files (AGENTS.md, IDENTITY.md, ROADMAP.md, MEMORY.md, memory/YYYY-MM-DD.md) or any file, call the exec tool (e.g. cat, type, head, or sed for edits). When editing an existing file: read it first, then use sed to change only the part that needs updating; do not overwrite the whole file with echo ... > FILE unless the user asked to replace the entire file. When advancing work or on heartbeats, read and update ROADMAP.md or memory files via exec as appropriate—do not skip tool use. To run scripts or tests, use exec. Do not guess file contents—call a tool to read or verify.",
-            scopeId
-          )
-        });
         const modelIdForOllamaCheck = getModelIdForProfile(this.options.config, profileIdForSubstrate);
         const activeModelConfig = this.options.config.models[modelIdForOllamaCheck];
-        if (activeModelConfig?.provider === "ollama") {
+        const isOllamaFullContext = activeModelConfig?.provider === "ollama" && !useOllamaMinimalSystem;
+        if (isOllamaFullContext) {
           systemMessages.push({
             role: "system",
             content: this.scrubText(
-              "You are using the Ollama provider. You must use the provided tools—do not answer from memory or guess. To read substrate or any file: call the exec tool (e.g. cat AGENTS.md, type USER.md, head -n 50 ROADMAP.md). To update a file: always read it first, then use sed to change only the specific line or section (e.g. sed -i 's/old text/new text/' FILE); do not write the entire file with echo ... > FILE unless the user explicitly asked to replace the whole file. When the user asks about the workspace, rules, roadmap, or files, your first response must include one or more tool calls to read the relevant files; then answer from the tool results. On heartbeats, use exec to read ROADMAP.md and HEARTBEAT.md and to update substrate or memory as needed.",
+              "Continuity: this is a conversational turn. Reply in natural language. Use tools only when the user clearly asks to read or edit files, run commands, or check workspace state.",
               scopeId
             )
           });
+          systemMessages.push({
+            role: "system",
+            content: this.scrubText(
+              "You have access to tools. Use them when the user asks to read or edit files, run commands, or when you need to verify workspace state; otherwise reply in natural language. To read: exec (e.g. cat AGENTS.md, type USER.md, head -n 50 ROADMAP.md). To edit: read the file first, then use sed to change only the relevant part; do not overwrite whole files with echo unless the user asked. On heartbeats, use exec to read ROADMAP.md and HEARTBEAT.md and update substrate or memory as needed.",
+              scopeId
+            )
+          });
+        } else {
+          systemMessages.push({
+            role: "system",
+            content: this.scrubText(
+              "You have access to tools. You must use them: to read or edit substrate files (AGENTS.md, IDENTITY.md, ROADMAP.md, MEMORY.md, memory/YYYY-MM-DD.md) or any file, call the exec tool (e.g. cat, type, head, or sed for edits). When editing an existing file: read it first, then use sed to change only the part that needs updating; do not overwrite the whole file with echo ... > FILE unless the user asked to replace the entire file. When advancing work or on heartbeats, read and update ROADMAP.md or memory files via exec as appropriate—do not skip tool use. To run scripts or tests, use exec. Do not guess file contents—call a tool to read or verify.",
+              scopeId
+            )
+          });
+          if (activeModelConfig?.provider === "ollama") {
+            systemMessages.push({
+              role: "system",
+              content: this.scrubText(
+                "You are using the Ollama provider. You must use the provided tools—do not answer from memory or guess. To read substrate or any file: call the exec tool (e.g. cat AGENTS.md, type USER.md, head -n 50 ROADMAP.md). To update a file: always read it first, then use sed to change only the specific line or section (e.g. sed -i 's/old text/new text/' FILE); do not write the entire file with echo ... > FILE unless the user explicitly asked to replace the whole file. When the user asks about the workspace, rules, roadmap, or files, your first response must include one or more tool calls to read the relevant files; then answer from the tool results. On heartbeats, use exec to read ROADMAP.md and HEARTBEAT.md and to update substrate or memory as needed.",
+                scopeId
+              )
+            });
+          }
         }
         // When to update substrate vs memory: steer durable/long-term info into substrate files.
         systemMessages.push({
@@ -1154,14 +1171,17 @@ export class AgentRuntime {
       });
     }
 
-    // Formal planning and agency: native support for milestones, roadmaps, and user prioritization.
-    // Injected when substrate is used (agents or roadmap) so the agent is natively good at planning and automating work.
-    const hasPlanningContext = (substrate.agents?.trim() ?? "") !== "" || (substrate.roadmap?.trim() ?? "") !== "";
+    // Formal planning and agency: native support for milestones, roadmaps, study goals, and user prioritization.
+    // Injected when substrate is used (agents, roadmap, or study goals) so the agent is natively good at planning and automating work.
+    const hasPlanningContext =
+      (substrate.agents?.trim() ?? "") !== "" ||
+      (substrate.roadmap?.trim() ?? "") !== "" ||
+      (substrate.studyGoals?.trim() ?? "") !== "";
     if (hasPlanningContext) {
       systemMessages.push({
         role: "system",
         content: this.scrubText(
-          "Planning and automation: You have a planning file (e.g. ROADMAP.md) for milestones, roadmaps, and backlogs. Create or update it when the user or context implies goals; break work into concrete steps and priorities. During heartbeats (when no user message is pending), read the planning file and HEARTBEAT.md and make progress on the next item when appropriate—implement a small piece, run a check, or update Open/Completed; replace the single Current state line in place only—do not append heartbeat status or tick logs to ROADMAP (use MEMORY or remember_this for per-tick notes). User messages always take priority: the system will interrupt any in-flight heartbeat work when the user sends a message, let you respond to the user fully, then the next heartbeat tick continues from the planning file and HEARTBEAT checklist. Plan in ROADMAP, advance it on heartbeats, and stay responsive to the user.",
+          "Planning and automation: You have a planning file (e.g. ROADMAP.md) for milestones, roadmaps, and backlogs. Create or update it when the user or context implies goals; break work into concrete steps and priorities. When STUDY_GOALS is in your context, use it for long-term study (research → notes → implementation guide → implement and validate). During heartbeats (when no user message is pending), read the planning file, HEARTBEAT.md, and when present the study goals (STUDY_GOALS), and make progress on the next item when appropriate—implement a small piece, run a check, update Open/Completed, or advance long-term study; replace the single Current state line in place only—do not append heartbeat status or tick logs to ROADMAP (use MEMORY or remember_this for per-tick notes). User messages always take priority: the system will interrupt any in-flight heartbeat work when the user sends a message, let you respond to the user fully, then the next heartbeat tick continues from the planning file, HEARTBEAT checklist, and STUDY_GOALS when present. Plan in ROADMAP, advance it on heartbeats, use STUDY_GOALS for learning, and stay responsive to the user.",
           scopeId
         )
       });

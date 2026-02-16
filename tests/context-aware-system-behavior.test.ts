@@ -16,9 +16,14 @@ describe("shouldUseMinimalToolContext", () => {
     expect(shouldUseMinimalToolContext(0, "explain quantum physics", ollamaConfig)).toBe(false);
   });
 
-  it("returns true by default when tools present and no strong signal", () => {
-    expect(shouldUseMinimalToolContext(3, "hello", ollamaConfig)).toBe(true);
-    expect(shouldUseMinimalToolContext(1, "what do you think?", ollamaConfig)).toBe(true);
+  it("returns false for conversational cues (hello, thanks, what do you think)", () => {
+    expect(shouldUseMinimalToolContext(3, "hello", ollamaConfig)).toBe(false);
+    expect(shouldUseMinimalToolContext(1, "what do you think?", ollamaConfig)).toBe(false);
+  });
+
+  it("returns false when uncertain (no clear tool or richer signal) so full context is used", () => {
+    expect(shouldUseMinimalToolContext(3, "maybe", ollamaConfig)).toBe(false);
+    expect(shouldUseMinimalToolContext(1, "alright then", ollamaConfig)).toBe(false);
   });
 
   it("returns false for richer/creative intent (explain, summarize, describe)", () => {
