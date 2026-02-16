@@ -33,6 +33,12 @@ function isENOENT(e: unknown): boolean {
   return (e as { code?: string })?.code === "ENOENT";
 }
 
+/** True when execFile/spawn failed because the binary was not found (e.g. on Windows when invoking Unix utils). */
+function isSpawnENOENT(e: unknown): boolean {
+  const err = e as { code?: string; syscall?: string };
+  return err?.code === "ENOENT" && err?.syscall === "spawn";
+}
+
 /** Return true if resolvedPath is under profileRoot (so agent can only touch its own profile files). */
 function pathUnderProfileRoot(resolvedPath: string, profileRoot: string): boolean {
   const a = resolve(resolvedPath);
@@ -869,13 +875,18 @@ export function createExecTool(args: {
               const append = segBinArgs.includes("-a");
               const paths = segBinArgs.filter((a) => a !== "-a" && !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
               if (paths.length > 0) {
-                for (const p of paths) {
-                  const pathResolved = resolve(cwd, p);
-                  ensureUnderProfile(pathResolved);
-                  if (append) await appendFile(pathResolved, "");
-                  else await writeFile(pathResolved, "");
+                try {
+                  for (const p of paths) {
+                    const pathResolved = resolve(cwd, p);
+                    ensureUnderProfile(pathResolved);
+                    if (append) await appendFile(pathResolved, "");
+                    else await writeFile(pathResolved, "");
+                  }
+                  lastResult = { stdout: "", stderr: "" };
+                } catch (e) {
+                  if (isENOENT(e)) lastResult = { stdout: "", stderr: `tee: No such file or directory\n` };
+                  else throw e;
                 }
-                lastResult = { stdout: "", stderr: "" };
                 continue;
               }
             }
@@ -886,8 +897,13 @@ export function createExecTool(args: {
                 const dest = resolve(cwd, paths[1]!);
                 ensureUnderProfile(src);
                 ensureUnderProfile(dest);
-                await rename(src, dest);
-                lastResult = { stdout: "", stderr: "" };
+                try {
+                  await rename(src, dest);
+                  lastResult = { stdout: "", stderr: "" };
+                } catch (e) {
+                  if (isENOENT(e)) lastResult = { stdout: "", stderr: `mv: ${paths[0]}: No such file or directory\n` };
+                  else lastResult = { stdout: "", stderr: `mv: ${(e as Error).message}\n` };
+                }
                 continue;
               }
             }
@@ -917,26 +933,36 @@ export function createExecTool(args: {
             if (segBin === "mkdir" && segIntent === "mutating" && segBinArgs.length > 0) {
               const paths = segBinArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
               if (paths.length > 0) {
-                for (const p of paths) {
-                  const pathResolved = resolve(cwd, p);
-                  ensureUnderProfile(pathResolved);
-                  await mkdir(pathResolved, { recursive: true });
+                try {
+                  for (const p of paths) {
+                    const pathResolved = resolve(cwd, p);
+                    ensureUnderProfile(pathResolved);
+                    await mkdir(pathResolved, { recursive: true });
+                  }
+                  lastResult = { stdout: "", stderr: "" };
+                } catch (e) {
+                  if (isENOENT(e)) lastResult = { stdout: "", stderr: `mkdir: No such file or directory\n` };
+                  else lastResult = { stdout: "", stderr: `mkdir: ${(e as Error).message}\n` };
                 }
-                lastResult = { stdout: "", stderr: "" };
                 continue;
               }
             }
             if (segBin === "touch" && segIntent === "mutating" && segBinArgs.length > 0) {
               const paths = segBinArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
               if (paths.length > 0) {
-                for (const p of paths) {
-                  const pathResolved = resolve(cwd, p);
-                  ensureUnderProfile(pathResolved);
-                  const exists = await stat(pathResolved).catch(() => null);
-                  if (exists) await utimes(pathResolved, exists.mtime, new Date());
-                  else await writeFile(pathResolved, "");
+                try {
+                  for (const p of paths) {
+                    const pathResolved = resolve(cwd, p);
+                    ensureUnderProfile(pathResolved);
+                    const exists = await stat(pathResolved).catch(() => null);
+                    if (exists) await utimes(pathResolved, exists.mtime, new Date());
+                    else await writeFile(pathResolved, "");
+                  }
+                  lastResult = { stdout: "", stderr: "" };
+                } catch (e) {
+                  if (isENOENT(e)) lastResult = { stdout: "", stderr: `touch: No such file or directory\n` };
+                  else throw e;
                 }
-                lastResult = { stdout: "", stderr: "" };
                 continue;
               }
             }
@@ -962,11 +988,17 @@ export function createExecTool(args: {
                 ensureUnderProfile(pathResolved);
               }
             }
-            lastResult = await sandbox.run(segBin, segBinArgs, {
-              cwd,
-              maxBufferBytes: maxBuffer,
-              timeoutMs: 15_000
-            });
+            try {
+              lastResult = await sandbox.run(segBin, segBinArgs, {
+                cwd,
+                maxBufferBytes: maxBuffer,
+                timeoutMs: 15_000
+              });
+            } catch (e) {
+              if (platform() === "win32" && isSpawnENOENT(e)) {
+                lastResult = { stdout: "", stderr: `exec: command not found: ${segBin}\n` };
+              } else throw e;
+            }
           }
           return { stdout: lastResult.stdout, stderr: lastResult.stderr };
         }
@@ -1267,13 +1299,18 @@ export function createExecTool(args: {
           const append = binArgs.includes("-a");
           const paths = binArgs.filter((a) => a !== "-a" && !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           if (paths.length > 0) {
-            for (const p of paths) {
-              const pathResolved = resolve(cwd, p);
-              ensureUnderProfile(pathResolved);
-              if (append) await appendFile(pathResolved, "");
-              else await writeFile(pathResolved, "");
+            try {
+              for (const p of paths) {
+                const pathResolved = resolve(cwd, p);
+                ensureUnderProfile(pathResolved);
+                if (append) await appendFile(pathResolved, "");
+                else await writeFile(pathResolved, "");
+              }
+              return { stdout: "", stderr: "" };
+            } catch (e) {
+              if (isENOENT(e)) return { stdout: "", stderr: "tee: No such file or directory\n" };
+              throw e;
             }
-            return { stdout: "", stderr: "" };
           }
         }
         if (platform() === "win32" && args.sandbox === undefined && bin === "mv" && intent === "mutating" && binArgs.length >= 2) {
@@ -1283,8 +1320,13 @@ export function createExecTool(args: {
             const dest = resolve(cwd, paths[1]!);
             ensureUnderProfile(src);
             ensureUnderProfile(dest);
-            await rename(src, dest);
-            return { stdout: "", stderr: "" };
+            try {
+              await rename(src, dest);
+              return { stdout: "", stderr: "" };
+            } catch (e) {
+              if (isENOENT(e)) return { stdout: "", stderr: `mv: ${paths[0]}: No such file or directory\n` };
+              return { stdout: "", stderr: `mv: ${(e as Error).message}\n` };
+            }
           }
         }
         if (platform() === "win32" && args.sandbox === undefined && bin === "cp" && intent === "mutating" && binArgs.length >= 2) {
@@ -1309,25 +1351,35 @@ export function createExecTool(args: {
         if (platform() === "win32" && args.sandbox === undefined && bin === "mkdir" && intent === "mutating" && binArgs.length > 0) {
           const paths = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           if (paths.length > 0) {
-            for (const p of paths) {
-              const pathResolved = resolve(cwd, p);
-              ensureUnderProfile(pathResolved);
-              await mkdir(pathResolved, { recursive: true });
+            try {
+              for (const p of paths) {
+                const pathResolved = resolve(cwd, p);
+                ensureUnderProfile(pathResolved);
+                await mkdir(pathResolved, { recursive: true });
+              }
+              return { stdout: "", stderr: "" };
+            } catch (e) {
+              if (isENOENT(e)) return { stdout: "", stderr: "mkdir: No such file or directory\n" };
+              return { stdout: "", stderr: `mkdir: ${(e as Error).message}\n` };
             }
-            return { stdout: "", stderr: "" };
           }
         }
         if (platform() === "win32" && args.sandbox === undefined && bin === "touch" && intent === "mutating" && binArgs.length > 0) {
           const paths = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           if (paths.length > 0) {
-            for (const p of paths) {
-              const pathResolved = resolve(cwd, p);
-              ensureUnderProfile(pathResolved);
-              const exists = await stat(pathResolved).catch(() => null);
-              if (exists) await utimes(pathResolved, exists.mtime, new Date());
-              else await writeFile(pathResolved, "");
+            try {
+              for (const p of paths) {
+                const pathResolved = resolve(cwd, p);
+                ensureUnderProfile(pathResolved);
+                const exists = await stat(pathResolved).catch(() => null);
+                if (exists) await utimes(pathResolved, exists.mtime, new Date());
+                else await writeFile(pathResolved, "");
+              }
+              return { stdout: "", stderr: "" };
+            } catch (e) {
+              if (isENOENT(e)) return { stdout: "", stderr: "touch: No such file or directory\n" };
+              throw e;
             }
-            return { stdout: "", stderr: "" };
           }
         }
         if (platform() === "win32" && bin === "test" && intent === "read-only" && binArgs.length >= 2) {
@@ -1351,15 +1403,22 @@ export function createExecTool(args: {
             ensureUnderProfile(pathResolved);
           }
         }
-        const result = await sandbox.run(bin, binArgs, {
-          cwd,
-          maxBufferBytes: maxBuffer,
-          timeoutMs: 15_000
-        });
-        return {
-          stdout: result.stdout,
-          stderr: result.stderr
-        };
+        try {
+          const result = await sandbox.run(bin, binArgs, {
+            cwd,
+            maxBufferBytes: maxBuffer,
+            timeoutMs: 15_000
+          });
+          return {
+            stdout: result.stdout,
+            stderr: result.stderr
+          };
+        } catch (e) {
+          if (platform() === "win32" && isSpawnENOENT(e)) {
+            return { stdout: "", stderr: `exec: command not found: ${bin}\n` };
+          }
+          throw e;
+        }
       } finally {
         concurrentExecs -= 1;
       }
@@ -1429,12 +1488,17 @@ export function createGhPrReadTool(args: {
         const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
         throw new Error(`gh_pr_read requires approval${suffix}`);
       }
-      const result = await sandbox.run("gh", ghArgs, {
-        cwd: args.workspaceCwd,
-        maxBufferBytes: maxBuffer,
-        timeoutMs: 15_000
-      });
-      return { stdout: result.stdout, stderr: result.stderr };
+      try {
+        const result = await sandbox.run("gh", ghArgs, {
+          cwd: args.workspaceCwd,
+          maxBufferBytes: maxBuffer,
+          timeoutMs: 15_000
+        });
+        return { stdout: result.stdout, stderr: result.stderr };
+      } catch (e) {
+        if (isSpawnENOENT(e)) throw new Error("gh CLI not found. Install GitHub CLI (gh) to use this tool.");
+        throw e;
+      }
     }
   };
 }
@@ -1609,11 +1673,16 @@ export function createGhPrWriteTool(args: {
       rateLimiter?.checkLimit();
 
       const runOnce = async () => {
-        return await sandbox.run("gh", ghArgs, {
-          cwd: args.workspaceCwd,
-          maxBufferBytes: maxBuffer,
-          timeoutMs: 15_000
-        });
+        try {
+          return await sandbox.run("gh", ghArgs, {
+            cwd: args.workspaceCwd,
+            maxBufferBytes: maxBuffer,
+            timeoutMs: 15_000
+          });
+        } catch (e) {
+          if (isSpawnENOENT(e)) throw new Error("gh CLI not found. Install GitHub CLI (gh) to use this tool.");
+          throw e;
+        }
       };
 
       let result = await runOnce();
