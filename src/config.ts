@@ -61,6 +61,8 @@ export interface ModelProviderConfig {
   toolTurnContext?: "full" | "minimal";
   /** When true (Ollama only), use a single short system message and prepend "use tools" to the user message. Use when the model still does not call tools with toolTurnContext: minimal. */
   ollamaMinimalSystem?: boolean;
+  /** When set (Ollama only), "minimal" = always use minimal/tool-focused context when tools present; "full" = always richer; "auto" = infer per turn from tool availability and user message. See docs/context-aware-system-behavior.md. */
+  ollamaContextMode?: "auto" | "minimal" | "full";
   /** Provider-specific: base URL for OpenAI-compatible or Ollama (e.g. http://localhost:11434). */
   baseURL?: string;
   /** Provider-specific: OpenAI-compatible model id (e.g. gpt-4o-mini, gpt-4o). */
