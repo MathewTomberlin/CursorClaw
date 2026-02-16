@@ -365,7 +365,7 @@ Default model map:
 |----------|----------|----------|
 | **cursor-agent-cli** | — | `command?: string`, `args?: string[]`, `promptAsArg?: boolean` (pass last user message as final CLI arg). If omitted, built-in CLI defaults are used. |
 | **fallback-model** | — | No provider-specific fields. Use for fallback-only entries. |
-| **ollama** | `ollamaModelName: string` (e.g. `llama3.2`, `granite3.2`) | `baseURL?: string` (e.g. `http://localhost:11434`). Optional `ollamaOptions?: { temperature?: number; num_ctx?: number }` to tune for tool use (defaults when tools are used: temperature 0.3, num_ctx 8192). Optional `toolTurnContext: "minimal"` so only the latest user message is sent. Optional `ollamaMinimalSystem: true` to send a single short system message and prepend "use tools" to the user message—use when the model still does not call tools with minimal context (see `docs/Ollama-tool-call-support.md` §7). |
+| **ollama** | `ollamaModelName: string` (e.g. `qwen3:8b`, `granite3.2`) | `baseURL?: string` (e.g. `http://localhost:11434`). Optional `ollamaOptions?: { temperature?: number; num_ctx?: number }` to tune for tool use (defaults when tools are used: temperature 0.3, num_ctx 8192). Optional `toolTurnContext: "minimal"` so only the latest user message is sent. Optional `ollamaMinimalSystem: true` to send a single short system message and prepend "use tools" to the user message—use when the model still does not call tools with minimal context (see `docs/Ollama-tool-call-support.md` §7). |
 | **openai-compatible** | `openaiModelId: string` (e.g. `gpt-4o-mini`, `gpt-4o`) | `baseURL?: string`, `apiKeyRef?: string` (credential store key for API key; never plaintext in config). Supports tools and the same agent loop as Ollama (tool_calls in request/response; follow-up with assistant + tool result messages until the model responds without tool calls). |
 
 Example — Ollama model with custom base URL:
@@ -373,9 +373,9 @@ Example — Ollama model with custom base URL:
 ```json
 "my-ollama": {
   "provider": "ollama",
-  "ollamaModelName": "granite3.2",
+  "ollamaModelName": "qwen3:8b",
   "baseURL": "http://localhost:11434",
-  "ollamaOptions": { "temperature": 0.3, "num_ctx": 8192 },
+  "ollamaOptions": { "temperature": 0.2, "num_ctx": 16384 },
   "timeoutMs": 120000,
   "authProfiles": ["default"],
   "fallbackModels": [],
@@ -409,7 +409,7 @@ Provider and model resilience (PMR): validation store and policies. See `docs/PM
 
 To validate a model: `npm run validate-model -- --modelId=<id>` (optional `--config=<path>`). Add `--fullSuite` to run the capability suite (tool call + reasoning); default is tool-call only. Exit code 0 if the probe passed. If the model has `paidApi: true`, validation is skipped unless `runValidationAgainstPaidApis` is `true`.
 
-**Local models (e.g. Ollama, 16GB VRAM):** For minimum hardware and model-size constraints, adding a local provider to the validation suite, and graceful degradation, see **Provider and Model Resilience** `docs/PMR-provider-model-resilience.md` §8 (Phase 4 — Optional local models). For Ollama tool-calling (request/response format, model requirements, recommended models and Granite 3.2), see `docs/Ollama-tool-call-support.md` §7.
+**Local models (e.g. Ollama, 16GB VRAM):** For minimum hardware and model-size constraints, adding a local provider to the validation suite, and graceful degradation, see **Provider and Model Resilience** `docs/PMR-provider-model-resilience.md` §8 (Phase 4 — Optional local models). For Ollama tool-calling (request/response format, model requirements, recommended models with focus on Qwen3 8B), see `docs/Ollama-tool-call-support.md` §7.
 
 ## 4.16 `autonomyBudget`
 

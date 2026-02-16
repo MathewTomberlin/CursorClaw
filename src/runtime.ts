@@ -889,7 +889,7 @@ export class AgentRuntime {
         });
       }
       // Tool-use mandate immediately after rules so it is never truncated by system prompt budget. Critical for
-      // Ollama/local models (e.g. Granite 3.2) which otherwise answer from context without calling tools.
+      // Ollama/local models (e.g. Qwen3 8B, Granite 3.2) which otherwise answer from context without calling tools.
       if (toolList.length > 0) {
         systemMessages.push({
           role: "system",

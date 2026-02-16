@@ -6,19 +6,20 @@
 
 **Implemented:** Request includes OpenAI-style `tools` when `tools.length > 0` (with `parameters.required` and `parameters.properties` per [Ollama tool-calling docs](https://docs.ollama.com/capabilities/tool-calling)). Response parsing reads `message.tool_calls[]` (each `{ function: { name, arguments } }`); `arguments` may be object or JSON string. One `tool_call` event per call; streaming chunks accumulated by index so that when Ollama streams tool-call deltas (e.g. Granite3.2), the provider merges arguments and emits once per index with final args. **Agent loop:** When the model returns tool calls, the runtime executes them, then sends back the assistant message (with `tool_calls`) plus one `role: "tool"` message per result (`tool_name` + `content`), and calls the API again to get the model’s final reply; this repeats until the model responds without tool calls. No new config; see §3 for version/model requirements.
 
-**Recommended models for tool use:** **Qwen3 8B** (e.g. `qwen3:8b` or uncensored variants), **Granite 3.2** (e.g. `ollama pull granite3.2`), and other [Ollama models that support tool calling](https://ollama.com/search?c=tool). Use `validate-model -- --modelId=<id> --fullSuite` to confirm tool and reasoning checks pass for your model.
+**Recommended models for tool use:** **Qwen3 8B** is the primary recommended model (e.g. `qwen3:8b` or uncensored variants); also **Granite 3.2** (e.g. `ollama pull granite3.2`) and other [Ollama models that support tool calling](https://ollama.com/search?c=tool). Use `validate-model -- --modelId=<id> --fullSuite` to confirm tool and reasoning checks pass for your model.
 
-**Capabilities (e.g. Granite 3.2):** The provider supports streaming tool calls: when Ollama streams `message.tool_calls` across chunks (name in one chunk, arguments in another), the provider accumulates by index and emits one `tool_call` event per call with the final merged arguments. This matches behavior used by models like Granite 3.2. Tool-call and reasoning validation are covered by `validate-model --fullSuite`. See **§7** for model capabilities and Granite 3.2 details.
+**Capabilities (Qwen3 8B focus):** The provider supports streaming tool calls: when Ollama streams `message.tool_calls` across chunks (name in one chunk, arguments in another), the provider accumulates by index and emits one `tool_call` event per call with the final merged arguments. This works well with **Qwen3 8B** and models like Granite 3.2. Tool-call and reasoning validation are covered by `validate-model --fullSuite`. See **§7** for model capabilities with emphasis on Qwen3 8B.
 
 ---
 
-## 7. Ollama models and capabilities (Granite 3.2)
+## 7. Ollama models and capabilities (Qwen3 8B)
 
-This section summarizes which Ollama models support tool use, how to validate them, and notes specific to **Granite 3.2**.
+This section summarizes which Ollama models support tool use, how to validate them, and notes specific to **Qwen3 8B** (the primary recommended model for Ollama tool use).
 
 ### Recommended models for tool use
 
-- **Granite 3.2** — Strong choice for tool use and reasoning in a single model. Pull with `ollama pull granite3.2` (or `ibm-granite3.2`). Use `ollamaModelName: "granite3.2"` (or the exact name from `ollama list`). The provider already handles Granite 3.2’s streaming tool-call deltas (name then arguments streamed per index); no extra provider tweaks are required.
+- **Qwen3 8B** — Primary recommended model for tool use and reasoning. Pull with `ollama pull qwen3:8b` (or uncensored variants such as `svjack/Qwen3-8B-heretic`). Use `ollamaModelName: "qwen3:8b"` (or the exact name from `ollama list`). Supports tool calling in both thinking and non-thinking modes; performs strongly on agent-style tasks. Native 32K context; Ollama often ships with 40K. See “Qwen3 8B (and variants)” below for tuning.
+- **Granite 3.2** — Alternative strong choice. Pull with `ollama pull granite3.2` (or `ibm-granite3.2`). Use `ollamaModelName: "granite3.2"`. The provider handles streaming tool-call deltas (name then arguments per index); no extra provider tweaks required.
 - **Other tool-capable models** — Discover current models at [Ollama: tool calling](https://ollama.com/search?c=tool). Any model that supports the Ollama tools API will work with this provider; behavior is best-effort per PMR §8.
 
 ### Validation
@@ -30,11 +31,11 @@ This section summarizes which Ollama models support tool use, how to validate th
 
 ### Streaming tool_calls
 
-Ollama may stream tool-call content (e.g. `function.name` in one chunk, `function.arguments` in later chunks). The provider accumulates by call index and emits one `tool_call` event per call when the arguments form valid JSON (or on `done`). No additional provider changes are needed for Granite 3.2 or other models that stream tool calls in this way.
+Ollama may stream tool-call content (e.g. `function.name` in one chunk, `function.arguments` in later chunks). The provider accumulates by call index and emits one `tool_call` event per call when the arguments form valid JSON (or on `done`). No additional provider changes are needed for Qwen3 8B, Granite 3.2, or other models that stream tool calls in this way.
 
-### Why Granite 3.2 may not call tools (chat structure)
+### Why Ollama models may not call tools (chat structure)
 
-Granite 3.2’s tool-calling behavior is sensitive to **how many messages** are in the request:
+Tool-calling behavior (e.g. with **Qwen3 8B** or Granite 3.2) can be sensitive to **how many messages** are in the request:
 
 - **Ollama / IBM examples** use a **single user message** plus `tools`: `messages = [{ role: "user", content: "…" }]`. In that setup the model reliably returns `tool_calls`.
 - **With full conversation history** (many user/assistant turns), the same model often **does not** call tools: it may answer from context, say it will “update” substrate, but never emit `tool_calls`. This is consistent with [reported issues](https://github.com/ollama/ollama/issues) where tool use fails when “message history contains more than just the current user query.”
@@ -45,16 +46,16 @@ Granite 3.2’s tool-calling behavior is sensitive to **how many messages** are 
 1. Set **`toolTurnContext: "minimal"`** so the runtime sends only the latest user message (plus system) for that turn.
 2. If the model still does not call tools, set **`ollamaMinimalSystem: true`** on the same model. The runtime will then send a **short system message** (how to use exec to read/edit files), **inject AGENTS.md, IDENTITY.md, and SOUL.md** so the agent has substrate in context, and **prepend** to the user message: "You must respond by calling one or more of the provided tools… User request: …". This keeps the prompt minimal while giving the Ollama agent workspace rules and identity. Memory, roadmap, and other blocks are still omitted in that mode.
 
-Example:
+Example (Qwen3 8B):
 
 ```json
 "models": {
-  "ollama-granite": {
+  "ollama-qwen": {
     "provider": "ollama",
-    "ollamaModelName": "granite3.2",
+    "ollamaModelName": "qwen3:8b",
     "toolTurnContext": "minimal",
     "ollamaMinimalSystem": true,
-    "ollamaOptions": { "temperature": 0.3, "num_ctx": 8192 },
+    "ollamaOptions": { "temperature": 0.2, "num_ctx": 16384 },
     "timeoutMs": 120000,
     "authProfiles": ["default"],
     "fallbackModels": [],
@@ -63,22 +64,22 @@ Example:
 }
 ```
 
-### Tuning for tool use (Granite 3.2, 16GB VRAM)
+### Qwen3 8B (and variants) — primary recommended model
 
-When tools are sent, the Ollama provider and runtime work together so the model reliably uses tools and reads/edits files:
-
-- **Defaults (when `ollamaOptions` is not set):** `temperature: 0.3`, `num_ctx: 8192`. Lower temperature helps tool-call consistency; `num_ctx` gives enough context for substrate and codebase.
-- **Override in config:** Add `ollamaOptions: { "temperature": 0.2, "num_ctx": 4096 }` (or other values) to your model entry in `openclaw.json` to tune for your hardware. For 16GB VRAM, 8192 or 4096 context is typical; reduce if you hit OOM.
-- **`toolTurnContext: "minimal"`:** For Granite 3.2 (and similar Ollama models), set this on the model so only the latest user message is sent; see “Why Granite 3.2 may not call tools” above.
-- **Runtime prompt:** The runtime injects a generic tool-use nudge for all providers, and when the active model is Ollama it adds a **second, stronger system message** that explicitly requires the model to use the provided tools: read substrate or any file via exec (cat/type/head), and **when editing** to use sed for targeted changes only—read the file first, then sed to change the specific line or section; do not overwrite the whole file with echo unless the user asked to replace the entire file. The exec tool description states it is the primary way to read or modify substrate and codebase files and reinforces targeted-edits behavior.
-
-### Qwen3 8B (and variants)
-
-**Qwen3 8B** (and uncensored variants such as `svjack/Qwen3-8B-heretic`) is well-suited for local tool use: it supports tool calling in both thinking and non-thinking modes and performs strongly on agent-style tasks ([Ollama Qwen3](https://ollama.com/library/qwen3), [Qwen3 overview](https://huggingface.co/Qwen/Qwen3-8B)).
+**Qwen3 8B** (e.g. `qwen3:8b`; uncensored variants such as `svjack/Qwen3-8B-heretic`) is the **primary recommended** Ollama model for local tool use: it supports tool calling in both thinking and non-thinking modes and performs strongly on agent-style tasks ([Ollama Qwen3](https://ollama.com/library/qwen3), [Qwen3 overview](https://huggingface.co/Qwen/Qwen3-8B)).
 
 - **Context:** Native 32K tokens; Ollama `qwen3:8b` often ships with 40K context. For larger substrate and codebase, set `ollamaOptions: { "num_ctx": 16384 }` or `32768` (reduce if you hit OOM).
 - **Temperature:** `0` or `0.2`–`0.3` helps consistent tool calls; your config can use `"temperature": 0` for deterministic edits.
 - **File edits:** The runtime and exec tool description instruct the model to **read first, then use sed** to change only the part that needs updating (e.g. IDENTITY.md, SOUL.md). This reduces the risk of the model overwriting an entire file when only a line or section should change. If the model still replaces a whole file, ensure `toolTurnContext: "minimal"` and `ollamaMinimalSystem: true` so it sees the targeted-edits instruction clearly.
+
+### Tuning for tool use (Qwen3 8B, 16GB VRAM)
+
+When tools are sent, the Ollama provider and runtime work together so the model reliably uses tools and reads/edits files:
+
+- **Defaults (when `ollamaOptions` is not set):** `temperature: 0.3`, `num_ctx: 8192`. Lower temperature helps tool-call consistency; `num_ctx` gives enough context for substrate and codebase. For **Qwen3 8B** you can increase `num_ctx` (e.g. 16384 or 32768) if you have headroom.
+- **Override in config:** Add `ollamaOptions: { "temperature": 0.2, "num_ctx": 16384 }` (or other values) to your model entry in `openclaw.json` to tune for your hardware. For 16GB VRAM, 8192–16384 context is typical for Qwen3 8B; reduce if you hit OOM.
+- **`toolTurnContext: "minimal"`:** For Qwen3 8B (and similar Ollama models), set this on the model so only the latest user message is sent; see “Why Ollama models may not call tools” above.
+- **Runtime prompt:** The runtime injects a generic tool-use nudge for all providers, and when the active model is Ollama it adds a **second, stronger system message** that explicitly requires the model to use the provided tools: read substrate or any file via exec (cat/type/head), and **when editing** to use sed for targeted changes only—read the file first, then sed to change the specific line or section; do not overwrite the whole file with echo unless the user asked to replace the entire file. The exec tool description states it is the primary way to read or modify substrate and codebase files and reinforces targeted-edits behavior.
 
 ---
 

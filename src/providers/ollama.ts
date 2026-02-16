@@ -15,7 +15,7 @@ function isOllamaConfig(
   return c.provider === "ollama" && typeof c.ollamaModelName === "string" && c.ollamaModelName.length > 0;
 }
 
-/** Build request options for Ollama (temperature, num_ctx). When tools are sent, defaults are tuned for tool use on local models (e.g. Granite 3.2). */
+/** Build request options for Ollama (temperature, num_ctx). When tools are sent, defaults are tuned for tool use on local models (e.g. Qwen3 8B, Granite 3.2). */
 function buildOllamaOptions(
   config: ModelProviderConfig,
   hasTools: boolean
@@ -139,7 +139,7 @@ export class OllamaProvider implements ModelProvider {
 
       let promptTokens = 0;
       let completionTokens = 0;
-      /** Accumulate tool_calls by index across stream chunks (Ollama may stream name then arguments, e.g. Granite3.2). */
+      /** Accumulate tool_calls by index across stream chunks (Ollama may stream name then arguments, e.g. Qwen3 8B, Granite 3.2). */
       const toolCallsByIndex = new Map<number, { name: string; argsRaw: string | object }>();
       const emittedToolCallIndices = new Set<number>();
 

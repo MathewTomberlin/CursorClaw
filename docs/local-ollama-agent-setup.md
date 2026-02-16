@@ -7,7 +7,7 @@ This guide walks through running CursorClaw with a **local Ollama** model as the
 ## 1. Prerequisites
 
 - **Ollama** installed and running (e.g. `ollama serve` or the Ollama app). Default API: `http://localhost:11434`.
-- **Model pulled:** e.g. `ollama pull llama3.2`, `ollama pull granite3.2` (or another model that fits your RAM/VRAM). For **tool use and reasoning**, prefer a model that supports tools—e.g. **Granite 3.2** (`granite3.2` / `ibm-granite3.2`) or others; see [Ollama tool-call support](Ollama-tool-call-support.md).
+- **Model pulled:** e.g. `ollama pull qwen3:8b`, `ollama pull granite3.2` (or another model that fits your RAM/VRAM). For **tool use and reasoning**, prefer **Qwen3 8B** (`qwen3:8b`) or **Granite 3.2** (`granite3.2`); see [Ollama tool-call support](Ollama-tool-call-support.md).
 
 ### 1.1 Hardware and model size (optional)
 
@@ -21,7 +21,7 @@ In `openclaw.json` (or via the Config UI):
 
 1. **Add a model entry** under `config.models` with:
    - `provider: "ollama"`
-   - `ollamaModelName`: the name used with `ollama pull` (e.g. `llama3.2`)
+   - `ollamaModelName`: the name used with `ollama pull` (e.g. `qwen3:8b`, `llama3.2`)
    - Optional `baseURL`: if Ollama is not on `http://localhost:11434`
    - Optional `timeoutMs`, `authProfiles`, `enabled` as needed
 
@@ -37,7 +37,7 @@ Example (Ollama as default, with a fallback):
   "models": {
     "ollama-local": {
       "provider": "ollama",
-      "ollamaModelName": "llama3.2",
+      "ollamaModelName": "qwen3:8b",
       "baseURL": "http://localhost:11434",
       "timeoutMs": 120000,
       "authProfiles": ["default"],
@@ -121,11 +121,11 @@ The Ollama provider supports **tool-call** flow: it sends tools to the Ollama AP
 
 - **`validate-model --fullSuite`** includes the tool-call check for Ollama models; use it to confirm tool capability before relying on it in the fallback chain.
 - **Runtime tool use** works: the agent receives `tool_call` events and can execute tools and continue the loop.
-- **Ollama-specific prompt:** When the active model is Ollama, the runtime injects an extra system message that explicitly requires the model to use tools to read or update substrate and files (e.g. exec with cat/type for reads, sed/echo for edits). This helps capable models like Granite 3.2 actually call tools instead of answering from context.
+- **Ollama-specific prompt:** When the active model is Ollama, the runtime injects an extra system message that explicitly requires the model to use tools to read or update substrate and files (e.g. exec with cat/type for reads, sed/echo for edits). This helps capable models like **Qwen3 8B** and Granite 3.2 actually call tools instead of answering from context.
 
 If the model or Ollama does not support tools, the agent still runs for text-only turns. See [Ollama-tool-call-support.md](Ollama-tool-call-support.md) and [PMR](PMR-provider-model-resilience.md) §8 for version/model requirements and best-effort behavior.
 
-**Granite 3.2:** For strong tool use and reasoning with a single model, consider **Granite 3.2** (e.g. `ollama pull granite3.2`). Configure it with `ollamaModelName: "granite3.2"` (or the exact name shown by `ollama list`). Run `npm run validate-model -- --modelId=<your-granite-model-id> --fullSuite` to confirm tool-call and reasoning checks pass. Optional **`ollamaOptions`** (e.g. `{ "temperature": 0.3, "num_ctx": 8192 }`) tunes the request for tool use; when omitted, the provider uses defaults (temperature 0.3, num_ctx 8192) when tools are sent. See [Ollama-tool-call-support.md](Ollama-tool-call-support.md) §7 (Tuning for tool use).
+**Qwen3 8B (recommended):** For strong tool use and reasoning with a single model, use **Qwen3 8B** (e.g. `ollama pull qwen3:8b`). Configure it with `ollamaModelName: "qwen3:8b"` (or the exact name from `ollama list`). Run `npm run validate-model -- --modelId=<your-qwen-model-id> --fullSuite` to confirm tool-call and reasoning checks pass. Optional **`ollamaOptions`** (e.g. `{ "temperature": 0.2, "num_ctx": 16384 }`) tunes the request; when omitted, the provider uses defaults (temperature 0.3, num_ctx 8192) when tools are sent. See [Ollama-tool-call-support.md](Ollama-tool-call-support.md) §7 (Qwen3 8B and tuning). **Granite 3.2** is also supported as an alternative.
 
 ---
 
@@ -136,7 +136,7 @@ If the model or Ollama does not support tools, the agent still runs for text-onl
 - **Timeout / slow inference:** Local models (especially on CPU or limited VRAM) can be slow. Increase the model’s `timeoutMs` in config if requests often time out. See [PMR §8](PMR-provider-model-resilience.md#8-local-and-optional-providers-ollama) for graceful degradation and fallback behavior.
 - **Out of memory or very slow inference:** Use a smaller model or reduce context size (e.g. `maxContextTokens` in config). See [PMR §8.1](PMR-provider-model-resilience.md#81-minimum-hardware-and-model-size-constraints) for hardware guidance and the configuration reference for model/config options.
 - **Validation fails:** Run `npm run validate-model -- --modelId=<id> --fullSuite` and fix any reported errors (e.g. timeout, tool-call unsupported). See [PMR §8](PMR-provider-model-resilience.md#8-local-and-optional-providers-ollama) and [Ollama tool-call support](Ollama-tool-call-support.md) for version and model requirements.
-- **Model never calls tools (e.g. Granite 3.2 answers without reading files):** The runtime injects an Ollama-specific system prompt that instructs the model to use tools for reads/edits. Ensure you are on a recent CursorClaw version and that the active profile uses the Ollama model (not a fallback). If it still does not call tools, run `validate-model --fullSuite` to confirm the model passes the tool-call check; see [Ollama-tool-call-support.md](Ollama-tool-call-support.md) §7 (Tuning for tool use).
+- **Model never calls tools (e.g. Qwen3 8B answers without reading files):** The runtime injects an Ollama-specific system prompt that instructs the model to use tools for reads/edits. Ensure you are on a recent CursorClaw version and that the active profile uses the Ollama model (not a fallback). If it still does not call tools, run `validate-model --fullSuite` to confirm the model passes the tool-call check; see [Ollama-tool-call-support.md](Ollama-tool-call-support.md) §7 (Qwen3 8B and tuning).
 
 ---
 

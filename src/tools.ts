@@ -654,7 +654,7 @@ export function createExecTool(args: {
                 "Unsupported sed command on Windows. Supported: sed -i 's/old/new/[g]' file, sed -i '/p/c replacement' file, sed -i '/p/d' file, sed -i '/p/a line' file."
               );
             }
-            if (segBin === "echo" && segIntent === "mutating") {
+            if (segBin === "echo") {
               const echo = parseEchoRedirect(segBin, segBinArgs);
               if (echo) {
                 const pathResolved = resolve(cwd, echo.filePath);
@@ -669,6 +669,11 @@ export function createExecTool(args: {
                 lastResult = { stdout: "", stderr: "" };
                 continue;
               }
+              // No redirect: echo args to stdout (echo is a shell builtin on Windows, no binary)
+              let out = segBinArgs.join(" ");
+              if ((out.startsWith("'") && out.endsWith("'")) || (out.startsWith('"') && out.endsWith('"'))) out = out.slice(1, -1);
+              lastResult = { stdout: out + "\n", stderr: "" };
+              continue;
             }
             if (segBin === "rm" && segIntent === "mutating") {
               const recursive = segBinArgs.some((a) => a === "-r" || a === "-rf" || a === "-fr" || a === "-R");
@@ -1022,7 +1027,7 @@ export function createExecTool(args: {
             "Unsupported sed command on Windows. Supported: sed -i 's/old/new/[g]' file, sed -i '/p/c replacement' file, sed -i '/p/d' file, sed -i '/p/a line' file."
           );
         }
-        if (platform() === "win32" && bin === "echo" && intent === "mutating") {
+        if (platform() === "win32" && bin === "echo") {
           const echo = parseEchoRedirect(bin, binArgs);
           if (echo) {
             const pathResolved = resolve(cwd, echo.filePath);
@@ -1036,6 +1041,10 @@ export function createExecTool(args: {
             }
             return { stdout: "", stderr: "" };
           }
+          // No redirect: echo args to stdout (echo is a shell builtin on Windows, no binary)
+          let out = binArgs.join(" ");
+          if ((out.startsWith("'") && out.endsWith("'")) || (out.startsWith('"') && out.endsWith('"'))) out = out.slice(1, -1);
+          return { stdout: out + "\n", stderr: "" };
         }
         if (platform() === "win32" && bin === "rm" && intent === "mutating") {
           const recursive = binArgs.some((a) => a === "-r" || a === "-rf" || a === "-fr" || a === "-R");
