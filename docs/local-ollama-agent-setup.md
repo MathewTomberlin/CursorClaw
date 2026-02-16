@@ -9,6 +9,10 @@ This guide walks through running CursorClaw with a **local Ollama** model as the
 - **Ollama** installed and running (e.g. `ollama serve` or the Ollama app). Default API: `http://localhost:11434`.
 - **Model pulled:** e.g. `ollama pull llama3.2`, `ollama pull granite3.2` (or another model that fits your RAM/VRAM). For **tool use and reasoning**, prefer a model that supports tools—e.g. **Granite 3.2** (`granite3.2` / `ibm-granite3.2`) or others; see [Ollama tool-call support](Ollama-tool-call-support.md).
 
+### 1.1 Hardware and model size (optional)
+
+For minimum hardware and model-size guidance (VRAM, RAM, OS), see [PMR §8.1](PMR-provider-model-resilience.md#81-minimum-hardware-and-model-size-constraints). In short: **16GB VRAM** or **32GB RAM** (CPU) is a practical minimum for tool-capable models (e.g. 7B–13B); use `npm run validate-model -- --modelId=<id> --fullSuite` to confirm your setup passes before relying on it in the fallback chain.
+
 ---
 
 ## 2. Add an Ollama model to config
@@ -121,3 +125,12 @@ The Ollama provider supports **tool-call** flow: it sends tools to the Ollama AP
 If the model or Ollama does not support tools, the agent still runs for text-only turns. See [Ollama-tool-call-support.md](Ollama-tool-call-support.md) and [PMR](PMR-provider-model-resilience.md) §8 for version/model requirements and best-effort behavior.
 
 **Granite 3.2:** For strong tool use and reasoning with a single model, consider **Granite 3.2** (e.g. `ollama pull granite3.2`). Configure it with `ollamaModelName: "granite3.2"` (or the exact name shown by `ollama list`). Run `npm run validate-model -- --modelId=<your-granite-model-id> --fullSuite` to confirm tool-call and reasoning checks pass.
+
+---
+
+## 9. Troubleshooting
+
+- **Connection refused / ECONNREFUSED:** Ollama is not running or not reachable at `baseURL`. Start Ollama (`ollama serve` or the Ollama app) and ensure the URL and port match your config.
+- **Model not found / 404:** The `ollamaModelName` in config must match the name from `ollama list`. Pull the model first: `ollama pull <name>`.
+- **Timeout / slow inference:** Local models (especially on CPU or limited VRAM) can be slow. Increase the model’s `timeoutMs` in config if requests often time out. See [PMR §8](PMR-provider-model-resilience.md#8-local-and-optional-providers-ollama) for graceful degradation and fallback behavior.
+- **Validation fails:** Run `npm run validate-model -- --modelId=<id> --fullSuite` and fix any reported errors (e.g. timeout, tool-call unsupported). See [PMR §8](PMR-provider-model-resilience.md#8-local-and-optional-providers-ollama) and [Ollama tool-call support](Ollama-tool-call-support.md) for version and model requirements.

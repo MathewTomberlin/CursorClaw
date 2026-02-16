@@ -195,5 +195,36 @@ This file means the BIRTH process is not yet complete. Run it proactively: (1) I
 Optional summary of what the agent is allowed to do. Informational only; enforcement is via the approval workflow and CapabilityStore.
 
 - List high-level capability areas or tool groups here if you want them visible in the substrate.
-- Do not put secrets here — this file is included in the agent prompt.`
+- Do not put secrets here — this file is included in the agent prompt.`,
+
+  roadmap: `# ROADMAP.md — Planning (source of truth)
+
+**Role in the framework:** This file is loaded as **substrate** and injected into the agent's system prompt as "Planning (ROADMAP)" on every turn (including heartbeats). It is the single source of truth for **what** to work on: milestones, backlog, and priorities. The agent is instructed to plan here and advance it during heartbeats.
+
+**HEARTBEAT.md** is separate: it's the **per-tick checklist** (resilience order, PR reminder, "advance ROADMAP or add items"). Keep the actual open/completed/optional work in this file, not in HEARTBEAT.md.
+
+**How to use this file:**
+- **Current state:** One-line snapshot (branch, build status).
+- **Open:** Next items to do; pick one per tick when no resilience work is pending.
+- **Completed:** Done items (do not re-do); keep for context.
+- **Optional:** Backlog to promote to Open when ready; add with clear success criteria.
+- **Each heartbeat:** If no urgent resilience (see HEARTBEAT.md), advance one open item or add new items. Never leave the roadmap empty.
+
+---
+
+## Current state
+
+(Describe branch, build status, any blockers.)
+
+## Open
+
+- (Next items to do.)
+
+## Completed (do not re-do)
+
+- (Done items; full detail in git history.)
+
+## Optional (add to Open when starting)
+
+- (Backlog with clear success criteria.)`
 };

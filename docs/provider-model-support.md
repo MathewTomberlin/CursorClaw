@@ -10,7 +10,7 @@ At-a-glance summary of CursorClaw’s built-in inference providers: what they ar
 | **fallback-model** | — | — | Placeholder only (no inference) | [Configuration Reference §4.15](./configuration-reference.md#415-models-and-defaultmodel) |
 | **ollama** | Yes (when model supports it) | Yes (`validate-model --fullSuite`) | Local (or remote Ollama server) | [Local Ollama setup](./local-ollama-agent-setup.md), [Ollama tool-call](./Ollama-tool-call-support.md), [PMR §8](./PMR-provider-model-resilience.md#8-local-and-optional-providers-ollama) |
 | **openai-compatible** | Depends on endpoint | Yes | Hosted or self-hosted | [Configuration Reference §4.15](./configuration-reference.md#415-models-and-defaultmodel) |
-| *Future (e.g. LM Studio)* | — | — | Local (when added) | [PMR §8](./PMR-provider-model-resilience.md#8-local-and-optional-providers-ollama) — implementation guide first |
+| *Future (e.g. LM Studio)* | — | — | Local (when added) | [LM Studio implementation guide](./lm-studio-implementation-guide.md), [PMR §8](./PMR-provider-model-resilience.md#8-phase-4--optional-local-models-eg-16gb-vram) |
 
 - **Tool-call:** Whether the provider can send tools and parse tool-call responses in the adapter. Required for full agent flows (e.g. PMR capability suite).
 - **Validation:** `npm run validate-model -- --modelId=<id>` (and `--fullSuite` for tool-call + reasoning). Results stored in the PMR validation store; use `providerModelResilience.useOnlyValidatedFallbacks` to restrict fallbacks to validated models.

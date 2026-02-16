@@ -24,6 +24,8 @@ const cwd = path.resolve(__dirname, "..");
 const tmpDir = path.join(cwd, "tmp");
 const buildFailureLogPath = path.join(tmpDir, "last-build-failure.log");
 const buildFailureJsonPath = path.join(tmpDir, "last-build-failure.json");
+/** When present, server is not running (build failed or recovery timeout). Remove when server listens. */
+const serverDownPath = path.join(tmpDir, "server-down");
 
 const runResilienceDaemon = process.env.RESILIENCE_DAEMON !== "0" && process.env.RESILIENCE_DAEMON !== "false";
 let resilienceDaemonChild = null;
@@ -106,7 +108,13 @@ function run(command, args, options = {}) {
           JSON.stringify({ timestamp: new Date().toISOString(), exitCode: buildCode }, null, 2),
           "utf8"
         );
+        fs.writeFileSync(
+          serverDownPath,
+          "Build failed; server not started. Fix errors, then create tmp/recovery-done to retry.\n",
+          "utf8"
+        );
         console.error("\n[CursorClaw] Build failed. Failure written to tmp/last-build-failure.log.");
+        console.error("[CursorClaw] tmp/server-down written — gateway is not reachable until build succeeds and app restarts.");
         console.error("[CursorClaw] Fix the build and create tmp/recovery-done to retry in this terminal, or run build-recovery-wait manually.\n");
         const recoveryScript = path.join(__dirname, "build-recovery-wait.js");
         const { code: recoveryCode } = await run("node", [recoveryScript]);
@@ -118,6 +126,7 @@ function run(command, args, options = {}) {
           console.log("\n[CursorClaw] Build succeeded after recovery; restarting app.\n");
           continue;
         }
+        console.error("[CursorClaw] Gateway remains unreachable (tmp/server-down present). Fix build and create tmp/recovery-done, or run build-recovery-wait.\n");
         process.exitCode = recoveryCode != null ? recoveryCode : buildCode;
         stopResilienceDaemon();
         break;

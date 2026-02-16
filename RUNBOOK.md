@@ -302,7 +302,7 @@ To run a **local Ollama** model so you can test CursorClaw without the Cursor-Ag
    - **From the Web UI:** Open the Chat page, pick the profile that uses the Ollama model (or the default profile if you set `defaultModel`), and send a message.
    - **From RPC:** Use the same `agent.run` / `agent.wait` flow as in Step 6; the reply will come from your local Ollama model.
 
-**Notes:** The Ollama provider streams text only; tool-call support depends on the model and may require future adapter work. For hardware requirements and best-effort behavior, see [Provider and Model Resilience](docs/PMR-provider-model-resilience.md) §8. To discover models from the UI, open Config → select a profile → set provider to **ollama** → click **Refresh from provider** → choose a model and Save.
+**Notes:** The Ollama provider supports **tool-call** when the model and Ollama version support it; see [Local Ollama agent setup](docs/local-ollama-agent-setup.md) §8 (tool use) and [Ollama tool-call support](docs/Ollama-tool-call-support.md). For hardware requirements and best-effort behavior, see [Provider and Model Resilience](docs/PMR-provider-model-resilience.md) §8. To discover models from the UI, open Config → select a profile → set provider to **ollama** → click **Refresh from provider** → choose a model and Save.
 
 For a **production-like** setup:
 

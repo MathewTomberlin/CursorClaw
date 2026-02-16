@@ -21,11 +21,28 @@ import { AlwaysAllowApprovalGate, ToolRouter, createExecTool } from "../src/tool
 
 const cleanupPaths: string[] = [];
 
+const RETRYABLE_CODES = new Set(["ENOTEMPTY", "EPERM", "EBUSY"]);
+async function removeRecursiveSafe(p: string, maxRetries = 3): Promise<void> {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      await rm(p, { recursive: true, force: true });
+      return;
+    } catch (err: unknown) {
+      const code = err && typeof err === "object" && "code" in err ? (err as NodeJS.ErrnoException).code : undefined;
+      if (code && RETRYABLE_CODES.has(code) && i < maxRetries - 1) {
+        await new Promise((r) => setTimeout(r, 50 * (i + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 afterEach(async () => {
   while (cleanupPaths.length > 0) {
     const path = cleanupPaths.pop();
     if (path) {
-      await rm(path, { recursive: true, force: true });
+      await removeRecursiveSafe(path);
     }
   }
 });

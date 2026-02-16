@@ -498,6 +498,8 @@ Returns:
 
 When no profiles are configured, returns `profiles: [{ id: "default", root: "." }]` and `defaultProfileId: "default"`.
 
+**Concurrent heartbeats:** When at least one profile is configured but none has id `"default"`, the process adds an implicit default profile (workspace root) so that both the default and the named profile(s) receive heartbeats and run concurrently (e.g. default + Ollama). Each profile has its own session (`heartbeat:default`, `heartbeat:<id>`) and can send proactive replies independently.
+
 ---
 
 ### 5.17 `profile.create`

@@ -120,8 +120,12 @@ export default function Chat() {
         if (proactiveMessage?.trim()) {
           const text = proactiveMessage.trim();
           setMessages((prev) => {
-            const last = prev[prev.length - 1];
-            if (last?.role === "assistant" && (last.content ?? "").trim() === text) return prev;
+            // Dedupe against any recent assistant message with same content (avoids duplicate heartbeat responses)
+            const recent = prev.slice(-20);
+            const alreadyShown = recent.some(
+              (m) => m.role === "assistant" && (m.content ?? "").trim() === text
+            );
+            if (alreadyShown) return prev;
             return [
               ...prev,
               {

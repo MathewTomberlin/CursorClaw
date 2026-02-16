@@ -344,11 +344,11 @@ Default model map:
 - `cursor-auto` (provider `cursor-agent-cli`) with fallback to `fallback-default`
 - `fallback-default` (provider `fallback-model`)
 
-Model object fields:
+**Provider values:** `"cursor-agent-cli" | "fallback-model" | "ollama" | "openai-compatible"`. See [docs/README.md](./README.md) (Provider and integration guides) and the provider-specific fields below.
 
-- `provider`: `"cursor-agent-cli" | "fallback-model"`
-- `command?: string`
-- `args?: string[]`
+**Common model object fields** (all providers):
+
+- `provider` — One of the four provider ids above.
 - `timeoutMs: number`
 - `authProfiles: string[]`
 - `fallbackModels: string[]`
@@ -358,6 +358,44 @@ Model object fields:
 - `summarizeOldTurns?: boolean` — Optional (TU.4). When `true` and the prompt is over `maxContextTokens`, the runtime replaces the oldest messages (all but the last) with a single rule-based summary before applying the cap. Off by default; no change to truncation when disabled.
 - `summarizeOldTurnsMaxTokens?: number` — Optional. Max tokens for the summary of earlier turns when `summarizeOldTurns` is true. Default 200.
 - `paidApi?: boolean` — Optional (PMR Phase 2). When `true`, this model uses a paid API; `npm run validate-model` will refuse to run unless `providerModelResilience.runValidationAgainstPaidApis` is `true`. Use to avoid accidental validation spend.
+
+**Provider-specific fields** (in addition to the common fields above; schema and registry: `src/config.ts`, `src/providers/registry.ts`):
+
+| Provider | Required | Optional |
+|----------|----------|----------|
+| **cursor-agent-cli** | — | `command?: string`, `args?: string[]`, `promptAsArg?: boolean` (pass last user message as final CLI arg). If omitted, built-in CLI defaults are used. |
+| **fallback-model** | — | No provider-specific fields. Use for fallback-only entries. |
+| **ollama** | `ollamaModelName: string` (e.g. `llama3.2`, `granite3.2`) | `baseURL?: string` (e.g. `http://localhost:11434`). See `docs/local-ollama-agent-setup.md` and `docs/Ollama-tool-call-support.md`. |
+| **openai-compatible** | `openaiModelId: string` (e.g. `gpt-4o-mini`, `gpt-4o`) | `baseURL?: string`, `apiKeyRef?: string` (credential store key for API key; never plaintext in config). |
+
+Example — Ollama model with custom base URL:
+
+```json
+"my-ollama": {
+  "provider": "ollama",
+  "ollamaModelName": "granite3.2",
+  "baseURL": "http://localhost:11434",
+  "timeoutMs": 120000,
+  "authProfiles": ["default"],
+  "fallbackModels": [],
+  "enabled": true
+}
+```
+
+Example — OpenAI-compatible endpoint:
+
+```json
+"my-openai": {
+  "provider": "openai-compatible",
+  "openaiModelId": "gpt-4o-mini",
+  "baseURL": "https://api.example.com/v1",
+  "apiKeyRef": "openai-key",
+  "timeoutMs": 60000,
+  "authProfiles": ["default"],
+  "fallbackModels": [],
+  "enabled": true
+}
+```
 
 ## 4.15.1 `providerModelResilience` (optional)
 
