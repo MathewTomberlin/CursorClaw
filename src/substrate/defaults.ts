@@ -38,7 +38,7 @@ You wake up fresh each session. These files are your continuity:
 
 Capture what matters: decisions, context, things to remember. Skip secrets unless asked to keep them. When you learn something or someone says "remember this", write it to the relevant file. When you infer a lesson from feedback or a repeated pattern (e.g. how the operator likes things done), you may store it with remember_this and category 'learned'. Text > brain; files survive session restarts.
 
-**When to update substrate (IDENTITY, SOUL, ROADMAP, TOOLS):** Use memory files for daily context and one-off facts. Use *substrate* files for durable, structural information: update \`ROADMAP.md\` when goals or milestones change or on heartbeats (status, next steps); update \`IDENTITY.md\` or \`SOUL.md\` when how you present or who you are evolves; update \`TOOLS.md\` for environment notes (hosts, devices, preferences). When you learn something lasting, read the file with exec then use sed to change only the relevant part. Do this on heartbeats when appropriate—don't only write to memory.
+**When to update substrate (IDENTITY, SOUL, ROADMAP, TOOLS):** Use memory files for daily context and one-off facts. Use *substrate* files for durable, structural information: update \`ROADMAP.md\` when goals or milestones change; on heartbeats, only replace the single "Current state" line in place or move items between Open/Completed—do not append heartbeat status updates or tick logs to ROADMAP (use MEMORY.md or remember_this with category 'heartbeat' for per-tick summaries). Update \`IDENTITY.md\` or \`SOUL.md\` when how you present or who you are evolves; update \`TOOLS.md\` for environment notes (hosts, devices, preferences). When you learn something lasting, read the file with exec then use sed to change only the relevant part. Do this on heartbeats when appropriate—don't only write to memory.
 
 ## Safety
 
@@ -206,7 +206,7 @@ Optional summary of what the agent is allowed to do. Informational only; enforce
 **HEARTBEAT.md** is separate: it's the **per-tick checklist** (resilience order, PR reminder, "advance ROADMAP or add items"). Keep the actual open/completed/optional work in this file, not in HEARTBEAT.md.
 
 **How to use this file:**
-- **Current state:** One-line snapshot (branch, build status).
+- **Current state:** One-line snapshot (branch, build status). Replace this line in place on heartbeats; do not append new status lines or tick logs—those go in MEMORY.md or remember_this (category 'heartbeat').
 - **Open:** Next items to do; pick one per tick when no resilience work is pending.
 - **Completed:** Done items (do not re-do); keep for context.
 - **Optional:** Backlog to promote to Open when ready; add with clear success criteria.
@@ -279,8 +279,8 @@ Use tools. Do not guess file contents—read with exec (e.g. cat, type) then act
 ## 1. Local repo and codebase state (do first when relevant)
 
 - Check git status (branch, uncommitted changes, upstream). If \`tmp/last-build-failure.log\` exists, read it and either fix the failure or update ROADMAP.md Current state / Open with the blocker.
-- Optionally run build/tests (exec) and update ROADMAP.md **Current state** with branch and build status.
-- Keep a one-line "Current state" in ROADMAP.md so you and the user know where things stand.
+- Optionally run build/tests (exec) and update ROADMAP.md **Current state** in place (replace the existing line with branch and build status; do not append new lines).
+- Keep a single one-line "Current state" in ROADMAP.md; replace it in place each tick—do not append heartbeat status or tick logs to ROADMAP (use MEMORY.md or remember_this for per-tick notes).
 
 ## 2. Goals and roadmap
 

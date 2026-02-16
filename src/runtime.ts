@@ -932,7 +932,7 @@ export class AgentRuntime {
       systemMessages.push({
         role: "system",
         content: this.scrubText(
-          "When to update which file: Use MEMORY.md and memory/YYYY-MM-DD for daily notes and \"remember this\". Use ROADMAP.md for goals and milestones—update it when you learn new goals or on heartbeats (status, next steps). Use IDENTITY.md and SOUL.md for who you are; TOOLS.md for env notes. When you learn something lasting, update the right file via exec (read first, then sed to change only that part).",
+          "When to update which file: Use MEMORY.md and memory/YYYY-MM-DD for daily notes and \"remember this\". Use ROADMAP.md for goals and milestones—update when you learn new goals; on heartbeats replace the single Current state line in place or move Open/Completed items only; do not append heartbeat status or tick logs to ROADMAP (use MEMORY or remember_this for per-tick notes). Use IDENTITY.md and SOUL.md for who you are; TOOLS.md for env notes. When you learn something lasting, update the right file via exec (read first, then sed to change only that part).",
           scopeId
         )
       });
@@ -982,7 +982,7 @@ export class AgentRuntime {
         systemMessages.push({
           role: "system",
           content: this.scrubText(
-            "Substrate vs memory — when to update what: Use MEMORY.md and memory/YYYY-MM-DD.md for daily context, \"remember this\", decisions, and raw logs (or remember_this/recall_memory). Use substrate files for durable, structural information: ROADMAP.md for goals and milestones (create or update when the user or context implies goals; on heartbeats update status or next steps); IDENTITY.md and SOUL.md for who you are and how you present; TOOLS.md for environment notes (hosts, preferences). When you learn something lasting—e.g. a new goal, a preference for how you behave, a new tool or device—update the right substrate file via exec (read the file first, then sed to change only the relevant part). On heartbeats, consider whether ROADMAP, IDENTITY, or TOOLS should be updated and do so when appropriate.",
+            "Substrate vs memory — when to update what: Use MEMORY.md and memory/YYYY-MM-DD.md for daily context, \"remember this\", decisions, and raw logs (or remember_this/recall_memory). Use substrate files for durable, structural information: ROADMAP.md for goals and milestones (create or update when the user or context implies goals; on heartbeats replace the single Current state line in place or move Open/Completed items only—do not append heartbeat status or tick logs to ROADMAP; use MEMORY or remember_this for per-tick notes); IDENTITY.md and SOUL.md for who you are and how you present; TOOLS.md for environment notes (hosts, preferences). When you learn something lasting—e.g. a new goal, a preference for how you behave, a new tool or device—update the right substrate file via exec (read the file first, then sed to change only the relevant part). On heartbeats, consider whether ROADMAP, IDENTITY, or TOOLS should be updated and do so when appropriate.",
             scopeId
           )
         });
@@ -1148,7 +1148,7 @@ export class AgentRuntime {
       systemMessages.push({
         role: "system",
         content: this.scrubText(
-          "Planning and automation: You have a planning file (e.g. ROADMAP.md) for milestones, roadmaps, and backlogs. Create or update it when the user or context implies goals; break work into concrete steps and priorities. During heartbeats (when no user message is pending), read the planning file and HEARTBEAT.md and make progress on the next item when appropriate—implement a small piece, run a check, or update status. User messages always take priority: the system will interrupt any in-flight heartbeat work when the user sends a message, let you respond to the user fully, then the next heartbeat tick continues from the planning file and HEARTBEAT checklist. Plan in ROADMAP, advance it on heartbeats, and stay responsive to the user.",
+          "Planning and automation: You have a planning file (e.g. ROADMAP.md) for milestones, roadmaps, and backlogs. Create or update it when the user or context implies goals; break work into concrete steps and priorities. During heartbeats (when no user message is pending), read the planning file and HEARTBEAT.md and make progress on the next item when appropriate—implement a small piece, run a check, or update Open/Completed; replace the single Current state line in place only—do not append heartbeat status or tick logs to ROADMAP (use MEMORY or remember_this for per-tick notes). User messages always take priority: the system will interrupt any in-flight heartbeat work when the user sends a message, let you respond to the user fully, then the next heartbeat tick continues from the planning file and HEARTBEAT checklist. Plan in ROADMAP, advance it on heartbeats, and stay responsive to the user.",
           scopeId
         )
       });
