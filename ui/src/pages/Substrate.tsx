@@ -20,6 +20,22 @@ const KEY_LABELS: Record<string, string> = {
   studyGoals: "Study goals (STUDY_GOALS.md)"
 };
 
+/** Default path per key when API does not return list entry (ensures ROADMAP etc. always show). */
+const DEFAULT_PATHS: Record<string, string> = {
+  agents: "AGENTS.md",
+  identity: "IDENTITY.md",
+  soul: "SOUL.md",
+  birth: "BIRTH.md",
+  capabilities: "CAPABILITIES.md",
+  user: "USER.md",
+  tools: "TOOLS.md",
+  roadmap: "ROADMAP.md",
+  studyGoals: "STUDY_GOALS.md"
+};
+
+/** All substrate keys in display order; ensures every key (including roadmap) always has an input. */
+const ALL_SUBSTRATE_KEYS = Object.keys(KEY_LABELS) as string[];
+
 export default function Substrate() {
   const { selectedProfileId } = useProfile();
   const [list, setList] = useState<SubstrateKeyInfo[]>([]);
@@ -141,7 +157,10 @@ export default function Substrate() {
         {reloading ? "Reloading…" : "Reload from disk"}
       </button>
       {error && <p className="error-msg">{error}</p>}
-      {list.map(({ key, path, present }) => {
+      {ALL_SUBSTRATE_KEYS.map((key) => {
+        const listEntry = list.find((e) => e.key === key);
+        const path = listEntry?.path ?? DEFAULT_PATHS[key] ?? `${key}.md`;
+        const present = listEntry?.present ?? false;
         const value = key in edits ? edits[key] : content[key] ?? "";
         const dirty = key in edits && edits[key] !== (content[key] ?? "");
         const label = KEY_LABELS[key] ?? `${key} (${path})`;

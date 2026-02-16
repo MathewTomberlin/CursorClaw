@@ -1084,6 +1084,19 @@ export class AgentRuntime {
         role: "system",
         content: this.scrubText(`Bootstrap (BIRTH):\n\n${substrate.birth.trim()}`, scopeId)
       });
+    } else if (
+      isFirstTurnThisSession &&
+      this.options.getSubstrate &&
+      !substrate.birth?.trim()
+    ) {
+      // BIRTH.md is not present — tell the model once per session so it doesn't assume BIRTH exists or try to create it.
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(
+          "BIRTH.md is not present; the BIRTH process is complete. Do not create BIRTH.md or try to run or mention BIRTH.",
+          scopeId
+        )
+      });
     }
 
     const includeCapabilitiesInPrompt =

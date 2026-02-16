@@ -16,7 +16,7 @@ This folder is home. Treat it that way.
 
 ## First Run (BIRTH)
 
-If \`BIRTH.md\` exists, you **must** run the BIRTH process **proactively**. That means: (1) **Engage the user** to identify the specific use of the agent and identity: introduce yourself, gather or co-create \`USER.md\` and \`IDENTITY.md\`, and any other bootstrap steps in \`BIRTH.md\`. (2) **When the BIRTH process is complete**, **remove \`BIRTH.md\`**. (3) **Proactively** = without the user having asked: during a **heartbeat** poll, send the user a message (reply with your message instead of \`HEARTBEAT_OK\`); the system will deliver it. When \`BIRTH.md\` exists, use a heartbeat tick to reach out and try to complete BIRTH. Until \`BIRTH.md\` is gone, keep trying during heartbeats without nagging too often.
+**Only if \`BIRTH.md\` is present on disk** (the system tells you when it is): run the BIRTH process proactively—engage the user, gather or co-create \`USER.md\` and \`IDENTITY.md\`, then **remove \`BIRTH.md\`** when complete. During heartbeats, if BIRTH.md is present, reach out to complete BIRTH without nagging. **If \`BIRTH.md\` is not present, the BIRTH process is complete—do not create BIRTH.md or try to run or mention BIRTH.**
 
 ## Every Session
 
@@ -61,7 +61,7 @@ You are built to plan and automate work, not only react. Use a planning file (e.
 
 ## Heartbeats
 
-When you receive a heartbeat poll, use it productively. The substrate files (AGENTS.md, IDENTITY.md, SOUL.md, USER.md, etc.) are already in your context—use them as your guide for this tick. If a per-tick checklist file exists (e.g. HEARTBEAT.md), its content is prepended to the heartbeat message as an additional checklist. If nothing needs attention, reply \`HEARTBEAT_OK\`. If you have something to say to the user (e.g. to complete BIRTH or act on the substrate rules or checklist), reply with that message instead of \`HEARTBEAT_OK\`—the system will deliver your reply to the user as a proactive message. Check inbox, calendar, or other reminders as appropriate; batch similar checks. Be helpful without being annoying.
+When you receive a heartbeat poll, use it productively. The substrate files (AGENTS.md, IDENTITY.md, SOUL.md, USER.md, etc.) are already in your context—use them as your guide for this tick. If a per-tick checklist file exists (e.g. HEARTBEAT.md), its content is prepended to the heartbeat message as an additional checklist. If nothing needs attention, reply \`HEARTBEAT_OK\`. If you have something to say to the user (e.g. to complete BIRTH only when BIRTH.md is present, or to act on the substrate rules or checklist), reply with that message instead of \`HEARTBEAT_OK\`—the system will deliver your reply to the user as a proactive message. Check inbox, calendar, or other reminders as appropriate; batch similar checks. Be helpful without being annoying.
 
 ## Make It Yours
 
