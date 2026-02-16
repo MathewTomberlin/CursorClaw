@@ -20,7 +20,7 @@ import type {
 } from "./types.js";
 
 export interface CursorAgentAdapterModelConfig {
-  provider: "cursor-agent-cli" | "fallback-model" | "ollama" | "openai-compatible";
+  provider: "cursor-agent-cli" | "fallback-model" | "ollama" | "openai-compatible" | "lm-studio";
   command?: string;
   args?: string[];
   /**

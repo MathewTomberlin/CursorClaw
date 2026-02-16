@@ -9,11 +9,22 @@ import type {
 } from "../types.js";
 import { resolveApiKey, resolveApiKeyAsync } from "../security/credential-resolver.js";
 
-/** Config for OpenAI-compatible provider: base URL and model id; apiKeyRef for Bearer token. */
+/** Config for OpenAI-compatible or LM Studio provider (same API shape). */
 function isOpenAICompatibleConfig(
   c: ModelProviderConfig
-): c is ModelProviderConfig & { provider: "openai-compatible" } {
-  return c.provider === "openai-compatible";
+): c is ModelProviderConfig & { provider: "openai-compatible" | "lm-studio" } {
+  return c.provider === "openai-compatible" || c.provider === "lm-studio";
+}
+
+/** True when baseURL is localhost (API key optional for local servers). */
+function isLocalBaseURL(url: string): boolean {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1";
+  } catch {
+    return false;
+  }
 }
 
 /** Normalize tool parameters schema (required + properties) for OpenAI-style APIs. */
@@ -63,17 +74,22 @@ export class OpenAICompatibleProvider implements ModelProvider {
   ): AsyncIterable<AdapterEvent> {
     if (!isOpenAICompatibleConfig(modelConfig)) {
       throw new Error(
-        `openai-compatible provider requires provider "openai-compatible"; got provider=${modelConfig.provider}`
+        `openai-compatible provider requires provider "openai-compatible" or "lm-studio"; got provider=${modelConfig.provider}`
       );
     }
-    const baseURL = (modelConfig.baseURL ?? "https://api.openai.com/v1").replace(/\/$/, "");
+    const defaultBaseURL =
+      modelConfig.provider === "lm-studio" ? "http://localhost:1234/v1" : "https://api.openai.com/v1";
+    const baseURL = (modelConfig.baseURL ?? defaultBaseURL).replace(/\/$/, "");
     const model = modelConfig.openaiModelId ?? "gpt-4o-mini";
     const timeoutMs = options.timeoutMs ?? modelConfig.timeoutMs ?? 120_000;
 
-    const apiKey =
+    let apiKey =
       options.profileRoot != null
         ? await resolveApiKeyAsync(modelConfig.apiKeyRef, options.profileRoot)
         : resolveApiKey(modelConfig.apiKeyRef);
+    if (!apiKey && isLocalBaseURL(baseURL)) {
+      apiKey = " ";
+    }
     if (!apiKey) {
       throw new Error(
         "openai-compatible provider requires apiKeyRef (e.g. env:OPENAI_API_KEY or profile:openai-compatible) to be set and resolve to a non-empty value"

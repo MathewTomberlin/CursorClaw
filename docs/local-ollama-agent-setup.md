@@ -146,6 +146,7 @@ If the model or Ollama does not support tools, the agent still runs for text-onl
 
 ## See also
 
-- [Provider and model support](provider-model-support.md) — at-a-glance table of all providers (Ollama, cursor-agent-cli, openai-compatible, etc.).
+- [Provider and model support](provider-model-support.md) — at-a-glance table of all providers (Ollama, cursor-agent-cli, openai-compatible, lm-studio, etc.).
 - [Configuration Reference §4.15](configuration-reference.md#415-models-and-defaultmodel) — full model config fields and examples.
+- [LM Studio implementation guide](lm-studio-implementation-guide.md) — for operators who prefer LM Studio over Ollama (local OpenAI-compatible server).
 - [LM Studio implementation guide](lm-studio-implementation-guide.md) — optional local provider when you prefer LM Studio over Ollama (placeholder until implemented).

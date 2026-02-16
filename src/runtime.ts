@@ -506,7 +506,8 @@ export class AgentRuntime {
           /** For agent loop (Ollama / openai-compatible): messages to send (initial = promptMessages; then + assistant + tool results). */
           let currentMessages: ChatMessage[] = promptMessages.map((m) => ({ role: m.role, content: m.content }));
           const isOllama = modelConfig?.provider === "ollama";
-          const isOpenAICompatible = modelConfig?.provider === "openai-compatible";
+          const isOpenAICompatible =
+            modelConfig?.provider === "openai-compatible" || modelConfig?.provider === "lm-studio";
           const providerSupportsToolFollowUp = isOllama || isOpenAICompatible;
 
           while (true) {

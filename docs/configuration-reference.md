@@ -344,11 +344,11 @@ Default model map:
 - `cursor-auto` (provider `cursor-agent-cli`) with fallback to `fallback-default`
 - `fallback-default` (provider `fallback-model`)
 
-**Provider values:** `"cursor-agent-cli" | "fallback-model" | "ollama" | "openai-compatible"`. See [docs/README.md](./README.md) (Provider and integration guides) and the provider-specific fields below.
+**Provider values:** `"cursor-agent-cli" | "fallback-model" | "ollama" | "openai-compatible" | "lm-studio"`. See [docs/README.md](./README.md) (Provider and integration guides) and the provider-specific fields below.
 
 **Common model object fields** (all providers):
 
-- `provider` — One of the four provider ids above.
+- `provider` — One of the five provider ids above.
 - `timeoutMs: number`
 - `authProfiles: string[]`
 - `fallbackModels: string[]`
@@ -367,6 +367,7 @@ Default model map:
 | **fallback-model** | — | No provider-specific fields. Use for fallback-only entries. |
 | **ollama** | `ollamaModelName: string` (e.g. `qwen3:8b`, `granite3.2`) | `baseURL?: string` (e.g. `http://localhost:11434`). Optional `ollamaOptions?: { temperature?: number; num_ctx?: number }` to tune for tool use (defaults when tools are used: temperature 0.3, num_ctx 8192). Optional `toolTurnContext: "minimal"` so only the latest user message is sent. Optional `ollamaMinimalSystem: true` to send a single short system message and prepend "use tools" to the user message—use when the model still does not call tools with minimal context (see `docs/Ollama-tool-call-support.md` §7). Optional **`ollamaContextMode?: "auto" | "minimal" | "full"`**: when `"auto"`, the runtime infers per turn whether to use minimal (tool-focused) or richer context; `"minimal"` / `"full"` override. See `docs/context-aware-system-behavior.md`. |
 | **openai-compatible** | `openaiModelId: string` (e.g. `gpt-4o-mini`, `gpt-4o`) | `baseURL?: string`, `apiKeyRef?: string` (credential store key for API key; never plaintext in config). Supports tools and the same agent loop as Ollama (tool_calls in request/response; follow-up with assistant + tool result messages until the model responds without tool calls). |
+| **lm-studio** | `openaiModelId: string` (model name as shown in LM Studio) | `baseURL?: string` (default `http://localhost:1234/v1`; check LM Studio Local Server UI for port). `apiKeyRef?: string` optional for local (LM Studio often allows no key for localhost). Same tool/agent loop as openai-compatible. See [LM Studio implementation guide](lm-studio-implementation-guide.md). |
 
 Example — Ollama model with custom base URL:
 
@@ -392,6 +393,20 @@ Example — OpenAI-compatible endpoint:
   "baseURL": "https://api.example.com/v1",
   "apiKeyRef": "openai-key",
   "timeoutMs": 60000,
+  "authProfiles": ["default"],
+  "fallbackModels": [],
+  "enabled": true
+}
+```
+
+Example — LM Studio (local; default baseURL, optional apiKeyRef):
+
+```json
+"my-lm-studio": {
+  "provider": "lm-studio",
+  "openaiModelId": "my-lm-studio-model",
+  "baseURL": "http://localhost:1234/v1",
+  "timeoutMs": 120000,
   "authProfiles": ["default"],
   "fallbackModels": [],
   "enabled": true

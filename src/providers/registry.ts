@@ -14,13 +14,14 @@ const builtin: Record<string, ProviderFactory> = {
   "cursor-agent-cli": () => new CursorAgentCliProvider(),
   "fallback-model": () => new FallbackModelProvider(),
   ollama: () => new OllamaProvider(),
-  "openai-compatible": () => new OpenAICompatibleProvider()
+  "openai-compatible": () => new OpenAICompatibleProvider(),
+  "lm-studio": () => new OpenAICompatibleProvider()
 };
 
 const cache = new Map<string, ModelProvider>();
 
 /**
- * Get a model provider by id. Uses built-in registry (cursor-agent-cli, fallback-model).
+ * Get a model provider by id. Uses built-in registry (cursor-agent-cli, fallback-model, ollama, openai-compatible, lm-studio).
  * Instances are cached per provider id so metrics/logs can be read from the same instance.
  */
 export function getProvider(providerId: string, config: ProviderRegistryConfig): ModelProvider {

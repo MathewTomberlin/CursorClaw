@@ -123,6 +123,43 @@ export async function listProviderModels(
     }
   }
 
+  if (trimmed === "lm-studio") {
+    const modelConfig = getFirstModelConfigForProvider(config, "lm-studio");
+    const baseURL = (modelConfig?.baseURL ?? "http://localhost:1234/v1").replace(/\/$/, "");
+    let apiKey = await resolveApiKeyAsync(modelConfig?.apiKeyRef, profileRoot);
+    if (!apiKey) apiKey = " ";
+    try {
+      const res = await fetch(`${baseURL}/models`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${apiKey}` }
+      });
+      if (!res.ok) {
+        if (res.status === 401) {
+          return { ok: false, error: { code: "UNAUTHORIZED", message: "Invalid or missing API key" } };
+        }
+        const text = await res.text();
+        return {
+          ok: false,
+          error: {
+            code: "PROVIDER_ERROR",
+            message: `LM Studio /v1/models failed: ${res.status}${text ? ` ${text.slice(0, 200)}` : ""}`
+          }
+        };
+      }
+      const data = (await res.json()) as { data?: Array<{ id?: string }> };
+      const list = data?.data ?? [];
+      const models: ProviderModel[] = list.map((m) => {
+        const id = typeof m.id === "string" && m.id ? m.id : String(m.id ?? "");
+        const name = typeof m.id === "string" && m.id ? m.id : undefined;
+        return name !== undefined ? { id, name } : { id };
+      });
+      return { ok: true, models };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: { code: "NETWORK_ERROR", message } };
+    }
+  }
+
   return {
     ok: false,
     error: { code: "UNKNOWN_PROVIDER", message: `Provider ${trimmed} does not support model listing` }

@@ -42,7 +42,7 @@ export interface CompactionConfig {
 }
 
 export interface ModelProviderConfig {
-  provider: "cursor-agent-cli" | "fallback-model" | "ollama" | "openai-compatible";
+  provider: "cursor-agent-cli" | "fallback-model" | "ollama" | "openai-compatible" | "lm-studio";
   command?: string;
   args?: string[];
   /** If true, pass last user message as final CLI arg (e.g. Cursor CLI -p --output-format stream-json). */
