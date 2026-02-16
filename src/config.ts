@@ -135,6 +135,8 @@ export interface ReliabilityConfig {
   failureEscalationThreshold: number;
   reasoningResetIterations: number;
   lowConfidenceThreshold: number;
+  /** When true, the runtime never blocks a turn with "I need a human hint" based on confidence; the agent always runs. */
+  skipLowConfidenceGate?: boolean;
   checkpoint: {
     enabled: boolean;
     reliabilityCommands: string[];
@@ -400,6 +402,7 @@ export const DEFAULT_CONFIG: CursorClawConfig = {
     failureEscalationThreshold: 2,
     reasoningResetIterations: 3,
     lowConfidenceThreshold: 60,
+    skipLowConfidenceGate: false,
     checkpoint: {
       enabled: true,
       reliabilityCommands: [],

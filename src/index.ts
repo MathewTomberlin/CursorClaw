@@ -639,6 +639,9 @@ async function main(): Promise<void> {
     deepScanService,
     confidenceModel,
     lowConfidenceThreshold: config.reliability.lowConfidenceThreshold,
+    ...(config.reliability.skipLowConfidenceGate !== undefined
+      ? { skipLowConfidenceGate: config.reliability.skipLowConfidenceGate }
+      : {}),
     hasRecentTestsPassing: async () => recentBackgroundTestsPassing,
     ...(config.reliability.checkpoint.enabled
       ? {

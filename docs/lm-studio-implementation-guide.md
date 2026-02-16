@@ -57,9 +57,9 @@ Example `openclaw.json` snippet (LM Studio on port 1234, model id `my-lm-studio-
 
 No change to `src/providers/registry.ts` or config schema; add this model to `config.models` and set `defaultModel` or `fallbackModels` as needed.
 
-### Option B — Future: first-class `lm-studio` provider
+### Option B — first-class `lm-studio` provider (implemented)
 
-When adding a dedicated **lm-studio** provider (e.g. for display name, default base URL, or provider-specific behavior):
+The **lm-studio** provider is in the registry; it uses the openai-compatible adapter with default baseURL `http://localhost:1234/v1` and optional `apiKeyRef` for local. When adding or changing provider-specific behavior (e.g. for display name, default base URL, or provider-specific behavior):
 
 - **Registry:** Add `lm-studio` to `src/providers/registry.ts` and implement an adapter (e.g. extend or wrap the OpenAI-compatible adapter with a default `baseURL` and optional LM Studio–specific options).
 - **Config shape (proposed):**
@@ -74,7 +74,7 @@ When adding a dedicated **lm-studio** provider (e.g. for display name, default b
 - **Option A (openai-compatible):** Use the existing validation probe. No provider-specific logic. Run:
   - `npm run validate-model -- --modelId=my-lm-studio --fullSuite`
   Ensure the model id exists in `config.models` and LM Studio is running with that model loaded. Results are written to the validation store per [PMR](PMR-provider-model-resilience.md) (Phase 2); local models do not require `runValidationAgainstPaidApis`.
-- **Option B (future lm-studio adapter):** Same as Option A if the adapter is a thin wrapper around the same OpenAI-compatible API: `npm run validate-model -- --modelId=<id> --fullSuite`. If the adapter adds custom behavior (e.g. different endpoint path or request shape), document any provider-specific validation steps and ensure the probe can resolve the model via the new provider and run the same capability checks (tool call + reasoning). No separate validation script is required unless we introduce a non–OpenAI-compatible path.
+- **Option B (lm-studio provider):** Same as Option A (adapter is a thin wrapper around the same OpenAI-compatible API): `npm run validate-model -- --modelId=<id> --fullSuite`. If the adapter adds custom behavior (e.g. different endpoint path or request shape), document any provider-specific validation steps and ensure the probe can resolve the model via the new provider and run the same capability checks (tool call + reasoning). No separate validation script is required unless we introduce a non–OpenAI-compatible path.
 
 ---
 

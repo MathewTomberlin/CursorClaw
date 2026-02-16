@@ -224,6 +224,8 @@ export interface AgentRuntimeOptions {
   deepScanService?: DeepScanService;
   confidenceModel?: ConfidenceModel;
   lowConfidenceThreshold?: number;
+  /** When true, do not block turns with "human hint" based on low confidence. */
+  skipLowConfidenceGate?: boolean;
   hasRecentTestsPassing?: () => Promise<boolean>;
   gitCheckpointManager?: GitCheckpointManager;
   privacyScrubber?: PrivacyScrubber;
@@ -399,7 +401,7 @@ export class AgentRuntime {
             });
           }
           const hasRecentTestsPassing = await this.resolveRecentTestSignal();
-          if (this.options.confidenceModel) {
+          if (this.options.confidenceModel && !this.options.skipLowConfidenceGate) {
             const preConfidence = this.options.confidenceModel.score({
               failureCount: this.options.failureLoopGuard?.getFailureCount(sessionId) ?? 0,
               hasDeepScan: deepScanIncluded,

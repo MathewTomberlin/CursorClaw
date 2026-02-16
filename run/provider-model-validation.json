@@ -1,5 +1,5 @@
 {
-  "lastUpdated": "2026-02-16T05:54:35.856Z",
+  "lastUpdated": "2026-02-16T07:01:34.641Z",
   "results": {
     "svjack/Qwen3-8b-heretic:latest": {
       "passed": false,
@@ -27,6 +27,24 @@
         "reasoning": true
       },
       "error": null
+    },
+    "qwen3-8b-hivemind-instruct-heretic-abliterated-uncensored-neo-imatrix": {
+      "passed": true,
+      "lastRun": "2026-02-16T07:01:34.640Z",
+      "checks": {
+        "toolCall": true,
+        "reasoning": true
+      },
+      "error": null
+    },
+    "C:/Users/admin/.lmstudio/models/DavidAU/Qwen3-8B-Hivemind-Instruct-Heretic-Abliterated-Uncensored-NEO-Imatrix-GGUF": {
+      "passed": false,
+      "lastRun": "2026-02-16T06:58:53.463Z",
+      "checks": {
+        "toolCall": false,
+        "reasoning": false
+      },
+      "error": "model not in config: C:/Users/admin/.lmstudio/models/DavidAU/Qwen3-8B-Hivemind-Instruct-Heretic-Abliterated-Uncensored-NEO-Imatrix-GGUF"
     }
   }
 }

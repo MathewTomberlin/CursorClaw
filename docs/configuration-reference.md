@@ -262,6 +262,7 @@ Defaults:
   "failureEscalationThreshold": 2,
   "reasoningResetIterations": 3,
   "lowConfidenceThreshold": 60,
+  "skipLowConfidenceGate": false,
   "checkpoint": {
     "enabled": true,
     "reliabilityCommands": [],
@@ -269,6 +270,15 @@ Defaults:
   }
 }
 ```
+
+**Low-confidence gate and "I need a human hint":**
+
+Before each turn the runtime computes a **confidence score** (0–100) from: recent **failure count** (tool/runtime errors in this session), whether **recent tests are passing**, and other signals. If the score is below `lowConfidenceThreshold` (default 60), the runtime **does not call the model**. Instead it returns the message: *"Confidence score N is below threshold. I need a human hint before proceeding (failure_count=M, recent_tests_not_confirmed)."*
+
+- **failure_count**: Number of recent turns that failed (e.g. tool threw, exec ENOENT). Each failure reduces the score; after a few failures the score can drop below 60.
+- **recent_tests_not_confirmed**: The runtime was not given a signal that tests recently passed (optional `hasRecentTestsPassing` callback). When tests are confirmed passing, the score gets a small boost.
+
+To avoid this gate and always let the agent run (e.g. for local/Ollama where failures were transient or fixed), set **`skipLowConfidenceGate`: true** in `reliability`. Alternatively, lower **`lowConfidenceThreshold`** (e.g. to 0) so the gate rarely or never triggers.
 
 ## 4.13 `tools.exec`
 
