@@ -600,7 +600,7 @@ export function createExecTool(args: {
             }
             if ((segBin === "ls" || segBin === "dir") && segIntent === "read-only") {
               const paths = segBinArgs.filter((a) => !a.startsWith("-"));
-              const dirPath = paths.length > 0 ? resolve(cwd, paths[0]) : cwd;
+              const dirPath = paths.length > 0 ? resolve(cwd, paths[0]!) : cwd;
               ensureUnderProfile(dirPath);
               const long = segBinArgs.some((a) => a === "-l" || a === "-la" || a === "-al");
               const entries = await readdir(dirPath, { withFileTypes: true });
@@ -626,7 +626,8 @@ export function createExecTool(args: {
               let n = 10;
               const nonFlags = segBinArgs.filter((a) => !a.startsWith("-"));
               const idxN = segBinArgs.findIndex((a) => a === "-n");
-              if (idxN !== -1 && segBinArgs[idxN + 1]) n = parseInt(segBinArgs[idxN + 1], 10) || 10;
+              const nArg = idxN !== -1 ? segBinArgs[idxN + 1] : undefined;
+              if (nArg !== undefined) n = parseInt(nArg, 10) || 10;
               else {
                 const dashN = segBinArgs.find((a) => /^-(\d+)$/.test(a));
                 if (dashN) n = parseInt(dashN.slice(1), 10) || 10;
@@ -645,7 +646,8 @@ export function createExecTool(args: {
               let n = 10;
               const nonFlags = segBinArgs.filter((a) => !a.startsWith("-"));
               const idxN = segBinArgs.findIndex((a) => a === "-n");
-              if (idxN !== -1 && segBinArgs[idxN + 1]) n = parseInt(segBinArgs[idxN + 1], 10) || 10;
+              const nArg = idxN !== -1 ? segBinArgs[idxN + 1] : undefined;
+              if (nArg !== undefined) n = parseInt(nArg, 10) || 10;
               else {
                 const dashN = segBinArgs.find((a) => /^-(\d+)$/.test(a));
                 if (dashN) n = parseInt(dashN.slice(1), 10) || 10;
@@ -729,8 +731,8 @@ export function createExecTool(args: {
             if (segBin === "mv" && segIntent === "mutating" && segBinArgs.length >= 2) {
               const paths = segBinArgs.filter((a) => !a.startsWith("-"));
               if (paths.length >= 2) {
-                const src = resolve(cwd, paths[0]);
-                const dest = resolve(cwd, paths[1]);
+                const src = resolve(cwd, paths[0]!);
+                const dest = resolve(cwd, paths[1]!);
                 ensureUnderProfile(src);
                 ensureUnderProfile(dest);
                 await rename(src, dest);
@@ -741,8 +743,8 @@ export function createExecTool(args: {
             if (segBin === "cp" && segIntent === "mutating" && segBinArgs.length >= 2) {
               const paths = segBinArgs.filter((a) => !a.startsWith("-"));
               if (paths.length >= 2) {
-                const src = resolve(cwd, paths[0]);
-                const dest = resolve(cwd, paths[1]);
+                const src = resolve(cwd, paths[0]!);
+                const dest = resolve(cwd, paths[1]!);
                 ensureUnderProfile(src);
                 ensureUnderProfile(dest);
                 const s = await stat(src).catch(() => null);
@@ -878,7 +880,7 @@ export function createExecTool(args: {
         }
         if (platform() === "win32" && (bin === "ls" || bin === "dir") && intent === "read-only") {
           const paths = binArgs.filter((a) => !a.startsWith("-"));
-          const dirPath = paths.length > 0 ? resolve(cwd, paths[0]) : cwd;
+          const dirPath = paths.length > 0 ? resolve(cwd, paths[0]!) : cwd;
           ensureUnderProfile(dirPath);
           const long = binArgs.some((a) => a === "-l" || a === "-la" || a === "-al");
           const entries = await readdir(dirPath, { withFileTypes: true });
@@ -902,7 +904,8 @@ export function createExecTool(args: {
           let n = 10;
           const nonFlags = binArgs.filter((a) => !a.startsWith("-"));
           const idxN = binArgs.findIndex((a) => a === "-n");
-          if (idxN !== -1 && binArgs[idxN + 1]) n = parseInt(binArgs[idxN + 1], 10) || 10;
+          const nArg = idxN !== -1 ? binArgs[idxN + 1] : undefined;
+          if (nArg !== undefined) n = parseInt(nArg, 10) || 10;
           else {
             const dashN = binArgs.find((a) => /^-(\d+)$/.test(a));
             if (dashN) n = parseInt(dashN.slice(1), 10) || 10;
@@ -920,7 +923,8 @@ export function createExecTool(args: {
           let n = 10;
           const nonFlags = binArgs.filter((a) => !a.startsWith("-"));
           const idxN = binArgs.findIndex((a) => a === "-n");
-          if (idxN !== -1 && binArgs[idxN + 1]) n = parseInt(binArgs[idxN + 1], 10) || 10;
+          const nArg = idxN !== -1 ? binArgs[idxN + 1] : undefined;
+          if (nArg !== undefined) n = parseInt(nArg, 10) || 10;
           else {
             const dashN = binArgs.find((a) => /^-(\d+)$/.test(a));
             if (dashN) n = parseInt(dashN.slice(1), 10) || 10;
@@ -996,8 +1000,8 @@ export function createExecTool(args: {
         if (platform() === "win32" && bin === "mv" && intent === "mutating" && binArgs.length >= 2) {
           const paths = binArgs.filter((a) => !a.startsWith("-"));
           if (paths.length >= 2) {
-            const src = resolve(cwd, paths[0]);
-            const dest = resolve(cwd, paths[1]);
+            const src = resolve(cwd, paths[0]!);
+            const dest = resolve(cwd, paths[1]!);
             ensureUnderProfile(src);
             ensureUnderProfile(dest);
             await rename(src, dest);
@@ -1007,8 +1011,8 @@ export function createExecTool(args: {
         if (platform() === "win32" && bin === "cp" && intent === "mutating" && binArgs.length >= 2) {
           const paths = binArgs.filter((a) => !a.startsWith("-"));
           if (paths.length >= 2) {
-            const src = resolve(cwd, paths[0]);
-            const dest = resolve(cwd, paths[1]);
+            const src = resolve(cwd, paths[0]!);
+            const dest = resolve(cwd, paths[1]!);
             ensureUnderProfile(src);
             ensureUnderProfile(dest);
             const s = await stat(src).catch(() => null);
