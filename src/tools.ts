@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import { appendFile, copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, unlink, utimes, writeFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { platform } from "node:os";
@@ -580,9 +581,15 @@ export function createExecTool(args: {
                   }
                   throw e;
                 }
-                const regex = new RegExp(sedSub.pattern, sedSub.global ? "g" : "");
-                await writeFile(pathResolved, content.replace(regex, sedSub.replacement));
-                lastResult = { stdout: "", stderr: "" };
+                try {
+                  const regex = new RegExp(sedSub.pattern, sedSub.global ? "g" : "");
+                  await writeFile(pathResolved, content.replace(regex, sedSub.replacement));
+                  lastResult = { stdout: "", stderr: "" };
+                } catch (e) {
+                  if (e instanceof SyntaxError) {
+                    lastResult = { stdout: "", stderr: "sed: invalid pattern\n" };
+                  } else throw e;
+                }
                 continue;
               }
               const sedChange = parseSedInPlaceChange(seg);
@@ -599,13 +606,19 @@ export function createExecTool(args: {
                   }
                   throw e;
                 }
-                const regex = new RegExp(sedChange.pattern);
-                const newContent = content
-                  .split(/\r?\n/)
-                  .map((line) => (regex.test(line) ? sedChange.replacement : line))
-                  .join("\n");
-                await writeFile(pathResolved, newContent);
-                lastResult = { stdout: "", stderr: "" };
+                try {
+                  const regex = new RegExp(sedChange.pattern);
+                  const newContent = content
+                    .split(/\r?\n/)
+                    .map((line) => (regex.test(line) ? sedChange.replacement : line))
+                    .join("\n");
+                  await writeFile(pathResolved, newContent);
+                  lastResult = { stdout: "", stderr: "" };
+                } catch (e) {
+                  if (e instanceof SyntaxError) {
+                    lastResult = { stdout: "", stderr: "sed: invalid pattern\n" };
+                  } else throw e;
+                }
                 continue;
               }
               const sedDelete = parseSedInPlaceDelete(seg);
@@ -622,10 +635,16 @@ export function createExecTool(args: {
                   }
                   throw e;
                 }
-                const regex = new RegExp(sedDelete.pattern);
-                const newContent = content.split(/\r?\n/).filter((line) => !regex.test(line)).join("\n");
-                await writeFile(pathResolved, newContent);
-                lastResult = { stdout: "", stderr: "" };
+                try {
+                  const regex = new RegExp(sedDelete.pattern);
+                  const newContent = content.split(/\r?\n/).filter((line) => !regex.test(line)).join("\n");
+                  await writeFile(pathResolved, newContent);
+                  lastResult = { stdout: "", stderr: "" };
+                } catch (e) {
+                  if (e instanceof SyntaxError) {
+                    lastResult = { stdout: "", stderr: "sed: invalid pattern\n" };
+                  } else throw e;
+                }
                 continue;
               }
               const sedAppend = parseSedInPlaceAppend(seg);
@@ -642,12 +661,18 @@ export function createExecTool(args: {
                   }
                   throw e;
                 }
-                const regex = new RegExp(sedAppend.pattern);
-                const newLines = content.split(/\r?\n/).flatMap((ln) =>
-                  regex.test(ln) ? [ln, sedAppend.line] : [ln]
-                );
-                await writeFile(pathResolved, newLines.join("\n"));
-                lastResult = { stdout: "", stderr: "" };
+                try {
+                  const regex = new RegExp(sedAppend.pattern);
+                  const newLines = content.split(/\r?\n/).flatMap((ln) =>
+                    regex.test(ln) ? [ln, sedAppend.line] : [ln]
+                  );
+                  await writeFile(pathResolved, newLines.join("\n"));
+                  lastResult = { stdout: "", stderr: "" };
+                } catch (e) {
+                  if (e instanceof SyntaxError) {
+                    lastResult = { stdout: "", stderr: "sed: invalid pattern\n" };
+                  } else throw e;
+                }
                 continue;
               }
               throw new Error(
@@ -707,22 +732,28 @@ export function createExecTool(args: {
               const dirPath = paths.length > 0 ? resolve(cwd, paths[0]!) : cwd;
               ensureUnderProfile(dirPath);
               const long = segBinArgs.some((a) => a === "-l" || a === "-la" || a === "-al");
-              const entries = await readdir(dirPath, { withFileTypes: true });
-              const names = entries.map((e) => e.name);
-              if (long) {
-                const lines = await Promise.all(
-                  entries.map(async (e) => {
-                    const p = resolve(dirPath, e.name);
-                    const s = await stat(p).catch(() => null);
-                    const size = s?.isFile() ? (s.size ?? 0) : 0;
-                    const mtime = s?.mtime ? s.mtime.toISOString().slice(0, 16).replace("T", " ") : "";
-                    const type = e.isDirectory() ? "d" : "-";
-                    return `${type}rw-r--r-- 1 1 ${String(size).padStart(8)} ${mtime} ${e.name}`;
-                  })
-                );
-                lastResult = { stdout: lines.join("\n") + "\n", stderr: "" };
-              } else {
-                lastResult = { stdout: names.join("\n") + (names.length ? "\n" : ""), stderr: "" };
+              try {
+                const entries: Dirent[] = await readdir(dirPath, { withFileTypes: true });
+                const names = entries.map((ent: Dirent) => ent.name);
+                if (long) {
+                  const lines = await Promise.all(
+                    entries.map(async (ent: Dirent) => {
+                      const p = resolve(dirPath, ent.name);
+                      const s = await stat(p).catch(() => null);
+                      const size = s?.isFile() ? (s.size ?? 0) : 0;
+                      const mtime = s?.mtime ? s.mtime.toISOString().slice(0, 16).replace("T", " ") : "";
+                      const type = ent.isDirectory() ? "d" : "-";
+                      return `${type}rw-r--r-- 1 1 ${String(size).padStart(8)} ${mtime} ${ent.name}`;
+                    })
+                  );
+                  lastResult = { stdout: lines.join("\n") + "\n", stderr: "" };
+                } else {
+                  lastResult = { stdout: names.join("\n") + (names.length ? "\n" : ""), stderr: "" };
+                }
+              } catch (err) {
+                if (isENOENT(err)) lastResult = { stdout: "", stderr: `${segBin}: ${paths[0] ?? "."}: No such file or directory\n` };
+                else if ((err as { code?: string }).code === "ENOTDIR") lastResult = { stdout: "", stderr: `${segBin}: ${paths[0] ?? "."}: Not a directory\n` };
+                else throw err;
               }
               continue;
             }
@@ -783,7 +814,13 @@ export function createExecTool(args: {
               const pattern = nonFlags[0];
               const files = nonFlags.slice(1);
               if (pattern && files.length > 0) {
-                const regex = new RegExp(pattern, ignoreCase ? "i" : "");
+                let regex: RegExp;
+                try {
+                  regex = new RegExp(pattern, ignoreCase ? "i" : "");
+                } catch {
+                  lastResult = { stdout: "", stderr: "grep: invalid regular expression\n" };
+                  continue;
+                }
                 const out: string[] = [];
                 for (const f of files) {
                   const pathResolved = resolve(cwd, f);
@@ -862,9 +899,18 @@ export function createExecTool(args: {
                 ensureUnderProfile(src);
                 ensureUnderProfile(dest);
                 const s = await stat(src).catch(() => null);
-                if (s?.isDirectory()) await cp(src, dest, { recursive: true });
-                else await copyFile(src, dest);
-                lastResult = { stdout: "", stderr: "" };
+                if (s == null) {
+                  lastResult = { stdout: "", stderr: `cp: ${paths[0]}: No such file or directory\n` };
+                  continue;
+                }
+                try {
+                  if (s.isDirectory()) await cp(src, dest, { recursive: true });
+                  else await copyFile(src, dest);
+                  lastResult = { stdout: "", stderr: "" };
+                } catch (e) {
+                  if (isENOENT(e)) lastResult = { stdout: "", stderr: `cp: ${paths[1]}: No such file or directory\n` };
+                  else throw e;
+                }
                 continue;
               }
             }
@@ -956,10 +1002,15 @@ export function createExecTool(args: {
               if (isENOENT(e)) return { stdout: "", stderr: `sed: ${sedSub.filePath}: No such file or directory\n` };
               throw e;
             }
-            const regex = new RegExp(sedSub.pattern, sedSub.global ? "g" : "");
-            const newContent = content.replace(regex, sedSub.replacement);
-            await writeFile(pathResolved, newContent);
-            return { stdout: "", stderr: "" };
+            try {
+              const regex = new RegExp(sedSub.pattern, sedSub.global ? "g" : "");
+              const newContent = content.replace(regex, sedSub.replacement);
+              await writeFile(pathResolved, newContent);
+              return { stdout: "", stderr: "" };
+            } catch (e) {
+              if (e instanceof SyntaxError) return { stdout: "", stderr: "sed: invalid pattern\n" };
+              throw e;
+            }
           }
           const sedChange = parseSedInPlaceChange(parsed.command);
           if (sedChange) {
@@ -972,13 +1023,18 @@ export function createExecTool(args: {
               if (isENOENT(e)) return { stdout: "", stderr: `sed: ${sedChange.filePath}: No such file or directory\n` };
               throw e;
             }
-            const regex = new RegExp(sedChange.pattern);
-            const newContent = content
-              .split(/\r?\n/)
-              .map((line) => (regex.test(line) ? sedChange.replacement : line))
-              .join("\n");
-            await writeFile(pathResolved, newContent);
-            return { stdout: "", stderr: "" };
+            try {
+              const regex = new RegExp(sedChange.pattern);
+              const newContent = content
+                .split(/\r?\n/)
+                .map((line) => (regex.test(line) ? sedChange.replacement : line))
+                .join("\n");
+              await writeFile(pathResolved, newContent);
+              return { stdout: "", stderr: "" };
+            } catch (e) {
+              if (e instanceof SyntaxError) return { stdout: "", stderr: "sed: invalid pattern\n" };
+              throw e;
+            }
           }
           const sedDelete = parseSedInPlaceDelete(parsed.command);
           if (sedDelete) {
@@ -991,13 +1047,18 @@ export function createExecTool(args: {
               if (isENOENT(e)) return { stdout: "", stderr: `sed: ${sedDelete.filePath}: No such file or directory\n` };
               throw e;
             }
-            const regex = new RegExp(sedDelete.pattern);
-            const newContent = content
-              .split(/\r?\n/)
-              .filter((line) => !regex.test(line))
-              .join("\n");
-            await writeFile(pathResolved, newContent);
-            return { stdout: "", stderr: "" };
+            try {
+              const regex = new RegExp(sedDelete.pattern);
+              const newContent = content
+                .split(/\r?\n/)
+                .filter((line) => !regex.test(line))
+                .join("\n");
+              await writeFile(pathResolved, newContent);
+              return { stdout: "", stderr: "" };
+            } catch (e) {
+              if (e instanceof SyntaxError) return { stdout: "", stderr: "sed: invalid pattern\n" };
+              throw e;
+            }
           }
           const sedAppend = parseSedInPlaceAppend(parsed.command);
           if (sedAppend) {
@@ -1010,12 +1071,17 @@ export function createExecTool(args: {
               if (isENOENT(e)) return { stdout: "", stderr: `sed: ${sedAppend.filePath}: No such file or directory\n` };
               throw e;
             }
-            const regex = new RegExp(sedAppend.pattern);
-            const newLines = content.split(/\r?\n/).flatMap((ln) =>
-              regex.test(ln) ? [ln, sedAppend.line] : [ln]
-            );
-            await writeFile(pathResolved, newLines.join("\n"));
-            return { stdout: "", stderr: "" };
+            try {
+              const regex = new RegExp(sedAppend.pattern);
+              const newLines = content.split(/\r?\n/).flatMap((ln) =>
+                regex.test(ln) ? [ln, sedAppend.line] : [ln]
+              );
+              await writeFile(pathResolved, newLines.join("\n"));
+              return { stdout: "", stderr: "" };
+            } catch (e) {
+              if (e instanceof SyntaxError) return { stdout: "", stderr: "sed: invalid pattern\n" };
+              throw e;
+            }
           }
           throw new Error(
             "Unsupported sed command on Windows. Supported: sed -i 's/old/new/[g]' file, sed -i '/p/c replacement' file, sed -i '/p/d' file, sed -i '/p/a line' file."
@@ -1075,22 +1141,28 @@ export function createExecTool(args: {
           const dirPath = paths.length > 0 ? resolve(cwd, paths[0]!) : cwd;
           ensureUnderProfile(dirPath);
           const long = binArgs.some((a) => a === "-l" || a === "-la" || a === "-al");
-          const entries = await readdir(dirPath, { withFileTypes: true });
-          const names = entries.map((e) => e.name);
-          if (long) {
-            const lines = await Promise.all(
-              entries.map(async (e) => {
-                const p = resolve(dirPath, e.name);
-                const s = await stat(p).catch(() => null);
-                const size = s?.isFile() ? (s.size ?? 0) : 0;
-                const mtime = s?.mtime ? s.mtime.toISOString().slice(0, 16).replace("T", " ") : "";
-                const type = e.isDirectory() ? "d" : "-";
-                return `${type}rw-r--r-- 1 1 ${String(size).padStart(8)} ${mtime} ${e.name}`;
-              })
-            );
-            return { stdout: lines.join("\n") + "\n", stderr: "" };
+          try {
+            const entries: Dirent[] = await readdir(dirPath, { withFileTypes: true });
+            const names = entries.map((ent: Dirent) => ent.name);
+            if (long) {
+              const lines = await Promise.all(
+                entries.map(async (ent: Dirent) => {
+                  const p = resolve(dirPath, ent.name);
+                  const s = await stat(p).catch(() => null);
+                  const size = s?.isFile() ? (s.size ?? 0) : 0;
+                  const mtime = s?.mtime ? s.mtime.toISOString().slice(0, 16).replace("T", " ") : "";
+                  const type = ent.isDirectory() ? "d" : "-";
+                  return `${type}rw-r--r-- 1 1 ${String(size).padStart(8)} ${mtime} ${ent.name}`;
+                })
+              );
+              return { stdout: lines.join("\n") + "\n", stderr: "" };
+            }
+            return { stdout: names.join("\n") + (names.length ? "\n" : ""), stderr: "" };
+          } catch (err) {
+            if (isENOENT(err)) return { stdout: "", stderr: `${bin}: ${paths[0] ?? "."}: No such file or directory\n` };
+            if ((err as { code?: string }).code === "ENOTDIR") return { stdout: "", stderr: `${bin}: ${paths[0] ?? "."}: Not a directory\n` };
+            throw err;
           }
-          return { stdout: names.join("\n") + (names.length ? "\n" : ""), stderr: "" };
         }
         if (platform() === "win32" && args.sandbox === undefined && bin === "head" && intent === "read-only" && binArgs.length > 0) {
           let n = 10;
@@ -1147,7 +1219,12 @@ export function createExecTool(args: {
           const pattern = nonFlags[0];
           const files = nonFlags.slice(1);
           if (pattern && files.length > 0) {
-            const regex = new RegExp(pattern, ignoreCase ? "i" : "");
+            let regex: RegExp;
+            try {
+              regex = new RegExp(pattern, ignoreCase ? "i" : "");
+            } catch {
+              return { stdout: "", stderr: "grep: invalid regular expression\n" };
+            }
             const out: string[] = [];
             for (const f of files) {
               const pathResolved = resolve(cwd, f);
@@ -1218,9 +1295,15 @@ export function createExecTool(args: {
             ensureUnderProfile(src);
             ensureUnderProfile(dest);
             const s = await stat(src).catch(() => null);
-            if (s?.isDirectory()) await cp(src, dest, { recursive: true });
-            else await copyFile(src, dest);
-            return { stdout: "", stderr: "" };
+            if (s == null) return { stdout: "", stderr: `cp: ${paths[0]}: No such file or directory\n` };
+            try {
+              if (s.isDirectory()) await cp(src, dest, { recursive: true });
+              else await copyFile(src, dest);
+              return { stdout: "", stderr: "" };
+            } catch (e) {
+              if (isENOENT(e)) return { stdout: "", stderr: `cp: ${paths[1]}: No such file or directory\n` };
+              throw e;
+            }
           }
         }
         if (platform() === "win32" && args.sandbox === undefined && bin === "mkdir" && intent === "mutating" && binArgs.length > 0) {
