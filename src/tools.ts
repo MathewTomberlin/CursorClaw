@@ -1,3 +1,7 @@
+import { readFile, writeFile } from "node:fs/promises";
+import { resolve, sep } from "node:path";
+import { platform } from "node:os";
+
 import { Ajv, type ValidateFunction } from "ajv";
 
 import type { ExecSandbox } from "./exec/types.js";
@@ -24,6 +28,14 @@ import type {
 import type { SensitivityLabel } from "./types.js";
 import type { SubstrateContent } from "./substrate/types.js";
 
+/** Return true if resolvedPath is under profileRoot (so agent can only touch its own profile files). */
+function pathUnderProfileRoot(resolvedPath: string, profileRoot: string): boolean {
+  const a = resolve(resolvedPath);
+  const b = resolve(profileRoot);
+  const prefix = b.endsWith(sep) ? b : b + sep;
+  return a === b || (a.startsWith(prefix));
+}
+
 const WEB_FETCH_MAX_REDIRECTS = 5;
 const WEB_FETCH_MAX_BODY_BYTES = 20_000;
 const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
@@ -31,6 +43,39 @@ const ALLOWED_CONTENT_TYPE_PATTERN =
   /^(text\/|application\/(json|xml|xhtml\+xml|javascript|ld\+json|rss\+xml))/i;
 
 export type ExecIntent = "read-only" | "mutating" | "network-impacting" | "privilege-impacting";
+
+/**
+ * Parse sed -i 's/pattern/replacement/[g]' file (or double-quoted) from a command string. Returns null if not matched.
+ * Handles the common in-place substitute form; delimiter must be / and pattern/replacement must not contain /.
+ */
+function parseSedInPlace(command: string): { pattern: string; replacement: string; global: boolean; filePath: string } | null {
+  const m = command.match(/sed\s+-i\s+['"]s\/([^/]*)\/([^/]*)\/(g?)['"]\s+(\S+)/);
+  if (!m || m[1] === undefined || m[2] === undefined || m[4] === undefined) return null;
+  return { pattern: m[1], replacement: m[2], global: m[3] === "g", filePath: m[4] };
+}
+
+/**
+ * Parse sed -i '/pattern/c\replacement' file (change command). Returns null if not matched.
+ */
+function parseSedInPlaceChange(command: string): { pattern: string; replacement: string; filePath: string } | null {
+  const m = command.match(/sed\s+-i\s+['"]\/([^/]*)\/c\\([^'"]*)['"]\s+(\S+)/);
+  if (!m || m[1] === undefined || m[2] === undefined || m[3] === undefined) return null;
+  return { pattern: m[1], replacement: m[2], filePath: m[3] };
+}
+
+/**
+ * Parse echo ... > file from (bin, binArgs). Returns { content, filePath } or null.
+ * Content is joined from args before ">"; optional surrounding quotes are stripped.
+ */
+function parseEchoRedirect(bin: string, binArgs: string[]): { content: string; filePath: string } | null {
+  if (bin !== "echo" || binArgs.length < 2) return null;
+  const idx = binArgs.indexOf(">");
+  if (idx === -1 || idx === binArgs.length - 1) return null;
+  const content = binArgs.slice(0, idx).join(" ").replace(/^\s*['"]|['"]\s*$/g, "").trim();
+  const filePath = binArgs[idx + 1];
+  if (!filePath) return null;
+  return { content, filePath };
+}
 
 export function classifyCommandIntent(command: string): ExecIntent {
   const normalized = command.trim().toLowerCase();
@@ -41,6 +86,9 @@ export function classifyCommandIntent(command: string): ExecIntent {
     return "network-impacting";
   }
   if (/\b(rm|mv|cp|sed\s+-i|truncate|tee)\b/.test(normalized)) {
+    return "mutating";
+  }
+  if (/>/.test(normalized)) {
     return "mutating";
   }
   return "read-only";
@@ -144,6 +192,8 @@ export interface CapabilityApprovalGateOptions {
   approvalWorkflow: ApprovalWorkflow;
   capabilityStore: CapabilityStore;
   allowReadOnlyWithoutGrant?: boolean;
+  /** When true, mutating exec (sed, tee, etc.) is approved without requiring a capability grant. Set from config for trusted/local setups. */
+  allowMutatingWithoutGrant?: boolean;
 }
 
 export class CapabilityApprovalGate implements ApprovalGate {
@@ -167,6 +217,10 @@ export class CapabilityApprovalGate implements ApprovalGate {
       return true;
     }
     if ((this.options.allowReadOnlyWithoutGrant ?? true) && args.intent === "read-only") {
+      this.lastDenial = null;
+      return true;
+    }
+    if (this.options.allowMutatingWithoutGrant === true && args.intent === "mutating" && args.tool === "exec") {
       this.lastDenial = null;
       return true;
     }
@@ -414,10 +468,83 @@ export function createExecTool(args: {
             throw new Error(`command intent "${intent}" requires approval${suffix}`);
           }
         }
+        // Use current agent profile root so substrate/memory/heartbeat are profile-isolated. When profileRoot is set, cwd must stay under it.
+        const profileRoot = ctx?.profileRoot;
+        let cwd: string;
+        if (profileRoot) {
+          const base = resolve(profileRoot);
+          const requestedCwd =
+            parsed.cwd !== undefined && parsed.cwd !== "" ? resolve(base, parsed.cwd) : base;
+          if (!pathUnderProfileRoot(requestedCwd, base)) {
+            throw new Error("exec cwd must be under the current agent profile root");
+          }
+          cwd = requestedCwd;
+        } else {
+          cwd =
+            parsed.cwd !== undefined && parsed.cwd !== ""
+              ? parsed.cwd
+              : process.cwd();
+        }
+        const ensureUnderProfile = (pathResolved: string): void => {
+          if (profileRoot && !pathUnderProfileRoot(pathResolved, profileRoot)) {
+            throw new Error("path must be under the current agent profile root (only this profile's substrate, memory, and files are allowed)");
+          }
+        };
+        if (platform() === "win32" && (bin === "cat" || bin === "type") && binArgs.length > 0 && intent === "read-only") {
+          const chunks: string[] = [];
+          for (const fileArg of binArgs) {
+            const pathResolved = resolve(cwd, fileArg);
+            ensureUnderProfile(pathResolved);
+            const content = await readFile(pathResolved, "utf8");
+            chunks.push(content);
+          }
+          const result = { stdout: chunks.join(""), stderr: "", code: 0 as const };
+          return { stdout: result.stdout, stderr: result.stderr };
+        }
+        if (platform() === "win32" && bin === "sed" && intent === "mutating") {
+          const sedSub = parseSedInPlace(parsed.command);
+          if (sedSub) {
+            const pathResolved = resolve(cwd, sedSub.filePath);
+            ensureUnderProfile(pathResolved);
+            const content = await readFile(pathResolved, "utf8");
+            const regex = new RegExp(sedSub.pattern, sedSub.global ? "g" : "");
+            const newContent = content.replace(regex, sedSub.replacement);
+            await writeFile(pathResolved, newContent);
+            return { stdout: "", stderr: "" };
+          }
+          const sedChange = parseSedInPlaceChange(parsed.command);
+          if (sedChange) {
+            const pathResolved = resolve(cwd, sedChange.filePath);
+            ensureUnderProfile(pathResolved);
+            const content = await readFile(pathResolved, "utf8");
+            const regex = new RegExp(sedChange.pattern);
+            const newContent = content
+              .split(/\r?\n/)
+              .map((line) => (regex.test(line) ? sedChange.replacement : line))
+              .join("\n");
+            await writeFile(pathResolved, newContent);
+            return { stdout: "", stderr: "" };
+          }
+        }
+        if (platform() === "win32" && bin === "echo" && intent === "mutating") {
+          const echo = parseEchoRedirect(bin, binArgs);
+          if (echo) {
+            const pathResolved = resolve(cwd, echo.filePath);
+            ensureUnderProfile(pathResolved);
+            await writeFile(pathResolved, echo.content);
+            return { stdout: "", stderr: "" };
+          }
+        }
+        if (profileRoot) {
+          for (const arg of binArgs) {
+            const pathResolved = resolve(cwd, arg);
+            ensureUnderProfile(pathResolved);
+          }
+        }
         const result = await sandbox.run(bin, binArgs, {
+          cwd,
           maxBufferBytes: maxBuffer,
-          timeoutMs: 15_000,
-          ...(parsed.cwd !== undefined && parsed.cwd !== "" && { cwd: parsed.cwd })
+          timeoutMs: 15_000
         });
         return {
           stdout: result.stdout,

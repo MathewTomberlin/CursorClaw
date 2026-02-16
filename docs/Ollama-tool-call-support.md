@@ -4,7 +4,7 @@
 
 **Status:** Implemented (branch `feature/ollama-tool-call-support` merged). Best-effort per PMR §8; no parity guarantee with Cursor Auto.
 
-**Implemented:** Request includes OpenAI-style `tools` when `tools.length > 0`. Response parsing reads `message.tool_calls[]` (each `{ function: { name, arguments } }`); `arguments` may be object or JSON string. One `tool_call` event per call; streaming chunks accumulated by index so that when Ollama streams tool-call deltas (e.g. Granite3.2), the provider merges arguments and emits once per index with final args. No new config; see §3 for version/model requirements.
+**Implemented:** Request includes OpenAI-style `tools` when `tools.length > 0` (with `parameters.required` and `parameters.properties` per [Ollama tool-calling docs](https://docs.ollama.com/capabilities/tool-calling)). Response parsing reads `message.tool_calls[]` (each `{ function: { name, arguments } }`); `arguments` may be object or JSON string. One `tool_call` event per call; streaming chunks accumulated by index so that when Ollama streams tool-call deltas (e.g. Granite3.2), the provider merges arguments and emits once per index with final args. **Agent loop:** When the model returns tool calls, the runtime executes them, then sends back the assistant message (with `tool_calls`) plus one `role: "tool"` message per result (`tool_name` + `content`), and calls the API again to get the model’s final reply; this repeats until the model responds without tool calls. No new config; see §3 for version/model requirements.
 
 **Recommended models for tool use:** **Granite 3.2** (e.g. `ollama pull granite3.2` or `ibm-granite3.2`) and other [Ollama models that support tool calling](https://ollama.com/search?c=tool). Use `validate-model -- --modelId=<id> --fullSuite` to confirm tool and reasoning checks pass for your model.
 
@@ -38,9 +38,14 @@ Granite 3.2’s tool-calling behavior is sensitive to **how many messages** are 
 
 - **Ollama / IBM examples** use a **single user message** plus `tools`: `messages = [{ role: "user", content: "…" }]`. In that setup the model reliably returns `tool_calls`.
 - **With full conversation history** (many user/assistant turns), the same model often **does not** call tools: it may answer from context, say it will “update” substrate, but never emit `tool_calls`. This is consistent with [reported issues](https://github.com/ollama/ollama/issues) where tool use fails when “message history contains more than just the current user query.”
-- **Chat format:** Ollama expects `messages` with roles `user`, `assistant`, and (after a tool call) `tool` with `tool_name` and `content`. Our provider sends `system` + `user`/`assistant`; we do not send prior `tool` results in the same turn (we run tools and continue in a single turn). The main issue is **volume of history**, not the role names.
+- **Chat format:** Ollama expects `messages` with roles `user`, `assistant`, and (after a tool call) `tool` with `tool_name` and `content`. We implement the full agent loop: when the model returns `tool_calls`, we run the tools, append the assistant message (with `tool_calls`) and one `tool` message per result, and send a follow-up request; we repeat until the model responds without tool calls. The main issue when the model does not call tools is **volume of history**, not the role names.
 
-**Fix:** Set **`toolTurnContext: "minimal"`** on the Granite model in `openclaw.json`. The runtime will then send only the **latest user message** (plus system messages) for that turn, so the model sees a single-query style prompt and is much more likely to call tools. Conversation continuity is reduced for that turn (the model does not see prior turns), but tool use works. Example:
+**Fix (two steps):**
+
+1. Set **`toolTurnContext: "minimal"`** so the runtime sends only the latest user message (plus system) for that turn.
+2. If the model still does not call tools, set **`ollamaMinimalSystem: true`** on the same model. The runtime will then send a **single short system message** (how to use exec to read/edit files) and **prepend** to the user message: "You must respond by calling one or more of the provided tools… User request: …". This matches the minimal prompt shape (one system block + one user message) that many Ollama tool-capable models need to actually emit tool calls. No AGENTS/Identity/Soul/memory/roadmap blocks are sent in that mode.
+
+Example:
 
 ```json
 "models": {
@@ -48,6 +53,7 @@ Granite 3.2’s tool-calling behavior is sensitive to **how many messages** are 
     "provider": "ollama",
     "ollamaModelName": "granite3.2",
     "toolTurnContext": "minimal",
+    "ollamaMinimalSystem": true,
     "ollamaOptions": { "temperature": 0.3, "num_ctx": 8192 },
     "timeoutMs": 120000,
     "authProfiles": ["default"],

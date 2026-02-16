@@ -59,6 +59,8 @@ export interface ModelProviderConfig {
   ollamaOptions?: { temperature?: number; num_ctx?: number };
   /** When "minimal", only the latest user message is sent for tool turns. Use for Ollama/Granite 3.2: the model often does not call tools when given full conversation history (see docs/Ollama-tool-call-support.md). */
   toolTurnContext?: "full" | "minimal";
+  /** When true (Ollama only), use a single short system message and prepend "use tools" to the user message. Use when the model still does not call tools with toolTurnContext: minimal. */
+  ollamaMinimalSystem?: boolean;
   /** Provider-specific: base URL for OpenAI-compatible or Ollama (e.g. http://localhost:11434). */
   baseURL?: string;
   /** Provider-specific: OpenAI-compatible model id (e.g. gpt-4o-mini, gpt-4o). */
@@ -96,6 +98,8 @@ export interface ToolsConfig {
     ask: "always" | "on-miss" | "never";
     profile: "strict" | "developer";
     allowBins: string[];
+    /** When true, mutating exec (sed, tee, etc.) is allowed without capability approval. Use only in trusted/local setups (e.g. local Ollama). */
+    allowMutatingWithoutApproval?: boolean;
     /** Reserved for future use: run exec as this OS user. Not enforced today. */
     runAsUser?: string;
     /** Max stdout/stderr buffer per exec (bytes). Default 64 KiB. */
@@ -396,7 +400,7 @@ export const DEFAULT_CONFIG: CursorClawConfig = {
       security: "allowlist",
       ask: "on-miss",
       profile: "strict",
-      allowBins: ["echo", "pwd", "ls", "cat", "node"],
+      allowBins: ["echo", "pwd", "ls", "cat", "node", "sed", "type", "head", "tee"],
       maxBufferBytes: 64 * 1024,
       maxChildProcessesPerTurn: 100
     }

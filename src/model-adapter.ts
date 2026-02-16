@@ -10,6 +10,7 @@ import { getProvider } from "./providers/registry.js";
 import type { ModelProvider } from "./providers/types.js";
 import type {
   AdapterEvent,
+  ChatMessage,
   CreateSessionOptions,
   ModelAdapter,
   ModelSessionHandle,
@@ -127,7 +128,7 @@ export class CursorAgentModelAdapter implements ModelAdapter {
 
   async *sendTurn(
     session: ModelSessionHandle,
-    messages: Array<{ role: string; content: string }>,
+    messages: ChatMessage[],
     tools: ToolDefinition[],
     options: SendTurnOptions
   ): AsyncIterable<AdapterEvent> {

@@ -413,7 +413,7 @@ describe("CursorAgentModelAdapter", () => {
                 function: {
                   name: "echo_tool",
                   description: "echo",
-                  parameters: simpleTool.schema
+                  parameters: { type: "object", required: ["value"], properties: { value: { type: "string" } } }
                 }
               }
             ],

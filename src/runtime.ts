@@ -31,7 +31,7 @@ import type { QueueBackend } from "./queue/types.js";
 import { InMemoryQueueBackend } from "./queue/in-memory-backend.js";
 import type { LifecycleStream } from "./lifecycle-stream/types.js";
 import type { SubstrateContent } from "./substrate/index.js";
-import type { PolicyDecisionLog, SendTurnOptions, SessionContext, ToolCall, ToolExecuteContext } from "./types.js";
+import type { ChatMessage, PolicyDecisionLog, SendTurnOptions, SessionContext, ToolCall, ToolExecuteContext } from "./types.js";
 import { ToolRouter, classifyCommandIntent } from "./tools.js";
 
 type RuntimeMessage = {
@@ -471,71 +471,104 @@ export class AgentRuntime {
             timeoutMs: this.options.config.session.turnTimeoutMs,
             ...(profileRoot !== undefined && profileRoot !== "" ? { profileRoot } : {})
           };
-          const adapterStream = this.options.adapter.sendTurn(
-            modelSession,
-            promptMessages,
-            this.options.toolRouter.list(),
-            sendOptions
-          );
-          let emittedCount = 2;
-          for await (const event of adapterStream) {
-            if (event.type === "assistant_delta") {
-              const rawContent = String((event.data as { content?: string })?.content ?? "");
-              const content = this.scrubText(rawContent, scrubScopeId);
-              if (content === assistantText) {
-                // Exact duplicate (e.g. CLI sent deltas then full message); skip emit
-              } else if (content.length >= assistantText.length && content.startsWith(assistantText)) {
-                // Full-message replacement (e.g. CLI sent deltas then full message): emit only the new suffix so the client does not append the full content again and show duplication (e.g. with HIGH_ENTROPY_TOKEN placeholders).
-                const delta = content.slice(assistantText.length);
-                assistantText = content;
-                if (delta.length > 0) {
-                  emit("assistant", { content: delta });
+          /** For Ollama agent loop: messages to send (initial = promptMessages; then + assistant + tool results). */
+          let currentMessages: ChatMessage[] = promptMessages.map((m) => ({ role: m.role, content: m.content }));
+          const isOllama = modelConfig?.provider === "ollama";
+
+          while (true) {
+            const adapterStream = this.options.adapter.sendTurn(
+              modelSession,
+              currentMessages,
+              this.options.toolRouter.list(),
+              sendOptions
+            );
+            let emittedCount = 2;
+            /** This round's assistant text (for building assistant message when following up with tool results). */
+            let thisRoundContent = "";
+            /** Tool calls this round with outputs (for Ollama follow-up: assistant message + tool result messages). */
+            const thisRoundToolCalls: Array<{ name: string; args: unknown; output: unknown }> = [];
+
+            for await (const event of adapterStream) {
+              if (event.type === "assistant_delta") {
+                const rawContent = String((event.data as { content?: string })?.content ?? "");
+                const content = this.scrubText(rawContent, scrubScopeId);
+                thisRoundContent += content;
+                if (content === assistantText) {
+                  // Exact duplicate (e.g. CLI sent deltas then full message); skip emit
+                } else if (content.length >= assistantText.length && content.startsWith(assistantText)) {
+                  // Full-message replacement (e.g. CLI sent deltas then full message): emit only the new suffix so the client does not append the full content again and show duplication (e.g. with HIGH_ENTROPY_TOKEN placeholders).
+                  const delta = content.slice(assistantText.length);
+                  assistantText = content;
+                  thisRoundContent = content;
+                  if (delta.length > 0) {
+                    emit("assistant", { content: delta });
+                  }
+                } else if (content.length >= 15 && assistantText.includes(content)) {
+                  // Skip duplicate segment (e.g. Cursor CLI re-sending same chunk)
+                } else {
+                  assistantText += content;
+                  emit("assistant", { content });
                 }
-              } else if (content.length >= 15 && assistantText.includes(content)) {
-                // Skip duplicate segment (e.g. Cursor CLI re-sending same chunk)
-              } else {
-                assistantText += content;
-                emit("assistant", { content });
+                emittedCount += 1;
+              } else if (event.type === "tool_call") {
+                const call = event.data as ToolCall;
+                this.recordTouchedFileHints(sessionId, this.extractTouchedFileHints(call));
+                if (!checkpointHandle && this.shouldCreateCheckpoint(call)) {
+                  checkpointHandle = await this.options.gitCheckpointManager?.createCheckpoint(runId) ?? null;
+                }
+                const profileIdForTool = request.session.profileId ?? getDefaultProfileId(this.options.config);
+                const profileRootForTool = this.options.getProfileRoot?.(profileIdForTool);
+                const toolContext: ToolExecuteContext = {
+                  auditId: runId,
+                  decisionLogs: this.decisionLogs,
+                  provenance: turnProvenance,
+                  ...(profileIdForTool !== undefined ? { profileId: profileIdForTool } : {}),
+                  ...(profileRootForTool !== undefined && profileRootForTool !== "" ? { profileRoot: profileRootForTool } : {}),
+                  ...(request.session.channelKind !== undefined ? { channelKind: request.session.channelKind } : {}),
+                  ...(request.session.sessionId !== undefined ? { sessionId: request.session.sessionId } : {})
+                };
+                const output = await this.options.toolRouter.execute(call, toolContext);
+                thisRoundToolCalls.push({ name: call.name, args: call.args, output });
+                const safeCall = this.scrubUnknown(call, scrubScopeId) as ToolCall;
+                const safeOutput = this.scrubUnknown(output, scrubScopeId);
+                this.metrics.toolCalls += 1;
+                toolCallCountThisTurn += 1;
+                if (this.decisionLogs.length > this.maxDecisionLogs) {
+                  this.decisionLogs.splice(0, this.decisionLogs.length - this.maxDecisionLogs);
+                }
+                emit("tool", { call: safeCall, output: safeOutput });
+                emittedCount += 1;
+              } else if (event.type === "error") {
+                throw new Error(`adapter error: ${JSON.stringify(event.data)}`);
+              } else if (event.type === "done") {
+                break;
               }
-              emittedCount += 1;
-            } else if (event.type === "tool_call") {
-              const call = event.data as ToolCall;
-              this.recordTouchedFileHints(sessionId, this.extractTouchedFileHints(call));
-              if (!checkpointHandle && this.shouldCreateCheckpoint(call)) {
-                checkpointHandle = await this.options.gitCheckpointManager?.createCheckpoint(runId) ?? null;
+              if (
+                emittedCount > 0 &&
+                emittedCount % this.options.config.session.snapshotEveryEvents === 0
+              ) {
+                await this.snapshot(runId, request.session.sessionId, events);
               }
-              const profileIdForTool = request.session.profileId ?? getDefaultProfileId(this.options.config);
-              const profileRootForTool = this.options.getProfileRoot?.(profileIdForTool);
-              const toolContext: ToolExecuteContext = {
-                auditId: runId,
-                decisionLogs: this.decisionLogs,
-                provenance: turnProvenance,
-                ...(profileIdForTool !== undefined ? { profileId: profileIdForTool } : {}),
-                ...(profileRootForTool !== undefined && profileRootForTool !== "" ? { profileRoot: profileRootForTool } : {}),
-                ...(request.session.channelKind !== undefined ? { channelKind: request.session.channelKind } : {}),
-                ...(request.session.sessionId !== undefined ? { sessionId: request.session.sessionId } : {})
-              };
-              const output = await this.options.toolRouter.execute(call, toolContext);
-              const safeCall = this.scrubUnknown(call, scrubScopeId) as ToolCall;
-              const safeOutput = this.scrubUnknown(output, scrubScopeId);
-              this.metrics.toolCalls += 1;
-              toolCallCountThisTurn += 1;
-              if (this.decisionLogs.length > this.maxDecisionLogs) {
-                this.decisionLogs.splice(0, this.decisionLogs.length - this.maxDecisionLogs);
-              }
-              emit("tool", { call: safeCall, output: safeOutput });
-              emittedCount += 1;
-            } else if (event.type === "error") {
-              throw new Error(`adapter error: ${JSON.stringify(event.data)}`);
-            } else if (event.type === "done") {
+            }
+
+            if (thisRoundToolCalls.length === 0 || !isOllama) {
               break;
             }
-            if (
-              emittedCount > 0 &&
-              emittedCount % this.options.config.session.snapshotEveryEvents === 0
-            ) {
-              await this.snapshot(runId, request.session.sessionId, events);
-            }
+            // Ollama agent loop: send assistant message with tool_calls + tool result messages, then get final response (per docs).
+            const assistantMsg: ChatMessage = {
+              role: "assistant",
+              content: thisRoundContent,
+              tool_calls: thisRoundToolCalls.map((tc, i) => ({
+                type: "function" as const,
+                function: { index: i, name: tc.name, arguments: (typeof tc.args === "object" && tc.args !== null ? tc.args : {}) as object }
+              }))
+            };
+            const toolMsgs: ChatMessage[] = thisRoundToolCalls.map((tc) => ({
+              role: "tool",
+              content: typeof tc.output === "string" ? tc.output : JSON.stringify(tc.output),
+              tool_name: tc.name
+            }));
+            currentMessages = [...currentMessages, assistantMsg, ...toolMsgs];
           }
 
           if (checkpointHandle && this.options.gitCheckpointManager) {
@@ -790,38 +823,64 @@ export class AgentRuntime {
     const systemMessages: Array<{ role: string; content: string }> = [];
 
     const substrate = this.options.getSubstrate?.(profileIdForSubstrate) ?? {};
-    // AGENTS.md is the coordinating rules file (session start, memory, safety). Inject first so the agent
-    // sees workspace rules before Identity/Soul/User; matches OpenClaw/Claude Code use of AGENTS.md as rules.
-    if (substrate.agents?.trim()) {
-      systemMessages.push({
-        role: "system",
-        content: this.scrubText(`Workspace rules (AGENTS):\n\n${substrate.agents.trim()}`, scopeId)
-      });
-    }
-    // Tool-use mandate immediately after rules so it is never truncated by system prompt budget. Critical for
-    // Ollama/local models (e.g. Granite 3.2) which otherwise answer from context without calling tools.
     const toolList = this.options.toolRouter.list();
-    if (toolList.length > 0) {
+    const useOllamaMinimalSystem =
+      modelConfigForTurn?.provider === "ollama" &&
+      modelConfigForTurn?.ollamaMinimalSystem === true &&
+      toolList.length > 0;
+
+    if (useOllamaMinimalSystem) {
       systemMessages.push({
         role: "system",
         content: this.scrubText(
-          "You have access to tools. You must use them: to read or edit substrate files (AGENTS.md, IDENTITY.md, ROADMAP.md, MEMORY.md, memory/YYYY-MM-DD.md) or any file, call the exec tool (e.g. cat, type, head, or sed/echo for edits). When advancing work or on heartbeats, read and update ROADMAP.md or memory files via exec as appropriate—do not skip tool use. To run scripts or tests, use exec. Do not guess file contents—call a tool to read or verify.",
+          "Use the provided tools. To read a file call exec with command: cat FILENAME or type FILENAME. To edit call exec with sed or echo. Do not answer without calling a tool when the user asks about files or workspace. Workspace context is in AGENTS.md, IDENTITY.md, ROADMAP.md—read them with exec when needed.",
           scopeId
         )
       });
-      const modelIdForOllamaCheck = getModelIdForProfile(this.options.config, profileIdForSubstrate);
-      const activeModelConfig = this.options.config.models[modelIdForOllamaCheck];
-      if (activeModelConfig?.provider === "ollama") {
+      const lastIdx = userMessages.length - 1;
+      const u = lastIdx >= 0 ? userMessages[lastIdx] : undefined;
+      if (u !== undefined) {
+        userMessages[lastIdx] = {
+          role: u.role,
+          content: this.scrubText(
+            "You must respond by calling one or more of the provided tools. Do not answer without calling a tool when the request involves files or workspace.\n\nUser request: " +
+              u.content,
+            scopeId
+          )
+        };
+      }
+    } else {
+      // AGENTS.md is the coordinating rules file (session start, memory, safety). Inject first so the agent
+      // sees workspace rules before Identity/Soul/User; matches OpenClaw/Claude Code use of AGENTS.md as rules.
+      if (substrate.agents?.trim()) {
+        systemMessages.push({
+          role: "system",
+          content: this.scrubText(`Workspace rules (AGENTS):\n\n${substrate.agents.trim()}`, scopeId)
+        });
+      }
+      // Tool-use mandate immediately after rules so it is never truncated by system prompt budget. Critical for
+      // Ollama/local models (e.g. Granite 3.2) which otherwise answer from context without calling tools.
+      if (toolList.length > 0) {
         systemMessages.push({
           role: "system",
           content: this.scrubText(
-            "You are using the Ollama provider. You must use the provided tools—do not answer from memory or guess. To read substrate or any file: call the exec tool with a shell command (e.g. \"cat AGENTS.md\", \"type USER.md\", \"head -n 50 ROADMAP.md\"). To update a file: use exec with sed, echo, or another shell command. When the user asks about the workspace, rules, roadmap, or files, your first response must include one or more tool calls to read the relevant files; then answer from the tool results. On heartbeats, use exec to read ROADMAP.md and HEARTBEAT.md and to update substrate or memory as needed.",
+            "You have access to tools. You must use them: to read or edit substrate files (AGENTS.md, IDENTITY.md, ROADMAP.md, MEMORY.md, memory/YYYY-MM-DD.md) or any file, call the exec tool (e.g. cat, type, head, or sed/echo for edits). When advancing work or on heartbeats, read and update ROADMAP.md or memory files via exec as appropriate—do not skip tool use. To run scripts or tests, use exec. Do not guess file contents—call a tool to read or verify.",
             scopeId
           )
         });
+        const modelIdForOllamaCheck = getModelIdForProfile(this.options.config, profileIdForSubstrate);
+        const activeModelConfig = this.options.config.models[modelIdForOllamaCheck];
+        if (activeModelConfig?.provider === "ollama") {
+          systemMessages.push({
+            role: "system",
+            content: this.scrubText(
+              "You are using the Ollama provider. You must use the provided tools—do not answer from memory or guess. To read substrate or any file: call the exec tool with a shell command (e.g. \"cat AGENTS.md\", \"type USER.md\", \"head -n 50 ROADMAP.md\"). To update a file: use exec with sed, echo, or another shell command. When the user asks about the workspace, rules, roadmap, or files, your first response must include one or more tool calls to read the relevant files; then answer from the tool results. On heartbeats, use exec to read ROADMAP.md and HEARTBEAT.md and to update substrate or memory as needed.",
+              scopeId
+            )
+          });
+        }
       }
-    }
-    if (substrate.identity?.trim()) {
+      if (substrate.identity?.trim()) {
       systemMessages.push({
         role: "system",
         content: this.scrubText(`Identity:\n\n${substrate.identity.trim()}`, scopeId)
@@ -1012,8 +1071,9 @@ export class AgentRuntime {
         )
       });
     }
+    }
 
-    if (this.options.decisionJournal) {
+    if (!useOllamaMinimalSystem && this.options.decisionJournal) {
       const limit = Math.min(
         100,
         Math.max(1, this.options.config.continuity?.decisionJournalReplayCount ?? 5)
@@ -1050,11 +1110,13 @@ export class AgentRuntime {
       inputMessages: userMessages,
       ...(memoryStoreForTurn !== undefined ? { memoryStore: memoryStoreForTurn } : {})
     });
-    for (const message of pluginResult.messages) {
-      systemMessages.push({
-        role: message.role,
-        content: this.scrubText(message.content, scopeId)
-      });
+    if (!useOllamaMinimalSystem) {
+      for (const message of pluginResult.messages) {
+        systemMessages.push({
+          role: message.role,
+          content: this.scrubText(message.content, scopeId)
+        });
+      }
     }
     if (pluginResult.diagnostics.length > 0) {
       await this.options.observationStore?.append({

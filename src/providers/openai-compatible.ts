@@ -2,6 +2,7 @@ import type { ModelProvider } from "./types.js";
 import type { ModelProviderConfig } from "../config.js";
 import type {
   AdapterEvent,
+  ChatMessage,
   ModelSessionHandle,
   SendTurnOptions,
   ToolDefinition
@@ -25,7 +26,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
   async *sendTurn(
     _session: ModelSessionHandle,
     modelConfig: ModelProviderConfig,
-    messages: Array<{ role: string; content: string }>,
+    messages: ChatMessage[],
     _tools: ToolDefinition[],
     options: SendTurnOptions
   ): AsyncIterable<AdapterEvent> {
