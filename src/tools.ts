@@ -76,6 +76,17 @@ function parseSedInPlaceDelete(command: string): { pattern: string; filePath: st
 }
 
 /**
+ * Parse sed -i '/pattern/a\line' file or sed -i '/pattern/a line' file (append after matching line). Returns null if not matched.
+ */
+function parseSedInPlaceAppend(command: string): { pattern: string; line: string; filePath: string } | null {
+  const m = command.match(/sed\s+-i\s+['"]\/([^/]*)\/a\s*(?:\\([^'"]*)|([^'"]*))['"]\s+(\S+)/);
+  if (!m || m[1] === undefined || m[4] === undefined) return null;
+  const lineRaw = (m[2] ?? m[3] ?? "") as string;
+  const line = lineRaw.replace(/\\n/g, "\n").trim();
+  return { pattern: m[1], line, filePath: m[4] };
+}
+
+/**
  * Parse echo ... > file or echo ... >> file from (bin, binArgs). Returns { content, filePath, append } or null.
  * Content is joined from args before ">" or ">>"; optional surrounding quotes are stripped.
  */
@@ -525,8 +536,9 @@ export function createExecTool(args: {
             const segIntent = classifyCommandIntent(seg);
             if (segBin === "cat" || segBin === "type") {
               if (segBinArgs.length > 0 && segIntent === "read-only") {
+                const fileArgs = segBinArgs.filter((a) => !SHELL_META.has(a) && a !== "");
                 const chunks: string[] = [];
-                for (const fileArg of segBinArgs) {
+                for (const fileArg of fileArgs) {
                   const pathResolved = resolve(cwd, fileArg);
                   ensureUnderProfile(pathResolved);
                   const content = await readFile(pathResolved, "utf8");
@@ -572,6 +584,19 @@ export function createExecTool(args: {
                 lastResult = { stdout: "", stderr: "" };
                 continue;
               }
+              const sedAppend = parseSedInPlaceAppend(seg);
+              if (sedAppend) {
+                const pathResolved = resolve(cwd, sedAppend.filePath);
+                ensureUnderProfile(pathResolved);
+                const content = await readFile(pathResolved, "utf8");
+                const regex = new RegExp(sedAppend.pattern);
+                const newLines = content.split(/\r?\n/).flatMap((ln) =>
+                  regex.test(ln) ? [ln, sedAppend.line] : [ln]
+                );
+                await writeFile(pathResolved, newLines.join("\n"));
+                lastResult = { stdout: "", stderr: "" };
+                continue;
+              }
             }
             if (segBin === "echo" && segIntent === "mutating") {
               const echo = parseEchoRedirect(segBin, segBinArgs);
@@ -591,7 +616,7 @@ export function createExecTool(args: {
             }
             if (segBin === "rm" && segIntent === "mutating") {
               const recursive = segBinArgs.some((a) => a === "-r" || a === "-rf" || a === "-fr" || a === "-R");
-              const paths = segBinArgs.filter((a) => !a.startsWith("-"));
+              const paths = segBinArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
               if (paths.length > 0) {
                 for (const p of paths) {
                   const pathResolved = resolve(cwd, p);
@@ -637,7 +662,7 @@ export function createExecTool(args: {
             }
             if (segBin === "head" && segIntent === "read-only" && segBinArgs.length > 0) {
               let n = 10;
-              const nonFlags = segBinArgs.filter((a) => !a.startsWith("-"));
+              const nonFlags = segBinArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
               const idxN = segBinArgs.findIndex((a) => a === "-n");
               const nArg = idxN !== -1 ? segBinArgs[idxN + 1] : undefined;
               if (nArg !== undefined) n = parseInt(nArg, 10) || 10;
@@ -657,7 +682,7 @@ export function createExecTool(args: {
             }
             if (segBin === "tail" && segIntent === "read-only" && segBinArgs.length > 0) {
               let n = 10;
-              const nonFlags = segBinArgs.filter((a) => !a.startsWith("-"));
+              const nonFlags = segBinArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
               const idxN = segBinArgs.findIndex((a) => a === "-n");
               const nArg = idxN !== -1 ? segBinArgs[idxN + 1] : undefined;
               if (nArg !== undefined) n = parseInt(nArg, 10) || 10;
@@ -678,7 +703,7 @@ export function createExecTool(args: {
             if (segBin === "grep" && segIntent === "read-only" && segBinArgs.length >= 2) {
               const withNum = segBinArgs.includes("-n");
               const ignoreCase = segBinArgs.includes("-i");
-              const nonFlags = segBinArgs.filter((a) => !a.startsWith("-"));
+              const nonFlags = segBinArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
               const pattern = nonFlags[0];
               const files = nonFlags.slice(1);
               if (pattern && files.length > 0) {
@@ -699,7 +724,7 @@ export function createExecTool(args: {
             }
             if (segBin === "wc" && segIntent === "read-only" && segBinArgs.length > 0) {
               const flags = { lines: segBinArgs.includes("-l"), words: segBinArgs.includes("-w"), bytes: segBinArgs.includes("-c") };
-              const files = segBinArgs.filter((a) => !a.startsWith("-"));
+              const files = segBinArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
               if (files.length > 0) {
                 const out: string[] = [];
                 let totalL = 0, totalW = 0, totalC = 0;
@@ -729,7 +754,7 @@ export function createExecTool(args: {
             }
             if (segBin === "tee" && segIntent === "mutating" && segBinArgs.length > 0) {
               const append = segBinArgs.includes("-a");
-              const paths = segBinArgs.filter((a) => a !== "-a" && !a.startsWith("-"));
+              const paths = segBinArgs.filter((a) => a !== "-a" && !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
               if (paths.length > 0) {
                 for (const p of paths) {
                   const pathResolved = resolve(cwd, p);
@@ -742,7 +767,7 @@ export function createExecTool(args: {
               }
             }
             if (segBin === "mv" && segIntent === "mutating" && segBinArgs.length >= 2) {
-              const paths = segBinArgs.filter((a) => !a.startsWith("-"));
+              const paths = segBinArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
               if (paths.length >= 2) {
                 const src = resolve(cwd, paths[0]!);
                 const dest = resolve(cwd, paths[1]!);
@@ -754,7 +779,7 @@ export function createExecTool(args: {
               }
             }
             if (segBin === "cp" && segIntent === "mutating" && segBinArgs.length >= 2) {
-              const paths = segBinArgs.filter((a) => !a.startsWith("-"));
+              const paths = segBinArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
               if (paths.length >= 2) {
                 const src = resolve(cwd, paths[0]!);
                 const dest = resolve(cwd, paths[1]!);
@@ -768,7 +793,7 @@ export function createExecTool(args: {
               }
             }
             if (segBin === "mkdir" && segIntent === "mutating" && segBinArgs.length > 0) {
-              const paths = segBinArgs.filter((a) => !a.startsWith("-"));
+              const paths = segBinArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
               if (paths.length > 0) {
                 for (const p of paths) {
                   const pathResolved = resolve(cwd, p);
@@ -780,7 +805,7 @@ export function createExecTool(args: {
               }
             }
             if (segBin === "touch" && segIntent === "mutating" && segBinArgs.length > 0) {
-              const paths = segBinArgs.filter((a) => !a.startsWith("-"));
+              const paths = segBinArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
               if (paths.length > 0) {
                 for (const p of paths) {
                   const pathResolved = resolve(cwd, p);
@@ -796,7 +821,7 @@ export function createExecTool(args: {
             if (segBin === "test" && segIntent === "read-only" && segBinArgs.length >= 2) {
               const flag = segBinArgs[0];
               const pathArg = segBinArgs[1];
-              if (pathArg && (flag === "-f" || flag === "-d" || flag === "-e" || flag === "-s")) {
+              if (pathArg && !SHELL_META.has(pathArg) && (flag === "-f" || flag === "-d" || flag === "-e" || flag === "-s")) {
                 const pathResolved = resolve(cwd, pathArg);
                 ensureUnderProfile(pathResolved);
                 const s = await stat(pathResolved).catch(() => null);
@@ -825,8 +850,9 @@ export function createExecTool(args: {
           return { stdout: lastResult.stdout, stderr: lastResult.stderr };
         }
         if (platform() === "win32" && (bin === "cat" || bin === "type") && binArgs.length > 0 && intent === "read-only") {
+          const fileArgs = binArgs.filter((a) => !SHELL_META.has(a) && a !== "");
           const chunks: string[] = [];
-          for (const fileArg of binArgs) {
+          for (const fileArg of fileArgs) {
             const pathResolved = resolve(cwd, fileArg);
             ensureUnderProfile(pathResolved);
             const content = await readFile(pathResolved, "utf8");
@@ -872,6 +898,18 @@ export function createExecTool(args: {
             await writeFile(pathResolved, newContent);
             return { stdout: "", stderr: "" };
           }
+          const sedAppend = parseSedInPlaceAppend(parsed.command);
+          if (sedAppend) {
+            const pathResolved = resolve(cwd, sedAppend.filePath);
+            ensureUnderProfile(pathResolved);
+            const content = await readFile(pathResolved, "utf8");
+            const regex = new RegExp(sedAppend.pattern);
+            const newLines = content.split(/\r?\n/).flatMap((ln) =>
+              regex.test(ln) ? [ln, sedAppend.line] : [ln]
+            );
+            await writeFile(pathResolved, newLines.join("\n"));
+            return { stdout: "", stderr: "" };
+          }
         }
         if (platform() === "win32" && bin === "echo" && intent === "mutating") {
           const echo = parseEchoRedirect(bin, binArgs);
@@ -890,7 +928,7 @@ export function createExecTool(args: {
         }
         if (platform() === "win32" && bin === "rm" && intent === "mutating") {
           const recursive = binArgs.some((a) => a === "-r" || a === "-rf" || a === "-fr" || a === "-R");
-          const paths = binArgs.filter((a) => !a.startsWith("-"));
+          const paths = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           if (paths.length > 0) {
             for (const p of paths) {
               const pathResolved = resolve(cwd, p);
@@ -932,7 +970,7 @@ export function createExecTool(args: {
         }
         if (platform() === "win32" && bin === "head" && intent === "read-only" && binArgs.length > 0) {
           let n = 10;
-          const nonFlags = binArgs.filter((a) => !a.startsWith("-"));
+          const nonFlags = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           const idxN = binArgs.findIndex((a) => a === "-n");
           const nArg = idxN !== -1 ? binArgs[idxN + 1] : undefined;
           if (nArg !== undefined) n = parseInt(nArg, 10) || 10;
@@ -951,7 +989,7 @@ export function createExecTool(args: {
         }
         if (platform() === "win32" && bin === "tail" && intent === "read-only" && binArgs.length > 0) {
           let n = 10;
-          const nonFlags = binArgs.filter((a) => !a.startsWith("-"));
+          const nonFlags = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           const idxN = binArgs.findIndex((a) => a === "-n");
           const nArg = idxN !== -1 ? binArgs[idxN + 1] : undefined;
           if (nArg !== undefined) n = parseInt(nArg, 10) || 10;
@@ -971,7 +1009,7 @@ export function createExecTool(args: {
         if (platform() === "win32" && bin === "grep" && intent === "read-only" && binArgs.length >= 2) {
           const withNum = binArgs.includes("-n");
           const ignoreCase = binArgs.includes("-i");
-          const nonFlags = binArgs.filter((a) => !a.startsWith("-"));
+          const nonFlags = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           const pattern = nonFlags[0];
           const files = nonFlags.slice(1);
           if (pattern && files.length > 0) {
@@ -991,7 +1029,7 @@ export function createExecTool(args: {
         }
         if (platform() === "win32" && bin === "wc" && intent === "read-only" && binArgs.length > 0) {
           const flags = { lines: binArgs.includes("-l"), words: binArgs.includes("-w"), bytes: binArgs.includes("-c") };
-          const files = binArgs.filter((a) => !a.startsWith("-"));
+          const files = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           if (files.length > 0) {
             const out: string[] = [];
             let totalL = 0, totalW = 0, totalC = 0;
@@ -1016,7 +1054,7 @@ export function createExecTool(args: {
         }
         if (platform() === "win32" && bin === "tee" && intent === "mutating" && binArgs.length > 0) {
           const append = binArgs.includes("-a");
-          const paths = binArgs.filter((a) => a !== "-a" && !a.startsWith("-"));
+          const paths = binArgs.filter((a) => a !== "-a" && !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           if (paths.length > 0) {
             for (const p of paths) {
               const pathResolved = resolve(cwd, p);
@@ -1028,7 +1066,7 @@ export function createExecTool(args: {
           }
         }
         if (platform() === "win32" && bin === "mv" && intent === "mutating" && binArgs.length >= 2) {
-          const paths = binArgs.filter((a) => !a.startsWith("-"));
+          const paths = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           if (paths.length >= 2) {
             const src = resolve(cwd, paths[0]!);
             const dest = resolve(cwd, paths[1]!);
@@ -1039,7 +1077,7 @@ export function createExecTool(args: {
           }
         }
         if (platform() === "win32" && bin === "cp" && intent === "mutating" && binArgs.length >= 2) {
-          const paths = binArgs.filter((a) => !a.startsWith("-"));
+          const paths = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           if (paths.length >= 2) {
             const src = resolve(cwd, paths[0]!);
             const dest = resolve(cwd, paths[1]!);
@@ -1052,7 +1090,7 @@ export function createExecTool(args: {
           }
         }
         if (platform() === "win32" && bin === "mkdir" && intent === "mutating" && binArgs.length > 0) {
-          const paths = binArgs.filter((a) => !a.startsWith("-"));
+          const paths = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           if (paths.length > 0) {
             for (const p of paths) {
               const pathResolved = resolve(cwd, p);
@@ -1063,7 +1101,7 @@ export function createExecTool(args: {
           }
         }
         if (platform() === "win32" && bin === "touch" && intent === "mutating" && binArgs.length > 0) {
-          const paths = binArgs.filter((a) => !a.startsWith("-"));
+          const paths = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           if (paths.length > 0) {
             for (const p of paths) {
               const pathResolved = resolve(cwd, p);
@@ -1078,7 +1116,7 @@ export function createExecTool(args: {
         if (platform() === "win32" && bin === "test" && intent === "read-only" && binArgs.length >= 2) {
           const flag = binArgs[0];
           const pathArg = binArgs[1];
-          if (pathArg && (flag === "-f" || flag === "-d" || flag === "-e" || flag === "-s")) {
+          if (pathArg && !SHELL_META.has(pathArg) && (flag === "-f" || flag === "-d" || flag === "-e" || flag === "-s")) {
             const pathResolved = resolve(cwd, pathArg);
             ensureUnderProfile(pathResolved);
             const s = await stat(pathResolved).catch(() => null);
