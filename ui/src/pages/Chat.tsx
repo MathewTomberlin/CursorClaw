@@ -53,6 +53,8 @@ function formatStreamEventLabel(ev: StreamEvent): string {
       return "Writing reply…";
     case "compaction":
       return ev.payload?.reason ? `Compacting: ${ev.payload.reason}` : "Compacting context…";
+    case "final_message_start":
+      return "Writing reply…";
     case "completed":
       return "Completed";
     case "failed":
@@ -252,20 +254,28 @@ export default function Chat() {
   };
 
   // Events for the current run: filter by runId once we have it.
-  // When we have currentRunId but no matching events yet, use recent events that belong to this run (or connecting) so we never show a previous run's status.
+  // When we have currentRunId but no matching events yet, use recent events that belong to this run (or connecting).
+  // If we still have no events (e.g. runId mismatch or stream just connected), use any recent stream events so status is never empty while loading.
   const eventsForRunId = currentRunId ? streamEvents.filter((e) => e.runId === currentRunId) : [];
   const recentStreamEvents = streamEvents.slice(-20);
   const recentForCurrentRun = currentRunId
     ? recentStreamEvents.filter((e) => !e.runId || e.runId === currentRunId)
     : recentStreamEvents;
   const runEvents = loading
-    ? currentRunId
-      ? eventsForRunId.length > 0
-        ? eventsForRunId
-        : recentForCurrentRun
-      : recentStreamEvents
+    ? (() => {
+        if (currentRunId) {
+          if (eventsForRunId.length > 0) return eventsForRunId;
+          if (recentForCurrentRun.length > 0) return recentForCurrentRun;
+        }
+        // Fallback: show latest stream activity so we never hide events (e.g. runId not yet set or format mismatch).
+        return recentStreamEvents.length > 0 ? recentStreamEvents : [];
+      })()
     : [];
-  const lastStreamEvent = runEvents.length > 0 ? runEvents[runEvents.length - 1] : null;
+  // Status types that overwrite each other in the UI (one line that updates in place).
+  const STATUS_EVENT_TYPES = ["connecting", "queued", "started", "streaming", "tool", "thinking", "compaction", "final_message_start", "completed", "failed"];
+  // Use the last *status* event for the label so we see "Queued" → "Starting" → "Streaming" → "Thinking" → "Running tool…" overwriting in place. If we used the last event overall, it would usually be "assistant" and we'd only see "Writing reply…" once.
+  const lastStatusEvent = runEvents.filter((e) => STATUS_EVENT_TYPES.includes(e.type)).pop() ?? null;
+  const lastStreamEvent = lastStatusEvent ?? (runEvents.length > 0 ? runEvents[runEvents.length - 1] : null);
   const hasRealProgress = runEvents.some(
     (e) =>
       e.type !== "connecting" && e.type !== "queued"
@@ -274,17 +284,21 @@ export default function Chat() {
   const showWorkingFallback =
     loading && loadingDurationMs > 1500 && !hasRealProgress && runEvents.length <= 2;
 
-  const statusLabel = lastStreamEvent
-    ? formatStreamEventLabel(lastStreamEvent)
-    : showWorkingFallback
-      ? currentRunId
-        ? "Connecting…"
-        : "Starting run…"
-      : loading
-        ? currentRunId
-          ? "Connecting…"
-          : "Starting run…"
-        : "Starting…";
+  // When we already have streamed content, show "Writing reply…" so the status line matches the streaming bubble; otherwise show the latest status event so "Queued" → "Starting" → "Streaming" → "Thinking" → "Running tool…" overwrite in place.
+  const statusLabel =
+    loading && streamedContent
+      ? "Writing reply…"
+      : lastStreamEvent
+        ? formatStreamEventLabel(lastStreamEvent)
+        : showWorkingFallback
+          ? currentRunId
+            ? "Connecting…"
+            : "Starting run…"
+          : loading
+            ? currentRunId
+              ? "Connecting…"
+              : "Starting run…"
+            : "Starting…";
 
 
   const sendToChannel = async () => {
@@ -434,12 +448,6 @@ export default function Chat() {
                     <span className="chat-typing" role="status" aria-live="polite" aria-label={statusLabel}>
                       {statusLabel}
                     </span>
-                  )}
-                  {/* Debug: show only last event type (no growing count) so it's clear only one status is shown. */}
-                  {loading && lastStreamEvent && (
-                    <div className="chat-stream-debug" role="status" aria-label={`Status: ${lastStreamEvent.type}`}>
-                      <span data-event-type={lastStreamEvent.type}>{lastStreamEvent.type}</span>
-                    </div>
                   )}
                 </div>
               </div>

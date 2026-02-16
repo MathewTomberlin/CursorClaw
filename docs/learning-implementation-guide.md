@@ -51,7 +51,7 @@
 
 ## 10. Documenting a tick
 
-- **When a heartbeat completes with no Open advancement:** Still run resilience (build/tests), update ROADMAP Current state (branch, build status, uncommitted/untracked), and add a one-line Completed entry for this tick. Advance one STUDY_GOALS topic (e.g. add or update a sub-note, or add a small section to an implementation guide). This keeps learning and continuity going even when ROADMAP Open is "idle until operator".
+- **When a heartbeat completes with no Open advancement:** Still run resilience (build/tests), update ROADMAP Current state (branch, build status, uncommitted/untracked), and add a one-line Completed entry for this tick. Advance one STUDY_GOALS topic (e.g. add or update a sub-note, or add a small section to an implementation guide). This keeps learning and continuity going even when ROADMAP Open is "idle until operator". This applies to both normal and resumed ticks; for resumed ticks (e.g. user sent "Continue with ROADMAP.md, HEARTBEAT.md, and STUDY_GOALS"), the Completed entry should note that the turn was a continuation after an interrupted heartbeat.
 
 ## 11. When to skip or defer study advancement
 

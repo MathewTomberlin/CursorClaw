@@ -1,0 +1,88 @@
+# Streaming UX: Replace-Then-Append Design
+
+## Goal
+
+- **Thinking / pre-final phase:** Each new streaming or thinking event **replaces** the previous one so the user sees only the **latest** chunk (no accumulation).
+- **Final message phase:** When the agent is streaming the **final** reply, content is **appended** so the user sees the message being written.
+- **On completion:** Clear all streaming/thinking UI and show **only the final message** in the thread.
+
+## Current Problem
+
+- Streaming/thinking events are effectively accumulated or not clearly phased: the UI can show growing thinking text or mixed thinking + assistant without a clear transition.
+- There is no explicit “final message started” signal, so the UI cannot switch from “replace-only” to “append” behavior.
+
+## Event Semantics
+
+| Phase | Event | Payload | UI behavior |
+|-------|--------|---------|-------------|
+| Pre-final | `thinking` | `{ content: string }` (delta only) | Replace `streamedThinkingContent` with `content` (show only latest chunk). |
+| Transition | `final_message_start` | (none) | Clear `streamedThinkingContent`; switch to showing assistant stream only. |
+| Final | `assistant` | `{ content: string, replace?: boolean }` | Set `streamedContent` to `content` (accumulated). Message grows as backend sends full content. |
+| Done | `completed` | (optional payload) | Clear `streamedContent` and `streamedThinkingContent`; show only the final message in the thread. |
+
+## Backend (Runtime)
+
+1. **Thinking: delta-only**
+   - Track `previousThinkingContent` (string) for the current turn.
+   - On each `thinking_delta`: compute delta = if adapter sends accumulated, use `content.startsWith(previousThinkingContent) ? content.slice(previousThinkingContent.length) : content`; otherwise treat `content` as the new chunk (adapter may send per-chunk).
+   - Emit `thinking` with `{ content: delta }`.
+   - Update `previousThinkingContent` to the full content received (so next time we can compute the next delta). If the adapter sends only deltas, treat the received content as the “new chunk” and do not accumulate it into `previousThinkingContent` for length comparison—emit as-is and set `previousThinkingContent = ""` for next chunk so we don’t strip. Simpler: always compute “delta” as: if `content.startsWith(previousThinkingContent)`, then `delta = content.slice(previousThinkingContent.length)`; else `delta = content`. Then set `previousThinkingContent = content`. So if adapter sends "A", "AB", "ABC" we send "A", "B", "C". If adapter sends "A", "B", "C" we send "A", "B", "C" (content doesn’t start with previous so delta = content; then previous = "A", "B", "C" in turn—so next "B".startsWith("A") is false, delta = "B". Good.)
+
+2. **Final message start**
+   - Introduce a flag `finalMessageStartEmitted = false` at the start of the adapter stream loop.
+   - On the **first** `assistant_delta` (when entering the `assistant_delta` branch), if `!finalMessageStartEmitted`, emit `final_message_start` (no payload), then set `finalMessageStartEmitted = true`.
+   - No change to existing `assistant` emission logic: continue sending accumulated content with `replace: true` or full content as today.
+
+3. **Types**
+   - Add `"final_message_start"` to `RuntimeEventType` in `src/runtime.ts`.
+   - Optionally add to `LifecycleEventType` in `src/types.ts` if the gateway/UI rely on it (UI will handle the new type by name).
+
+## Gateway
+
+- No change: the gateway forwards every lifecycle event from the runtime to the client. New event type `final_message_start` is sent as-is.
+
+## Frontend (UI)
+
+1. **ChatContext**
+   - On SSE event with `type === "final_message_start"`: call `setStreamedThinkingContent("")` so the thinking block is cleared when we transition to the final message phase.
+   - On `completed` (and in the existing `finally` that runs when the turn ends): ensure `streamedContent` and `streamedThinkingContent` are cleared (already done in `runTurn` cleanup).
+   - No change to assistant handling: continue setting `streamedContent` to `payload.content` on `assistant` events (backend sends accumulated content, so the message grows).
+
+2. **Chat.tsx**
+   - No structural change: loading bubble shows either thinking (when `streamedThinkingContent` is set) or status; when `streamedContent` is set we show the streaming assistant bubble. Clearing thinking on `final_message_start` ensures we don’t show thinking after the transition.
+   - Add `final_message_start` to `STATUS_EVENT_TYPES` and to `formatStreamEventLabel` (e.g. "Writing reply…") so the status line updates as soon as we transition to the final-message phase.
+
+## Step-by-Step Implementation
+
+1. **Runtime**
+   - Add `"final_message_start"` to `RuntimeEventType`.
+   - Before the adapter stream loop: `let previousThinkingContent = ""` and `let finalMessageStartEmitted = false`.
+   - In `thinking_delta` handler: compute `delta` from `content` and `previousThinkingContent`; emit `thinking` with `{ content: delta }`; set `previousThinkingContent = content`.
+   - At the start of `assistant_delta` handler: if `!finalMessageStartEmitted`, emit `final_message_start`, then set `finalMessageStartEmitted = true`. Then run existing assistant_delta logic.
+
+2. **Types (if shared)**
+   - In `src/types.ts`, add `"final_message_start"` to `LifecycleEventType` so it’s part of the shared contract.
+
+3. **UI**
+   - In the SSE message handler in `ChatContext.tsx`, add a branch: when `data.type === "final_message_start"`, call `setStreamedThinkingContent("")`.
+   - Confirm that on turn completion (e.g. in `runTurn`’s `finally` or equivalent), `setStreamedContent("")` and `setStreamedThinkingContent("")` are called (already present).
+
+4. **Manual verification**
+   - With Cursor-Agent CLI: send a message; observe thinking updates in place (only latest chunk); when assistant starts, thinking clears and reply streams and grows; on completion only the final message remains.
+   - With Ollama/Qwen (if thinking is present): same behavior.
+
+## Success Criteria
+
+- [ ] **SC1** During a run, each new `thinking` event shows only the latest chunk (no concatenation of previous thinking chunks in the thinking block).
+- [ ] **SC2** When the first assistant content arrives, the thinking block is cleared and the user sees only the streaming assistant message.
+- [ ] **SC3** The final reply appears to “type out” (append) during streaming; no duplicate or repeated segments.
+- [ ] **SC4** When the run completes, the streaming/thinking UI is cleared and only the final assistant message is shown in the thread.
+- [ ] **SC5** No regression: existing flows (no thinking, or CLI full-message-only) still complete and show the final message correctly.
+
+## Guardrails (Regression Prevention)
+
+- **G1** Do not remove or weaken the existing logic that clears `streamedContent` and `streamedThinkingContent` when the turn ends (e.g. in `runTurn`’s `finally`).
+- **G2** Keep `final_message_start` emission once per turn (guard with `finalMessageStartEmitted`).
+- **G3** Thinking delta: if the adapter sends only deltas, `content` will not start with `previousThinkingContent` (or we’ll have empty previous), so we emit the chunk as-is; do not drop or double chunks.
+- **G4** Backend continues to send `assistant` with accumulated content (and optional `replace: true` where applicable); UI continues to set `streamedContent` to that value so the bubble grows.
+- **G5** Optional: add a simple test or script that asserts lifecycle event order for a mock run (e.g. `streaming` → optional `thinking`* → `final_message_start` → `assistant`* → `completed`).

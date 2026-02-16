@@ -65,6 +65,7 @@ export type LifecycleEventType =
   | "tool"
   | "assistant"
   | "compaction"
+  | "final_message_start"
   | "completed"
   | "failed";
 

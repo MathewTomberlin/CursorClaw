@@ -373,44 +373,61 @@ export function ChatProvider({ children }: ChatProviderProps) {
     streamRef.current = es;
     es.onmessage = (ev) => {
       try {
-        const data = JSON.parse(ev.data) as StreamEvent;
-        // Streaming status updates overwrite each other: only one status event is kept (the latest). Assistant chunks replace the last assistant.
-        setStreamEvents((prev) => {
-          const isFinalAssistant =
-            data.type === "assistant" && (data.payload as { replace?: boolean } | undefined)?.replace === true;
-          const last = prev[prev.length - 1];
-          const statusTypes = ["connecting", "queued", "started", "streaming", "tool", "thinking", "compaction", "completed", "failed"];
-          let next: StreamEvent[];
-          // Assistant: replace last assistant with this one unless it's the final (replace: true) message.
-          if (data.type === "assistant") {
-            if (!isFinalAssistant && last?.type === "assistant") next = [...prev.slice(0, -1), data];
-            else next = [...prev, data];
-          } else if (statusTypes.includes(data.type)) {
-            // Status types: remove ALL status events from the array (not just trailing), then append this one so only the latest status is shown.
-            const rest = prev.filter((e) => !statusTypes.includes(e.type));
-            next = [...rest, data];
-          } else {
-            next = [...prev, data];
+        // Support single JSON or newline-delimited JSON in one message (so only the latest status is ever kept).
+        const raw = String(ev.data ?? "").trim();
+        if (!raw) return;
+        const lines = raw.includes("\n") ? raw.split(/\n/).map((s) => s.trim()).filter(Boolean) : [raw];
+        const payloads: StreamEvent[] = [];
+        for (const line of lines) {
+          try {
+            payloads.push(JSON.parse(line) as StreamEvent);
+          } catch {
+            // skip malformed line
           }
-          return next.length > 100 ? next.slice(-100) : next;
-        });
-        // Only skip content for a different run when event has a non-empty runId (so we still process thinking/assistant if runId is missing)
-        const runIdMismatch =
-          currentRunIdRef.current != null &&
-          data.runId != null &&
-          data.runId !== "" &&
-          data.runId !== currentRunIdRef.current;
-        if (runIdMismatch) return;
-        if (data.type === "assistant") {
-          const payload = data.payload as { content?: string; replace?: boolean } | undefined;
-          const next = payload?.content ?? "";
-          // Always overwrite with the latest assistant content so streamed chunks replace each other instead of appending.
-          setStreamedContent(next);
-        } else if (data.type === "thinking") {
-          const payload = data.payload as { content?: string } | undefined;
-          const content = payload?.content ?? "";
-          if (content.length > 0) {
-            setStreamedThinkingContent((prev) => prev + content);
+        }
+        if (payloads.length === 0) return;
+        for (const data of payloads) {
+          // Streaming status updates overwrite each other: only one status event is kept (the latest). Assistant chunks replace the last assistant.
+          setStreamEvents((prev) => {
+            const isFinalAssistant =
+              data.type === "assistant" && (data.payload as { replace?: boolean } | undefined)?.replace === true;
+            const last = prev[prev.length - 1];
+            const statusTypes = ["connecting", "queued", "started", "streaming", "tool", "thinking", "compaction", "final_message_start", "completed", "failed"];
+            let next: StreamEvent[];
+            // Assistant: replace last assistant with this one unless it's the final (replace: true) message.
+            if (data.type === "assistant") {
+              if (!isFinalAssistant && last?.type === "assistant") next = [...prev.slice(0, -1), data];
+              else next = [...prev, data];
+            } else if (statusTypes.includes(data.type)) {
+              // Status types: remove ALL status events from the array (not just trailing), then append this one so only the latest status is shown.
+              const rest = prev.filter((e) => !statusTypes.includes(e.type));
+              next = [...rest, data];
+            } else {
+              next = [...prev, data];
+            }
+            return next.length > 100 ? next.slice(-100) : next;
+          });
+          // Only skip content for a different run when event has a non-empty runId (so we still process thinking/assistant if runId is missing)
+          const runIdMismatch =
+            currentRunIdRef.current != null &&
+            data.runId != null &&
+            data.runId !== "" &&
+            data.runId !== currentRunIdRef.current;
+          if (runIdMismatch) continue;
+          if (data.type === "assistant") {
+            const payload = data.payload as { content?: string; replace?: boolean } | undefined;
+            const next = payload?.content ?? "";
+            // Backend sends accumulated content during final-message phase; overwrite so the message grows in place.
+            setStreamedContent(next);
+          } else if (data.type === "thinking") {
+            const payload = data.payload as { content?: string } | undefined;
+            const content = payload?.content ?? "";
+            if (content.length > 0) {
+              // Replace with this chunk only (backend sends delta) so we show only the latest thinking chunk.
+              setStreamedThinkingContent(content);
+            }
+          } else if (data.type === "final_message_start") {
+            setStreamedThinkingContent("");
           }
         }
       } catch {

@@ -86,6 +86,7 @@ export type RuntimeEventType =
   | "tool"
   | "assistant"
   | "compaction"
+  | "final_message_start"
   | "completed"
   | "failed";
 
@@ -685,6 +686,10 @@ export class AgentRuntime {
             };
             // Emit "streaming" immediately so status updates appear before first adapter event (e.g. Cursor-Agent CLI).
             maybeEmitStreaming();
+            /** For thinking: emit only the latest chunk (delta) so UI shows replace-only, not accumulated. */
+            let previousThinkingContent = "";
+            /** Emit final_message_start once when first assistant content arrives so UI clears thinking and shows append. */
+            let finalMessageStartEmitted = false;
 
             for await (const event of adapterStream) {
               if (event.type === "thinking_delta") {
@@ -693,11 +698,22 @@ export class AgentRuntime {
                 const rawContent = String(data?.content ?? "");
                 const content = this.scrubText(rawContent, scrubScopeId);
                 if (content.length > 0) {
-                  emit("thinking", { content });
-                  emittedCount += 1;
+                  const delta =
+                    content.startsWith(previousThinkingContent)
+                      ? content.slice(previousThinkingContent.length)
+                      : content;
+                  previousThinkingContent = content;
+                  if (delta.length > 0) {
+                    emit("thinking", { content: delta });
+                    emittedCount += 1;
+                  }
                 }
               } else if (event.type === "assistant_delta") {
                 maybeEmitStreaming();
+                if (!finalMessageStartEmitted) {
+                  finalMessageStartEmitted = true;
+                  emit("final_message_start");
+                }
                 const data = event.data as { content?: string; isFullMessage?: boolean };
                 const rawContent = String(data?.content ?? "");
                 let content = this.scrubText(rawContent, scrubScopeId);
