@@ -365,7 +365,7 @@ Default model map:
 |----------|----------|----------|
 | **cursor-agent-cli** | — | `command?: string`, `args?: string[]`, `promptAsArg?: boolean` (pass last user message as final CLI arg). If omitted, built-in CLI defaults are used. |
 | **fallback-model** | — | No provider-specific fields. Use for fallback-only entries. |
-| **ollama** | `ollamaModelName: string` (e.g. `llama3.2`, `granite3.2`) | `baseURL?: string` (e.g. `http://localhost:11434`). See `docs/local-ollama-agent-setup.md` and `docs/Ollama-tool-call-support.md`. |
+| **ollama** | `ollamaModelName: string` (e.g. `llama3.2`, `granite3.2`) | `baseURL?: string` (e.g. `http://localhost:11434`). Optional `ollamaOptions?: { temperature?: number; num_ctx?: number }` to tune for tool use (defaults when tools are used: temperature 0.3, num_ctx 8192). See `docs/local-ollama-agent-setup.md` and `docs/Ollama-tool-call-support.md`. |
 | **openai-compatible** | `openaiModelId: string` (e.g. `gpt-4o-mini`, `gpt-4o`) | `baseURL?: string`, `apiKeyRef?: string` (credential store key for API key; never plaintext in config). |
 
 Example — Ollama model with custom base URL:
@@ -375,6 +375,7 @@ Example — Ollama model with custom base URL:
   "provider": "ollama",
   "ollamaModelName": "granite3.2",
   "baseURL": "http://localhost:11434",
+  "ollamaOptions": { "temperature": 0.3, "num_ctx": 8192 },
   "timeoutMs": 120000,
   "authProfiles": ["default"],
   "fallbackModels": [],

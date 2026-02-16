@@ -934,6 +934,17 @@ export class AgentRuntime {
       });
     }
 
+    // Encourage tool use so local models (e.g. Ollama Granite 3.2) reliably read/edit files and run commands instead of guessing.
+    if (this.options.toolRouter.list().length > 0) {
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(
+          "You have access to tools. Use them: to read or edit substrate files (AGENTS.md, IDENTITY.md, ROADMAP.md, etc.) or any file in the workspace, call the exec tool with the appropriate command (e.g. cat, type, head, or sed/echo for edits). To run scripts, run tests, or run shell commands, use exec. Do not guess file contents or assume what is on disk—call a tool to read or verify. Prefer calling tools before answering when the answer depends on files or commands.",
+          scopeId
+        )
+      });
+    }
+
     if (freshness.summaryLine) {
       systemMessages.push({
         role: "system",

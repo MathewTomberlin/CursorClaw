@@ -139,9 +139,9 @@ export interface GatewayDependencies {
   workspaceRoot?: string;
   /** When substrate config is present, store for list/get/update/reload. */
   substrateStore?: SubstrateStore;
-  /** If set, used by heartbeat.poll and /status to expose proactive messages from heartbeat turns. */
+  /** If set, used by heartbeat.poll and /status to expose proactive messages from heartbeat turns. Poll returns this without clearing so all clients (e.g. phone + laptop) receive the same message; clearing happens when the next heartbeat produces no new message. */
   getPendingProactiveMessage?: () => string | null;
-  /** If set, heartbeat.poll calls this to return and clear the pending proactive message. */
+  /** Unused by heartbeat.poll (poll uses get so all clients get the message). Kept for backwards compatibility with tests/deps that pass it. */
   takePendingProactiveMessage?: () => string | null;
   /** When set, called when a user message triggers cancellation of in-flight heartbeat so the next heartbeat can show a resume notice. Pass profileId when using per-profile heartbeats. */
   markHeartbeatInterrupted?: (profileId?: string) => void;
@@ -358,9 +358,18 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
       }
     };
     // Expose only a flag so the message body is delivered once via heartbeat.poll; avoids duplicate display and leaking scrubbed placeholder text (e.g. HIGH_ENTROPY_TOKEN) in status/summary views.
-    const hasPendingProactiveMessage =
-      (defaultCtx.getPendingProactiveMessage?.() ?? null) !== null;
-    return hasPendingProactiveMessage ? { ...base, hasPendingProactiveMessage: true } : base;
+    // Multi-profile: expose per-profile pending so UI can show badges and poll all profiles for proactive messages.
+    const pendingProactiveByProfile: Record<string, boolean> = {};
+    for (const p of profiles) {
+      const ctx = getEffectiveProfileContext(deps, p.id);
+      pendingProactiveByProfile[p.id] = (ctx.getPendingProactiveMessage?.() ?? null) !== null;
+    }
+    const hasPendingProactiveMessage = Object.values(pendingProactiveByProfile).some(Boolean);
+    return {
+      ...base,
+      ...(hasPendingProactiveMessage ? { hasPendingProactiveMessage: true } : {}),
+      pendingProactiveByProfile
+    };
   });
 
   app.post("/rpc", async (request, reply) => {
@@ -931,7 +940,8 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         }
         result = { ok: true };
       } else if (body.method === "heartbeat.poll") {
-        const message = profileCtx.takePendingProactiveMessage?.() ?? null;
+        // Return pending message without clearing so all clients (e.g. phone + laptop) receive it; clearing happens when the next heartbeat produces no new message.
+        const message = profileCtx.getPendingProactiveMessage?.() ?? null;
         result = message !== null ? { result: "ok", proactiveMessage: message } : { result: "ok" };
       } else if (body.method === "heartbeat.getFile") {
         if (!profileCtx.profileRoot) {

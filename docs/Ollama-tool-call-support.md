@@ -32,6 +32,14 @@ This section summarizes which Ollama models support tool use, how to validate th
 
 Ollama may stream tool-call content (e.g. `function.name` in one chunk, `function.arguments` in later chunks). The provider accumulates by call index and emits one `tool_call` event per call when the arguments form valid JSON (or on `done`). No additional provider changes are needed for Granite 3.2 or other models that stream tool calls in this way.
 
+### Tuning for tool use (Granite 3.2, 16GB VRAM)
+
+When tools are sent, the Ollama provider sends request `options` so the model reliably uses tools and reads/edits files:
+
+- **Defaults (when `ollamaOptions` is not set):** `temperature: 0.3`, `num_ctx: 8192`. Lower temperature helps tool-call consistency; `num_ctx` gives enough context for substrate and codebase.
+- **Override in config:** Add `ollamaOptions: { "temperature": 0.2, "num_ctx": 4096 }` (or other values) to your model entry in `openclaw.json` to tune for your hardware. For 16GB VRAM, 8192 or 4096 context is typical; reduce if you hit OOM.
+- The runtime also injects a system-prompt nudge telling the model to use tools (e.g. exec to read/edit files) and improves the exec tool description so the model sees it as the primary way to read substrate and codebase files.
+
 ---
 
 ## 1. Goals and success criteria

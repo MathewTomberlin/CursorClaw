@@ -14,6 +14,26 @@ function isOllamaConfig(
   return c.provider === "ollama" && typeof c.ollamaModelName === "string" && c.ollamaModelName.length > 0;
 }
 
+/** Build request options for Ollama (temperature, num_ctx). When tools are sent, defaults are tuned for tool use on local models (e.g. Granite 3.2). */
+function buildOllamaOptions(
+  config: ModelProviderConfig,
+  hasTools: boolean
+): { temperature?: number; num_ctx?: number } {
+  const opts = config.ollamaOptions ?? {};
+  const temperature =
+    typeof opts.temperature === "number" && opts.temperature >= 0 && opts.temperature <= 2
+      ? opts.temperature
+      : hasTools
+        ? 0.3
+        : undefined;
+  const num_ctx =
+    typeof opts.num_ctx === "number" && opts.num_ctx > 0 ? opts.num_ctx : hasTools ? 8192 : undefined;
+  const out: { temperature?: number; num_ctx?: number } = {};
+  if (temperature !== undefined) out.temperature = temperature;
+  if (num_ctx !== undefined) out.num_ctx = num_ctx;
+  return out;
+}
+
 /** Map adapter ToolDefinition to Ollama API tools format (OpenAI-style). */
 function mapToolsToOllama(tools: ToolDefinition[]): Array<{ type: "function"; function: { name: string; description: string; parameters: object } }> {
   if (tools.length === 0) return [];
@@ -55,13 +75,23 @@ export class OllamaProvider implements ModelProvider {
       content: m.content
     }));
 
-    const body: { model: string; messages: typeof ollamaMessages; stream: boolean; tools?: ReturnType<typeof mapToolsToOllama> } = {
+    const body: {
+      model: string;
+      messages: typeof ollamaMessages;
+      stream: boolean;
+      tools?: ReturnType<typeof mapToolsToOllama>;
+      options?: { temperature?: number; num_ctx?: number };
+    } = {
       model,
       messages: ollamaMessages,
       stream: true
     };
     if (tools.length > 0) {
       body.tools = mapToolsToOllama(tools);
+    }
+    const ollamaOpts = buildOllamaOptions(modelConfig, tools.length > 0);
+    if (Object.keys(ollamaOpts).length > 0) {
+      body.options = ollamaOpts;
     }
 
     const controller = new AbortController();

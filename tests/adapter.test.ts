@@ -416,7 +416,8 @@ describe("CursorAgentModelAdapter", () => {
                   parameters: simpleTool.schema
                 }
               }
-            ]
+            ],
+            options: { temperature: 0.3, num_ctx: 8192 }
           })
         })
       );
