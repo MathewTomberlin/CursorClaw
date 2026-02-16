@@ -1,5 +1,6 @@
 import { existsSync, unlinkSync, watch } from "node:fs";
-import { join, resolve } from "node:path";
+import { copyFile, mkdir, stat, unlink } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { safeReadUtf8 } from "./fs-utils.js";
 
 import {
@@ -76,10 +77,11 @@ import {
   createWebSearchTool
 } from "./tools.js";
 import type { CursorClawConfig } from "./config.js";
-import { getDefaultProfileId, isDevMode, loadConfigFromDisk, validateStartupConfig, resolveConfigPath, resolveProfileRoot } from "./config.js";
+import { getDefaultProfileId, isDevMode, loadConfigFromDisk, validateStartupConfig, resolveConfigPath, resolveProfileRoot, DEFAULT_PROFILE_ROOT } from "./config.js";
 import { AutonomyOrchestrator, type HeartbeatTarget } from "./orchestrator.js";
 import { loadSubstrate, SubstrateStore } from "./substrate/index.js";
 import type { SubstrateContent } from "./substrate/index.js";
+import { DEFAULT_SUBSTRATE_PATHS } from "./substrate/index.js";
 import { WorkspaceCatalog } from "./workspaces/catalog.js";
 import { MultiRootIndexer } from "./workspaces/multi-root-indexer.js";
 import { MemoryEmbeddingIndex } from "./continuity/memory-embedding-index.js";
@@ -122,6 +124,8 @@ async function buildProfileContext(
   config: CursorClawConfig,
   options: { isDefault: boolean; pendingProactiveRef?: { current: string | null } }
 ): Promise<ProfileContext> {
+  await mkdir(profileRoot, { recursive: true });
+  await mkdir(join(profileRoot, "tmp"), { recursive: true });
   const substrateStore = new SubstrateStore();
   try {
     await substrateStore.reload(profileRoot, config.substrate);
@@ -164,6 +168,64 @@ async function buildProfileContext(
   return ctx;
 }
 
+/** One-time migration: move root-level substrate (and MEMORY.md, HEARTBEAT.md) into profiles/default so the default agent keeps continuity. Uses config file directory as root so paths match. Verifies copy before deleting source. */
+async function migrateRootSubstrateToDefaultProfile(
+  workspaceDir: string,
+  config: CursorClawConfig,
+  configPath: string
+): Promise<void> {
+  const rootDir = dirname(configPath);
+  const defaultDir = resolve(rootDir, DEFAULT_PROFILE_ROOT);
+  const pathKeys: Array<keyof typeof DEFAULT_SUBSTRATE_PATHS> = [
+    "agentsPath",
+    "identityPath",
+    "soulPath",
+    "birthPath",
+    "capabilitiesPath",
+    "userPath",
+    "toolsPath",
+    "roadmapPath"
+  ];
+  const paths = config.substrate
+    ? { ...DEFAULT_SUBSTRATE_PATHS, ...(config.substrate as Partial<typeof DEFAULT_SUBSTRATE_PATHS>) }
+    : DEFAULT_SUBSTRATE_PATHS;
+  await mkdir(defaultDir, { recursive: true });
+  await mkdir(join(defaultDir, "tmp"), { recursive: true });
+  for (const key of pathKeys) {
+    const rel = paths[key];
+    const src = resolve(rootDir, rel);
+    const dest = resolve(defaultDir, rel);
+    try {
+      if (existsSync(src)) {
+        const srcSize = (await stat(src)).size;
+        await copyFile(src, dest);
+        const destStat = await stat(dest);
+        if (destStat.size === srcSize && destStat.size > 0) {
+          await unlink(src);
+        }
+      }
+    } catch {
+      // skip if copy/stat/unlink fails (e.g. permissions)
+    }
+  }
+  for (const name of ["MEMORY.md", "HEARTBEAT.md"]) {
+    const src = resolve(rootDir, name);
+    const dest = resolve(defaultDir, name);
+    try {
+      if (existsSync(src)) {
+        const srcSize = (await stat(src)).size;
+        await copyFile(src, dest);
+        const destStat = await stat(dest);
+        if (destStat.size === srcSize && destStat.size > 0) {
+          await unlink(src);
+        }
+      }
+    } catch {
+      // skip if copy/stat/unlink fails
+    }
+  }
+}
+
 async function main(): Promise<void> {
   const workspaceDir = process.cwd();
   const configPath = resolveConfigPath({ cwd: workspaceDir });
@@ -186,10 +248,11 @@ async function main(): Promise<void> {
   const defaultProfileKey = "default";
   const defaultProfileId = getDefaultProfileId(config);
   const profileList = config.profiles;
-  /** When multiple profiles exist, include workspace-root "default" so both default and e.g. Ollama get heartbeats. */
+  await migrateRootSubstrateToDefaultProfile(workspaceDir, config, configPath);
+  /** When multiple profiles exist, include default with its own profile directory so all agents use profile-scoped paths. */
   const effectiveProfileList =
     profileList?.length && !profileList.some((p) => p.id === "default")
-      ? [{ id: "default" as const, root: "." }, ...profileList]
+      ? [{ id: "default" as const, root: DEFAULT_PROFILE_ROOT }, ...profileList]
       : profileList;
   let profileContextMap: Map<string, ProfileContext>;
   let defaultCtx: ProfileContext;
@@ -198,7 +261,8 @@ async function main(): Promise<void> {
     profileContextMap = new Map();
     pendingByProfile = new Map<string, { current: string | null }>();
     for (const p of effectiveProfileList) {
-      const root = resolve(workspaceDir, p.root);
+      const rawRoot = p.id === "default" && (p.root === "." || p.root === "") ? DEFAULT_PROFILE_ROOT : p.root;
+      const root = resolve(workspaceDir, rawRoot);
       const isDefault = p.id === defaultProfileId;
       const ref = { current: null as string | null };
       pendingByProfile.set(p.id, ref);

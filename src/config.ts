@@ -181,6 +181,12 @@ export interface MetricsConfig {
   intervalSeconds?: number;
 }
 
+/**
+ * Relative path (under workspace) for the default agent profile when no profiles are configured.
+ * Single-agent backward compatibility: default profile uses workspace root (".").
+ */
+export const DEFAULT_PROFILE_ROOT = ".";
+
 /** Optional per-agent profile: isolated root for substrate, memory, heartbeat, cron, etc. */
 export interface AgentProfileConfig {
   id: string;
@@ -531,7 +537,7 @@ export function getModelIdForProfile(config: CursorClawConfig, profileId: string
 
 /**
  * Resolve the absolute profile root for the given profile.
- * When no profiles are configured, returns workspaceDir (single-agent mode).
+ * When no profiles are configured, returns workspaceDir (single-agent backward compatible).
  * Profile root is always resolved under workspaceDir to prevent path traversal.
  */
 export function resolveProfileRoot(
@@ -545,7 +551,8 @@ export function resolveProfileRoot(
   const profile = list.find((p) => p.id === id) ?? list[0];
   if (!profile) throw new Error("profiles configured but no profile found");
   const base = resolve(workspaceDir);
-  const candidate = resolve(base, profile.root);
+  const profileRootRel = profile.id === "default" && (profile.root === "." || profile.root === "") ? DEFAULT_PROFILE_ROOT : profile.root;
+  const candidate = resolve(base, profileRootRel);
   const prefix = base.endsWith(sep) ? base : base + sep;
   if (candidate !== base && !candidate.startsWith(prefix)) {
     throw new Error(`profile root must be under workspace: ${profile.root}`);

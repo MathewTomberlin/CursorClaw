@@ -7,6 +7,7 @@ import fastifyCors from "@fastify/cors";
 import type { ChannelHub } from "./channels.js";
 import {
   type CursorClawConfig,
+  DEFAULT_PROFILE_ROOT,
   type DeepPartial,
   type GatewayConfig,
   getDefaultProfileId,
@@ -331,8 +332,12 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
     const config = deps.getConfig();
     const profiles =
       (config.profiles?.length ?? 0) > 0
-        ? config.profiles!.map((p) => ({ id: p.id, root: p.root, modelId: p.modelId }))
-        : [{ id: "default", root: "." }];
+        ? config.profiles!.map((p) => ({
+            id: p.id,
+            root: p.id === "default" && (p.root === "." || p.root === "") ? DEFAULT_PROFILE_ROOT : p.root,
+            modelId: p.modelId
+          }))
+        : [{ id: "default", root: DEFAULT_PROFILE_ROOT }];
     const defaultProfileId = deps.defaultProfileId ?? getDefaultProfileId(config);
     const defaultCtx = getEffectiveProfileContext(deps, defaultProfileId);
     const base = {
@@ -830,8 +835,12 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         const list = config.profiles;
         const profiles =
           (list?.length ?? 0) > 0
-            ? list!.map((p) => ({ id: p.id, root: p.root, modelId: p.modelId }))
-            : [{ id: "default", root: "." }];
+            ? list!.map((p) => ({
+                id: p.id,
+                root: p.id === "default" && (p.root === "." || p.root === "") ? DEFAULT_PROFILE_ROOT : p.root,
+                modelId: p.modelId
+              }))
+            : [{ id: "default", root: DEFAULT_PROFILE_ROOT }];
         result = {
           profiles,
           defaultProfileId: deps.defaultProfileId ?? getDefaultProfileId(config)
@@ -861,7 +870,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           throw new RpcGatewayError(400, "BAD_REQUEST", msg);
         }
         const newProfiles =
-          list.length === 0 ? [{ id: "default", root: "." }, { id, root }] : [...list, { id, root }];
+          list.length === 0 ? [{ id: "default", root: DEFAULT_PROFILE_ROOT }, { id, root }] : [...list, { id, root }];
         (configCreate as CursorClawConfig).profiles = newProfiles;
         await mkdir(profileRootPath, { recursive: true });
         const substrateConfig = configCreate.substrate;

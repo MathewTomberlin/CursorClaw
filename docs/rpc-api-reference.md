@@ -101,7 +101,7 @@ Returns operational snapshot including:
 
 - `gateway`
 - `defaultModel`
-- `profiles` — array of `{ id, root, modelId? }`; when no profiles are configured, `[{ id: "default", root: "." }]`
+- `profiles` — array of `{ id, root, modelId? }`; when no profiles are configured, `[{ id: "default", root: "profiles/default" }]`
 - `defaultProfileId` — id of the default profile
 - `queueWarnings`
 - `runtimeMetrics`
@@ -491,14 +491,14 @@ Returns:
 
 ```json
 {
-  "profiles": [ { "id": "default", "root": "." }, { "id": "assistant", "root": "profiles/assistant", "modelId": null } ],
+  "profiles": [ { "id": "default", "root": "profiles/default" }, { "id": "assistant", "root": "profiles/assistant", "modelId": null } ],
   "defaultProfileId": "default"
 }
 ```
 
-When no profiles are configured, returns `profiles: [{ id: "default", root: "." }]` and `defaultProfileId: "default"`.
+When no profiles are configured, returns `profiles: [{ id: "default", root: "profiles/default" }]` and `defaultProfileId: "default"`.
 
-**Concurrent heartbeats:** When at least one profile is configured but none has id `"default"`, the process adds an implicit default profile (workspace root) so that both the default and the named profile(s) receive heartbeats and run concurrently (e.g. default + Ollama). Each profile has its own session (`heartbeat:default`, `heartbeat:<id>`) and can send proactive replies independently.
+**Concurrent heartbeats:** When at least one profile is configured but none has id `"default"`, the process adds an implicit default profile with root `profiles/default` so that both the default and the named profile(s) receive heartbeats and run concurrently (e.g. default + Ollama). Each profile has its own directory and session (`heartbeat:default`, `heartbeat:<id>`) and can send proactive replies independently.
 
 ---
 
