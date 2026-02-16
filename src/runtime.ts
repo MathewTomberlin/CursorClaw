@@ -784,6 +784,29 @@ export class AgentRuntime {
         content: this.scrubText(`Workspace rules (AGENTS):\n\n${substrate.agents.trim()}`, scopeId)
       });
     }
+    // Tool-use mandate immediately after rules so it is never truncated by system prompt budget. Critical for
+    // Ollama/local models (e.g. Granite 3.2) which otherwise answer from context without calling tools.
+    const toolList = this.options.toolRouter.list();
+    if (toolList.length > 0) {
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(
+          "You have access to tools. You must use them: to read or edit substrate files (AGENTS.md, IDENTITY.md, ROADMAP.md, MEMORY.md, memory/YYYY-MM-DD.md) or any file, call the exec tool (e.g. cat, type, head, or sed/echo for edits). When advancing work or on heartbeats, read and update ROADMAP.md or memory files via exec as appropriate—do not skip tool use. To run scripts or tests, use exec. Do not guess file contents—call a tool to read or verify.",
+          scopeId
+        )
+      });
+      const modelIdForOllamaCheck = getModelIdForProfile(this.options.config, profileIdForSubstrate);
+      const activeModelConfig = this.options.config.models[modelIdForOllamaCheck];
+      if (activeModelConfig?.provider === "ollama") {
+        systemMessages.push({
+          role: "system",
+          content: this.scrubText(
+            "You are using the Ollama provider. You must use the provided tools—do not answer from memory or guess. To read substrate or any file: call the exec tool with a shell command (e.g. \"cat AGENTS.md\", \"type USER.md\", \"head -n 50 ROADMAP.md\"). To update a file: use exec with sed, echo, or another shell command. When the user asks about the workspace, rules, roadmap, or files, your first response must include one or more tool calls to read the relevant files; then answer from the tool results. On heartbeats, use exec to read ROADMAP.md and HEARTBEAT.md and to update substrate or memory as needed.",
+            scopeId
+          )
+        });
+      }
+    }
     if (substrate.identity?.trim()) {
       systemMessages.push({
         role: "system",
@@ -929,17 +952,6 @@ export class AgentRuntime {
         role: "system",
         content: this.scrubText(
           "Planning and automation: You have a planning file (e.g. ROADMAP.md) for milestones, roadmaps, and backlogs. Create or update it when the user or context implies goals; break work into concrete steps and priorities. During heartbeats (when no user message is pending), read the planning file and HEARTBEAT.md and make progress on the next item when appropriate—implement a small piece, run a check, or update status. User messages always take priority: the system will interrupt any in-flight heartbeat work when the user sends a message, let you respond to the user fully, then the next heartbeat tick continues from the planning file and HEARTBEAT checklist. Plan in ROADMAP, advance it on heartbeats, and stay responsive to the user.",
-          scopeId
-        )
-      });
-    }
-
-    // Encourage tool use so local models (e.g. Ollama Granite 3.2) reliably read/edit files and run commands instead of guessing.
-    if (this.options.toolRouter.list().length > 0) {
-      systemMessages.push({
-        role: "system",
-        content: this.scrubText(
-          "You have access to tools. Use them: to read or edit substrate files (AGENTS.md, IDENTITY.md, ROADMAP.md, etc.) or any file in the workspace, call the exec tool with the appropriate command (e.g. cat, type, head, or sed/echo for edits). To run scripts, run tests, or run shell commands, use exec. Do not guess file contents or assume what is on disk—call a tool to read or verify. Prefer calling tools before answering when the answer depends on files or commands.",
           scopeId
         )
       });

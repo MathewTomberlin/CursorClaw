@@ -34,11 +34,11 @@ Ollama may stream tool-call content (e.g. `function.name` in one chunk, `functio
 
 ### Tuning for tool use (Granite 3.2, 16GB VRAM)
 
-When tools are sent, the Ollama provider sends request `options` so the model reliably uses tools and reads/edits files:
+When tools are sent, the Ollama provider and runtime work together so the model reliably uses tools and reads/edits files:
 
 - **Defaults (when `ollamaOptions` is not set):** `temperature: 0.3`, `num_ctx: 8192`. Lower temperature helps tool-call consistency; `num_ctx` gives enough context for substrate and codebase.
 - **Override in config:** Add `ollamaOptions: { "temperature": 0.2, "num_ctx": 4096 }` (or other values) to your model entry in `openclaw.json` to tune for your hardware. For 16GB VRAM, 8192 or 4096 context is typical; reduce if you hit OOM.
-- The runtime also injects a system-prompt nudge telling the model to use tools (e.g. exec to read/edit files) and improves the exec tool description so the model sees it as the primary way to read substrate and codebase files.
+- **Runtime prompt:** The runtime injects a generic tool-use nudge for all providers, and when the active model is Ollama it adds a **second, stronger system message** that explicitly requires the model to use the provided tools: e.g. to read substrate (AGENTS.md, IDENTITY.md, ROADMAP.md) or any file via `exec` (cat/type/head), and to update files via exec (sed/echo). This addresses cases where capable models (e.g. Granite 3.2) otherwise answer from context without calling tools. The exec tool description already states it is the primary way to read or modify substrate and codebase files.
 
 ---
 
