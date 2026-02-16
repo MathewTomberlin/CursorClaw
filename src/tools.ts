@@ -693,9 +693,11 @@ export function createExecTool(args: {
                 }
                 continue;
               }
-              throw new Error(
-                "Unsupported sed command on Windows. Supported: sed -i 's/old/new/[g]' file, sed -i '/p/c replacement' file, sed -i '/p/d' file, sed -i '/p/a line' file."
-              );
+              lastResult = {
+                stdout: "",
+                stderr:
+                  "sed: Unsupported on Windows. Supported: sed -i 's/old/new/[g]' file, sed -i '/p/c replacement' file, sed -i '/p/d' file, sed -i '/p/a line' file.\n"
+              };
             }
             if (segBin === "echo") {
               const echo = parseEchoRedirect(segBin, segBinArgs);
@@ -1127,14 +1129,18 @@ export function createExecTool(args: {
               throw e;
             }
           }
-          throw new Error(
-            "Unsupported sed command on Windows. Supported: sed -i 's/old/new/[g]' file, sed -i '/p/c replacement' file, sed -i '/p/d' file, sed -i '/p/a line' file."
-          );
+          return {
+            stdout: "",
+            stderr:
+              "sed: Unsupported on Windows. Supported: sed -i 's/old/new/[g]' file, sed -i '/p/c replacement' file, sed -i '/p/d' file, sed -i '/p/a line' file.\n"
+          };
         }
-        if (platform() === "win32" && args.sandbox === undefined && bin === "sed") {
-          throw new Error(
-            "Unsupported sed command on Windows. Supported: sed -i 's/old/new/[g]' file, sed -i '/p/c replacement' file, sed -i '/p/d' file, sed -i '/p/a line' file."
-          );
+        if (platform() === "win32" && bin === "sed") {
+          return {
+            stdout: "",
+            stderr:
+              "sed: Unsupported on Windows. Supported: sed -i 's/old/new/[g]' file, sed -i '/p/c replacement' file, sed -i '/p/d' file, sed -i '/p/a line' file.\n"
+          };
         }
         if (platform() === "win32" && args.sandbox === undefined && bin === "echo") {
           const echo = parseEchoRedirect(bin, binArgs);
