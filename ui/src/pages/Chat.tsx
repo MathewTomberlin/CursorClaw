@@ -112,7 +112,7 @@ export default function Chat() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "auto" });
   }, [messages, streamEvents]);
 
-  // Poll for proactive messages from heartbeat (e.g. BIRTH) for the selected profile; append to thread when one arrives
+  // Proactive message is delivered only via heartbeat.poll (status returns hasPendingProactiveMessage flag only, not the body), so we show it once here.
   useEffect(() => {
     const poll = async () => {
       try {
@@ -120,7 +120,6 @@ export default function Chat() {
         if (proactiveMessage?.trim()) {
           const text = proactiveMessage.trim();
           setMessages((prev) => {
-            // Dedupe against any recent assistant message with same content (avoids duplicate heartbeat responses)
             const recent = prev.slice(-20);
             const alreadyShown = recent.some(
               (m) => m.role === "assistant" && (m.content ?? "").trim() === text

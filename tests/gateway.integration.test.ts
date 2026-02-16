@@ -1218,18 +1218,19 @@ describe("gateway integration", () => {
     expect(second.statusCode).toBe(200);
     expect(second.json().result).toEqual({ result: "ok" });
     const statusRes = await app.inject({ method: "GET", url: "/status" });
-    expect(statusRes.json().pendingProactiveMessage).toBeUndefined();
+    expect(statusRes.json().hasPendingProactiveMessage).toBeUndefined();
     await app.close();
   });
 
-  it("GET /status includes pendingProactiveMessage when getter returns one", async () => {
+  it("GET /status includes hasPendingProactiveMessage when getter returns one", async () => {
     const app = await createGateway({
       getPendingProactiveMessage: () => "Proactive greeting",
       takePendingProactiveMessage: () => null
     });
     const status = await app.inject({ method: "GET", url: "/status" });
     expect(status.statusCode).toBe(200);
-    expect(status.json().pendingProactiveMessage).toBe("Proactive greeting");
+    expect(status.json().hasPendingProactiveMessage).toBe(true);
+    expect((status.json() as { pendingProactiveMessage?: string }).pendingProactiveMessage).toBeUndefined();
     await app.close();
   });
 

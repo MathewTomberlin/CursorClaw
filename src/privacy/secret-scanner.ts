@@ -181,7 +181,13 @@ export class SecretScanner {
           break;
         }
         const token = match[1] ?? "";
-        if (token.length >= 28 && shannonEntropy(token) >= 4.0) {
+        // Skip path-like tokens so agent file refs and workspace links are preserved in proactive messages
+        const looksLikePath = /[/\\]/.test(token) || /^[A-Za-z]:/.test(token);
+        if (
+          token.length >= 28 &&
+          shannonEntropy(token) >= 4.0 &&
+          !looksLikePath
+        ) {
           findings.push({
             detector: "high-entropy-token",
             label: "HIGH_ENTROPY_TOKEN",

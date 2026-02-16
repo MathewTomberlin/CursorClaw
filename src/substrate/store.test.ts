@@ -58,7 +58,7 @@ describe("SubstrateStore", () => {
     expect(onDisk).toBe("New identity.");
   });
 
-  it("ensureDefaults creates missing files with default content", async () => {
+  it("ensureDefaults creates missing files with default content but not BIRTH.md", async () => {
     const dir = await mkdtemp(join(tmpdir(), "substrate-ensure-"));
     tempDirs.push(dir);
     const store = new SubstrateStore();
@@ -69,8 +69,24 @@ describe("SubstrateStore", () => {
     expect(content.identity).toBeDefined();
     expect(content.identity).toContain("IDENTITY.md");
     expect(content.soul).toBeDefined();
-    const { readFile } = await import("node:fs/promises");
+    expect(content.birth).toBeUndefined();
+    const { readFile, access } = await import("node:fs/promises");
     const onDisk = await readFile(join(dir, "IDENTITY.md"), "utf8");
     expect(onDisk.trim()).toBe(content.identity);
+    await expect(access(join(dir, "BIRTH.md"))).rejects.toThrow();
+  });
+
+  it("ensureDefaults with includeBirth: true creates BIRTH.md", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "substrate-ensure-birth-"));
+    tempDirs.push(dir);
+    const store = new SubstrateStore();
+    await store.reload(dir);
+    await store.ensureDefaults(dir, undefined, { includeBirth: true });
+    const content = store.get();
+    expect(content.birth).toBeDefined();
+    expect(content.birth).toContain("BIRTH");
+    const { readFile } = await import("node:fs/promises");
+    const onDisk = await readFile(join(dir, "BIRTH.md"), "utf8");
+    expect(onDisk.trim()).toBe(content.birth);
   });
 });

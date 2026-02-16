@@ -134,3 +134,10 @@ If the model or Ollama does not support tools, the agent still runs for text-onl
 - **Model not found / 404:** The `ollamaModelName` in config must match the name from `ollama list`. Pull the model first: `ollama pull <name>`.
 - **Timeout / slow inference:** Local models (especially on CPU or limited VRAM) can be slow. Increase the model’s `timeoutMs` in config if requests often time out. See [PMR §8](PMR-provider-model-resilience.md#8-local-and-optional-providers-ollama) for graceful degradation and fallback behavior.
 - **Validation fails:** Run `npm run validate-model -- --modelId=<id> --fullSuite` and fix any reported errors (e.g. timeout, tool-call unsupported). See [PMR §8](PMR-provider-model-resilience.md#8-local-and-optional-providers-ollama) and [Ollama tool-call support](Ollama-tool-call-support.md) for version and model requirements.
+
+---
+
+## See also
+
+- [Provider and model support](provider-model-support.md) — at-a-glance table of all providers (Ollama, cursor-agent-cli, openai-compatible, etc.).
+- [Configuration Reference §4.15](configuration-reference.md#415-models-and-defaultmodel) — full model config fields and examples.

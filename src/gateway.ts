@@ -34,8 +34,12 @@ import {
   validateBindAddress
 } from "./security.js";
 import type { LifecycleStream } from "./lifecycle-stream/types.js";
-import type { SubstrateStore } from "./substrate/index.js";
-import { DEFAULT_SUBSTRATE_PATHS, SUBSTRATE_DEFAULTS, SUBSTRATE_KEYS } from "./substrate/index.js";
+import {
+  DEFAULT_SUBSTRATE_PATHS,
+  SUBSTRATE_DEFAULTS,
+  SUBSTRATE_KEYS,
+  SubstrateStore
+} from "./substrate/index.js";
 import type { RpcRequest, RpcResponse, SessionContext } from "./types.js";
 import { getThread, setThread, appendMessage } from "./thread-store.js";
 
@@ -353,8 +357,10 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         toolIsolationEnabled: deps.incidentCommander.isToolIsolationEnabled()
       }
     };
-    const pendingProactive = defaultCtx.getPendingProactiveMessage?.() ?? null;
-    return pendingProactive !== null ? { ...base, pendingProactiveMessage: pendingProactive } : base;
+    // Expose only a flag so the message body is delivered once via heartbeat.poll; avoids duplicate display and leaking scrubbed placeholder text (e.g. HIGH_ENTROPY_TOKEN) in status/summary views.
+    const hasPendingProactiveMessage =
+      (defaultCtx.getPendingProactiveMessage?.() ?? null) !== null;
+    return hasPendingProactiveMessage ? { ...base, hasPendingProactiveMessage: true } : base;
   });
 
   app.post("/rpc", async (request, reply) => {
@@ -849,6 +855,12 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           list.length === 0 ? [{ id: "default", root: "." }, { id, root }] : [...list, { id, root }];
         (configCreate as CursorClawConfig).profiles = newProfiles;
         await mkdir(profileRootPath, { recursive: true });
+        const substrateConfig = configCreate.substrate;
+        if (substrateConfig) {
+          const substrateStore = new SubstrateStore();
+          await substrateStore.reload(profileRootPath, substrateConfig);
+          await substrateStore.ensureDefaults(profileRootPath, substrateConfig, { includeBirth: true });
+        }
         const configPath = await writeConfigToDisk(configCreate, { cwd: deps.workspaceRoot });
         deps.onConfigWritten?.();
         result = { profile: { id, root }, configPath };

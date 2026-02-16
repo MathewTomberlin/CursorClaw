@@ -45,12 +45,17 @@ export class SubstrateStore {
    * Create any missing or empty substrate files with default template content.
    * Call after reload when you want empty slots to be filled with defaults on disk
    * (OpenClaw-style lifelike behavior).
+   * BIRTH.md is only created when `includeBirth: true` (e.g. when seeding a new
+   * agent profile); otherwise it is never auto-created so it exists only at profile creation.
    */
   async ensureDefaults(
     workspaceDir: string,
-    config: SubstrateConfig | undefined
+    config: SubstrateConfig | undefined,
+    options?: { includeBirth?: boolean }
   ): Promise<void> {
+    const includeBirth = options?.includeBirth === true;
     for (const key of SUBSTRATE_KEYS) {
+      if (key === "birth" && !includeBirth) continue;
       const current = (this.content as Record<string, string | undefined>)[key];
       const defaultContent = SUBSTRATE_DEFAULTS[key];
       const missingOrEmpty = current == null || (typeof current === "string" && current.trim() === "");

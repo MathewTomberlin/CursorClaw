@@ -217,8 +217,8 @@ export interface StatusPayload {
   profiles?: ProfileInfo[];
   defaultProfileId?: string;
   queueWarnings: string[];
-  /** If present, the agent sent a proactive message during a heartbeat (e.g. BIRTH); poll heartbeat.poll to consume. */
-  pendingProactiveMessage?: string;
+  /** If true, a proactive message is pending; open Chat and poll heartbeat.poll to receive it once (avoids duplicate display and placeholder text in status). */
+  hasPendingProactiveMessage?: boolean;
   runtimeMetrics: {
     turnsStarted: number;
     turnsCompleted: number;
