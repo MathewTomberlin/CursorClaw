@@ -43,7 +43,7 @@ Granite 3.2’s tool-calling behavior is sensitive to **how many messages** are 
 **Fix (two steps):**
 
 1. Set **`toolTurnContext: "minimal"`** so the runtime sends only the latest user message (plus system) for that turn.
-2. If the model still does not call tools, set **`ollamaMinimalSystem: true`** on the same model. The runtime will then send a **single short system message** (how to use exec to read/edit files) and **prepend** to the user message: "You must respond by calling one or more of the provided tools… User request: …". This matches the minimal prompt shape (one system block + one user message) that many Ollama tool-capable models need to actually emit tool calls. No AGENTS/Identity/Soul/memory/roadmap blocks are sent in that mode.
+2. If the model still does not call tools, set **`ollamaMinimalSystem: true`** on the same model. The runtime will then send a **short system message** (how to use exec to read/edit files), **inject AGENTS.md, IDENTITY.md, and SOUL.md** so the agent has substrate in context, and **prepend** to the user message: "You must respond by calling one or more of the provided tools… User request: …". This keeps the prompt minimal while giving the Ollama agent workspace rules and identity. Memory, roadmap, and other blocks are still omitted in that mode.
 
 Example:
 

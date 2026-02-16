@@ -64,17 +64,26 @@ function parseSedInPlaceChange(command: string): { pattern: string; replacement:
 }
 
 /**
- * Parse echo ... > file from (bin, binArgs). Returns { content, filePath } or null.
- * Content is joined from args before ">"; optional surrounding quotes are stripped.
+ * Parse sed -i '/pattern/d' file (delete lines matching pattern). Returns null if not matched.
  */
-function parseEchoRedirect(bin: string, binArgs: string[]): { content: string; filePath: string } | null {
+function parseSedInPlaceDelete(command: string): { pattern: string; filePath: string } | null {
+  const m = command.match(/sed\s+-i\s+['"]\/([^/]*)\/d['"]\s+(\S+)/);
+  if (!m || m[1] === undefined || m[2] === undefined) return null;
+  return { pattern: m[1], filePath: m[2] };
+}
+
+/**
+ * Parse echo ... > file or echo ... >> file from (bin, binArgs). Returns { content, filePath, append } or null.
+ * Content is joined from args before ">" or ">>"; optional surrounding quotes are stripped.
+ */
+function parseEchoRedirect(bin: string, binArgs: string[]): { content: string; filePath: string; append?: boolean } | null {
   if (bin !== "echo" || binArgs.length < 2) return null;
-  const idx = binArgs.indexOf(">");
-  if (idx === -1 || idx === binArgs.length - 1) return null;
-  const content = binArgs.slice(0, idx).join(" ").replace(/^\s*['"]|['"]\s*$/g, "").trim();
-  const filePath = binArgs[idx + 1];
+  const idxRedirect = binArgs.findIndex((a) => a === ">" || a === ">>");
+  if (idxRedirect === -1 || idxRedirect === binArgs.length - 1) return null;
+  const content = binArgs.slice(0, idxRedirect).join(" ").replace(/^\s*['"]|['"]\s*$/g, "").trim();
+  const filePath = binArgs[idxRedirect + 1];
   if (!filePath) return null;
-  return { content, filePath };
+  return { content, filePath, append: binArgs[idxRedirect] === ">>" };
 }
 
 export function classifyCommandIntent(command: string): ExecIntent {
@@ -490,6 +499,97 @@ export function createExecTool(args: {
             throw new Error("path must be under the current agent profile root (only this profile's substrate, memory, and files are allowed)");
           }
         };
+        // On Windows, compound commands (cmd1 && cmd2) are run as separate segments so sed/echo run in Node instead of spawning missing binaries.
+        if (platform() === "win32" && parsed.command.includes(" && ")) {
+          const segments = parsed.command.split(" && ").map((s) => s.trim()).filter(Boolean);
+          let lastResult: { stdout: string; stderr: string } = { stdout: "", stderr: "" };
+          for (const seg of segments) {
+            const [segBin, ...segBinArgs] = seg.split(/\s+/).filter(Boolean);
+            if (!segBin) continue;
+            if (!args.allowedBins.includes(segBin)) {
+              throw new Error(`bin "${segBin}" not in allowlist`);
+            }
+            const segIntent = classifyCommandIntent(seg);
+            if (segBin === "cat" || segBin === "type") {
+              if (segBinArgs.length > 0 && segIntent === "read-only") {
+                const chunks: string[] = [];
+                for (const fileArg of segBinArgs) {
+                  const pathResolved = resolve(cwd, fileArg);
+                  ensureUnderProfile(pathResolved);
+                  const content = await readFile(pathResolved, "utf8");
+                  chunks.push(content);
+                }
+                lastResult = { stdout: chunks.join(""), stderr: "" };
+                continue;
+              }
+            }
+            if (segBin === "sed" && segIntent === "mutating") {
+              const sedSub = parseSedInPlace(seg);
+              if (sedSub) {
+                const pathResolved = resolve(cwd, sedSub.filePath);
+                ensureUnderProfile(pathResolved);
+                const content = await readFile(pathResolved, "utf8");
+                const regex = new RegExp(sedSub.pattern, sedSub.global ? "g" : "");
+                await writeFile(pathResolved, content.replace(regex, sedSub.replacement));
+                lastResult = { stdout: "", stderr: "" };
+                continue;
+              }
+              const sedChange = parseSedInPlaceChange(seg);
+              if (sedChange) {
+                const pathResolved = resolve(cwd, sedChange.filePath);
+                ensureUnderProfile(pathResolved);
+                const content = await readFile(pathResolved, "utf8");
+                const regex = new RegExp(sedChange.pattern);
+                const newContent = content
+                  .split(/\r?\n/)
+                  .map((line) => (regex.test(line) ? sedChange.replacement : line))
+                  .join("\n");
+                await writeFile(pathResolved, newContent);
+                lastResult = { stdout: "", stderr: "" };
+                continue;
+              }
+              const sedDelete = parseSedInPlaceDelete(seg);
+              if (sedDelete) {
+                const pathResolved = resolve(cwd, sedDelete.filePath);
+                ensureUnderProfile(pathResolved);
+                const content = await readFile(pathResolved, "utf8");
+                const regex = new RegExp(sedDelete.pattern);
+                const newContent = content.split(/\r?\n/).filter((line) => !regex.test(line)).join("\n");
+                await writeFile(pathResolved, newContent);
+                lastResult = { stdout: "", stderr: "" };
+                continue;
+              }
+            }
+            if (segBin === "echo" && segIntent === "mutating") {
+              const echo = parseEchoRedirect(segBin, segBinArgs);
+              if (echo) {
+                const pathResolved = resolve(cwd, echo.filePath);
+                ensureUnderProfile(pathResolved);
+                if (echo.append) {
+                  const existing = await readFile(pathResolved, "utf8").catch(() => "");
+                  const sep = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+                  await writeFile(pathResolved, existing + sep + echo.content);
+                } else {
+                  await writeFile(pathResolved, echo.content);
+                }
+                lastResult = { stdout: "", stderr: "" };
+                continue;
+              }
+            }
+            if (profileRoot) {
+              for (const arg of segBinArgs) {
+                const pathResolved = resolve(cwd, arg);
+                ensureUnderProfile(pathResolved);
+              }
+            }
+            lastResult = await sandbox.run(segBin, segBinArgs, {
+              cwd,
+              maxBufferBytes: maxBuffer,
+              timeoutMs: 15_000
+            });
+          }
+          return { stdout: lastResult.stdout, stderr: lastResult.stderr };
+        }
         if (platform() === "win32" && (bin === "cat" || bin === "type") && binArgs.length > 0 && intent === "read-only") {
           const chunks: string[] = [];
           for (const fileArg of binArgs) {
@@ -525,13 +625,32 @@ export function createExecTool(args: {
             await writeFile(pathResolved, newContent);
             return { stdout: "", stderr: "" };
           }
+          const sedDelete = parseSedInPlaceDelete(parsed.command);
+          if (sedDelete) {
+            const pathResolved = resolve(cwd, sedDelete.filePath);
+            ensureUnderProfile(pathResolved);
+            const content = await readFile(pathResolved, "utf8");
+            const regex = new RegExp(sedDelete.pattern);
+            const newContent = content
+              .split(/\r?\n/)
+              .filter((line) => !regex.test(line))
+              .join("\n");
+            await writeFile(pathResolved, newContent);
+            return { stdout: "", stderr: "" };
+          }
         }
         if (platform() === "win32" && bin === "echo" && intent === "mutating") {
           const echo = parseEchoRedirect(bin, binArgs);
           if (echo) {
             const pathResolved = resolve(cwd, echo.filePath);
             ensureUnderProfile(pathResolved);
-            await writeFile(pathResolved, echo.content);
+            if (echo.append) {
+              const existing = await readFile(pathResolved, "utf8").catch(() => "");
+              const sep = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+              await writeFile(pathResolved, existing + sep + echo.content);
+            } else {
+              await writeFile(pathResolved, echo.content);
+            }
             return { stdout: "", stderr: "" };
           }
         }
@@ -1134,10 +1253,17 @@ export function createRecallMemoryTool(args: {
     riskLevel: "low",
     execute: async (rawArgs: unknown, ctx?: ToolExecuteContext) => {
       const parsed = rawArgs as { query: string; top_k?: number };
-      if (ctx?.channelKind !== "web" || !ctx?.profileRoot) {
-        return { error: "recall_memory is only available in the main session." };
+      const profileRoot = ctx?.profileRoot;
+      const allowedChannel =
+        ctx?.channelKind === "web" ||
+        ctx?.channelKind === "dm" ||
+        ctx?.channelKind === "mobile" ||
+        ctx?.sessionId?.startsWith?.("heartbeat:") === true;
+      const canRecall = profileRoot && allowedChannel;
+      if (!canRecall) {
+        return { error: "recall_memory is only available in the main or heartbeat session." };
       }
-      const results = await args.getRecallResults(ctx.profileRoot, parsed.query, parsed.top_k ?? 5);
+      const results = await args.getRecallResults(profileRoot, parsed.query, parsed.top_k ?? 5);
       return { results };
     }
   };
@@ -1159,7 +1285,7 @@ export function createRememberThisTool(args: {
   return {
     name: "remember_this",
     description:
-      "Store something in long-term memory so it can be recalled later. Use when the user says 'remember this', 'remember that', or asks you to keep a fact, preference, or decision. Use category 'learned' when storing a lesson inferred from feedback or a repeated pattern. Only available in the main web session.",
+      "Store something in long-term memory so it can be recalled later. Use when the user says 'remember this', 'remember that', or asks you to keep a fact, preference, or decision. Use category 'learned' when storing a lesson inferred from feedback or a repeated pattern. Available in the main web session and during heartbeat.",
     schema: {
       type: "object",
       properties: {
@@ -1186,12 +1312,15 @@ export function createRememberThisTool(args: {
     riskLevel: "low",
     execute: async (rawArgs: unknown, ctx?: ToolExecuteContext) => {
       const parsed = rawArgs as { text: string; category?: string; sensitivity?: string };
-      const hasMainSessionContext =
-        ctx?.channelKind === "web" &&
-        (ctx?.profileRoot ?? ctx?.profileId) != null &&
-        ctx?.sessionId != null;
-      if (!hasMainSessionContext) {
-        return { error: "remember_this is only available in the main session." };
+      const allowedChannel =
+        ctx?.channelKind === "web" ||
+        ctx?.channelKind === "dm" ||
+        ctx?.channelKind === "mobile" ||
+        ctx?.sessionId?.startsWith?.("heartbeat:") === true;
+      const hasValidContext =
+        (ctx?.profileRoot ?? ctx?.profileId) != null && ctx?.sessionId != null && allowedChannel;
+      if (!hasValidContext) {
+        return { error: "remember_this is only available in the main or heartbeat session." };
       }
       const category = (parsed.category ?? "note").trim() || "note";
       const sensitivity = SENSITIVITY_LABELS.includes((parsed.sensitivity ?? "private-user") as SensitivityLabel)

@@ -837,6 +837,25 @@ export class AgentRuntime {
           scopeId
         )
       });
+      // Inject AGENTS.md (and identity/soul) so the Ollama agent has substrate in context; minimal mode otherwise omits it.
+      if (substrate.agents?.trim()) {
+        systemMessages.push({
+          role: "system",
+          content: this.scrubText(`Workspace rules (AGENTS):\n\n${substrate.agents.trim()}`, scopeId)
+        });
+      }
+      if (substrate.identity?.trim()) {
+        systemMessages.push({
+          role: "system",
+          content: this.scrubText(`Identity:\n\n${substrate.identity.trim()}`, scopeId)
+        });
+      }
+      if (substrate.soul?.trim()) {
+        systemMessages.push({
+          role: "system",
+          content: this.scrubText(`Soul:\n\n${substrate.soul.trim()}`, scopeId)
+        });
+      }
       const lastIdx = userMessages.length - 1;
       const u = lastIdx >= 0 ? userMessages[lastIdx] : undefined;
       if (u !== undefined) {
