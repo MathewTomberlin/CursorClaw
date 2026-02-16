@@ -22,7 +22,8 @@ export class MemoryCollectorPlugin implements CollectorPlugin {
   ) {}
 
   async collect(context: PluginContext): Promise<PluginArtifact[]> {
-    const records = await this.memory.retrieveForSession({
+    const store = context.memoryStore ?? this.memory;
+    const records = await store.retrieveForSession({
       sessionId: context.sessionId,
       allowSecret: this.allowSecret
     });

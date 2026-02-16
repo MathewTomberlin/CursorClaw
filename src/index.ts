@@ -483,7 +483,10 @@ async function main(): Promise<void> {
   });
   let recentBackgroundTestsPassing = false;
 
-  const getSubstrate = (): SubstrateContent => defaultCtx.substrateStore!.get();
+  const getSubstrate = (profileId: string): SubstrateContent => {
+    const ctx = profileContextMap.get(profileId) ?? defaultCtx;
+    return ctx.substrateStore?.get() ?? {};
+  };
 
   const runStore = new RunStore({
     stateFile: join(profileRoot, "tmp", "run-store.json"),
