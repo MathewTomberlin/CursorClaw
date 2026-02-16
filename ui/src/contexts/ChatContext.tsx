@@ -42,13 +42,15 @@ function normalizeForDedupe(s: string): string {
   return (s ?? "").trim().replace(/\s+/g, " ");
 }
 
-/** Remove <think>/</think> and <thinking>...</thinking> from assistant text so they are never shown. */
-function stripThinkingTags(text: string): string {
+/** Remove thinking/tool/code from assistant text so they are never shown (user-facing design). */
+function stripForDisplay(text: string): string {
   if (!text || text.length < 2) return text;
   let out = text;
   out = out.replace(/<think>[\s\S]*?<\/think>/gi, "");
   out = out.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "");
-  return out;
+  out = out.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "");
+  out = out.replace(/```[\s\S]*?```/g, (block) => (/tool_call/i.test(block) ? "" : block));
+  return out.replace(/\n\n+/g, "\n\n").trim();
 }
 
 /** Collapse consecutive assistant messages with identical trimmed content so the reply is only shown once. */
@@ -228,7 +230,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
                   ...pending.map((content) => ({
                     id: generateId(),
                     role: "assistant" as const,
-                    content: stripThinkingTags(content),
+                    content: stripForDisplay(content),
                     at: new Date().toISOString()
                   }))
                 ]
@@ -556,7 +558,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
           break;
         }
         const assistantText = out?.assistantText ?? "";
-        const finalContent = stripThinkingTags(assistantText);
+        const finalContent = stripForDisplay(assistantText);
 
         setStreamedContent("");
         setStreamedThinkingContent("");

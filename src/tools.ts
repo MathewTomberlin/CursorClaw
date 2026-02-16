@@ -377,6 +377,15 @@ export class ToolRouter {
     }
     const validate = this.getValidator(tool);
     const argsToValidate = call.name === "exec" ? normalizeExecArgs(call.args) : call.args;
+    if (call.name === "exec") {
+      const execArgs = argsToValidate as { command: string; cwd?: string };
+      if (typeof execArgs.command !== "string" || execArgs.command.trim() === "") {
+        this.logDecision(context, "deny", "TOOL_SCHEMA_INVALID", "exec requires non-empty command");
+        throw new Error(
+          `exec requires a non-empty "command" argument (e.g. {"command": "cat file.txt"}). Got: ${JSON.stringify(call.args ?? null)}`
+        );
+      }
+    }
     if (!validate(argsToValidate)) {
       this.logDecision(context, "deny", "TOOL_SCHEMA_INVALID", JSON.stringify(validate.errors));
       throw new Error(`invalid tool args for ${call.name}`);

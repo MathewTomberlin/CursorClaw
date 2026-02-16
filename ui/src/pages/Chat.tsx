@@ -19,9 +19,8 @@ function useMediaQuery(query: string): boolean {
   return matches;
 }
 
-/** Friendly label for a single stream event (last status only; overwrites as status changes). */
+/** Friendly label for a single stream event. Per user-facing design: thinking and tool names are not shown; use generic "Working…" so the user does not see thinking or tool/code details. */
 function formatStreamEventLabel(ev: StreamEvent): string {
-  const toolName = ev.payload?.call?.name;
   switch (ev.type) {
     case "connecting":
       return "Connecting…";
@@ -32,23 +31,8 @@ function formatStreamEventLabel(ev: StreamEvent): string {
     case "streaming":
       return "Receiving reply…";
     case "thinking":
-      return "Thinking…";
     case "tool":
-      if (!toolName) return "Running tool…";
-      // Prefer short, readable labels for common tools
-      const friendly: Record<string, string> = {
-        web_search: "Searching the web…",
-        web_fetch: "Fetching page…",
-        read_file: "Reading file…",
-        write: "Writing file…",
-        edit_notebook: "Editing notebook…",
-        grep: "Searching codebase…",
-        list_dir: "Listing files…",
-        run_terminal_cmd: "Running command…",
-        recall_memory: "Recalling memory…",
-        remember_this: "Saving note…",
-      };
-      return friendly[toolName] ?? `Running ${toolName}…`;
+      return "Working…";
     case "assistant":
       return "Writing reply…";
     case "compaction":
@@ -143,7 +127,7 @@ export default function Chat() {
           {
             id: `streaming-${currentRunId ?? "pending"}`,
             role: "assistant" as const,
-            content: stripThinkingTags(streamedContent),
+            content: stripForDisplay(streamedContent),
             at: undefined
           }
         ]
@@ -175,13 +159,15 @@ export default function Chat() {
     return (s ?? "").trim().replace(/\s+/g, " ");
   }
 
-  /** Remove <think>/</think> and <thinking>...</thinking> from assistant text so they are never shown. */
-  function stripThinkingTags(text: string): string {
+  /** Remove thinking/tool/code from assistant text so they are never shown (user-facing design). */
+  function stripForDisplay(text: string): string {
     if (!text || text.length < 2) return text;
     let out = text;
     out = out.replace(/<think>[\s\S]*?<\/think>/gi, "");
     out = out.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "");
-    return out;
+    out = out.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "");
+    out = out.replace(/```[\s\S]*?```/g, (block) => (/tool_call/i.test(block) ? "" : block));
+    return out.replace(/\n\n+/g, "\n\n").trim();
   }
 
   // Poll all profiles for proactive messages so both Cursor and Ollama (or other) agents' heartbeats are visible.
@@ -284,27 +270,21 @@ export default function Chat() {
   const showWorkingFallback =
     loading && loadingDurationMs > 1500 && !hasRealProgress && runEvents.length <= 2;
 
-  // When we already have streamed content, show "Writing reply…". When we're past connecting (started/streaming) but no reply yet, show thinking phase so user sees "Thinking…" and the thinking block instead of only "Connecting…".
-  const isPreReplyStreaming =
-    loading &&
-    !streamedContent &&
-    (lastStreamEvent?.type === "streaming" || lastStreamEvent?.type === "started");
+  // When we have streamed content, show "Writing reply…". Otherwise use the last stream event label (generic "Working…" for thinking/tool per user-facing design) or fallbacks.
   const statusLabel =
     loading && streamedContent
       ? "Writing reply…"
-      : isPreReplyStreaming
-        ? "Thinking…"
-        : lastStreamEvent
-          ? formatStreamEventLabel(lastStreamEvent)
-          : showWorkingFallback
+      : lastStreamEvent
+        ? formatStreamEventLabel(lastStreamEvent)
+        : showWorkingFallback
+          ? currentRunId
+            ? "Connecting…"
+            : "Starting run…"
+          : loading
             ? currentRunId
               ? "Connecting…"
               : "Starting run…"
-            : loading
-              ? currentRunId
-                ? "Connecting…"
-                : "Starting run…"
-              : "Starting…";
+            : "Starting…";
 
 
   const sendToChannel = async () => {
@@ -422,7 +402,7 @@ export default function Chat() {
                   <span className="chat-bubble-role">{msg.role === "user" ? "You" : "Agent"}</span>
                   {msg.role === "assistant" ? (
                     <div className="chat-bubble-content markdown-body agent-reply">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{stripThinkingTags(msg.content ?? "") || "—"}</ReactMarkdown>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{stripForDisplay(msg.content ?? "") || "—"}</ReactMarkdown>
                       {isStreamingBubble && <span className="chat-streaming-cursor" aria-hidden />}
                     </div>
                   ) : (
@@ -440,23 +420,10 @@ export default function Chat() {
               <div className="chat-bubble chat-bubble--assistant chat-bubble--loading" data-role="assistant">
                 <span className="chat-bubble-role">Agent</span>
                 <div className="chat-bubble-content">
-                  {/* Show thinking block when: we have thinking content, we're in "thinking" status, or we're in "streaming" but no reply yet (so user sees thinking phase instead of only "Connecting…"). */}
-                  {(lastStreamEvent?.type === "thinking" ||
-                    streamedThinkingContent.length > 0 ||
-                    isPreReplyStreaming) ? (
-                    <div className="chat-thinking-block" role="status" aria-live="polite" aria-label="Agent thinking">
-                      <span className="chat-thinking-label">Thinking:</span>
-                      {streamedThinkingContent.length > 0 ? (
-                        <pre className="chat-thinking-text">{streamedThinkingContent}</pre>
-                      ) : (
-                        <span className="chat-thinking-dots" aria-hidden>Thinking<span className="chat-thinking-dot">.</span><span className="chat-thinking-dot">.</span><span className="chat-thinking-dot">.</span></span>
-                      )}
-                    </div>
-                  ) : (
-                    <span className="chat-typing" role="status" aria-live="polite" aria-label={statusLabel}>
-                      {statusLabel}
-                    </span>
-                  )}
+                  {/* Per user-facing design: thinking and tool/code are not visible. Show only a generic status line (no thinking block, no tool names). */}
+                  <span className="chat-typing" role="status" aria-live="polite" aria-label={statusLabel}>
+                    {statusLabel}
+                  </span>
                 </div>
               </div>
             )}

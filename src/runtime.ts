@@ -186,6 +186,23 @@ export function stripThinkingTags(text: string): string {
   return out;
 }
 
+/** Remove tool_call and code-block content that should not be shown to the user. Strips <tool_call>...</tool_call> and fenced blocks that contain "tool_call". */
+export function stripToolCallAndCodeBlocks(text: string): string {
+  if (!text || text.length < 2) return text;
+  let out = text;
+  out = out.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "");
+  // Fenced code blocks (```...```) that contain tool_call
+  out = out.replace(/```[\s\S]*?```/g, (block) =>
+    /tool_call/i.test(block) ? "" : block
+  );
+  return out.replace(/\n\n+/g, "\n\n").trim();
+}
+
+/** Strip all non-user-visible content: thinking tags and tool/code blocks. Use for reply text shown in stream and final message. */
+function stripReplyForUser(text: string): string {
+  return stripToolCallAndCodeBlocks(stripThinkingTags(text));
+}
+
 /** Prefixes that indicate a paragraph is a summary/wrap-up (for deduping duplicated summaries on heartbeat continuation). */
 const SUMMARY_LIKE_PREFIXES = /^(Summary|In summary|In short|TL;DR|Wrap-up|Bottom line|Overall|To summarize|In brief|That's it for|No further (updates?|progress)|Nothing else to report|All set for this (tick|cycle)|Done for now)\s*[:.]?\s*/i;
 
@@ -725,7 +742,7 @@ export class AgentRuntime {
                   content.startsWith(previousThinkingContent)
                     ? content.slice(previousThinkingContent.length)
                     : content;
-                replyContent = stripThinkingTags(replyContent);
+                replyContent = stripReplyForUser(replyContent);
                 const isFullMessage = Boolean(data?.isFullMessage);
                 if (replyContent.length === 0) {
                   emittedCount += 1;
@@ -889,7 +906,7 @@ export class AgentRuntime {
             emit("compaction", { reason: "assistant text exceeded 3000 chars" });
           }
 
-          assistantText = stripThinkingTags(assistantText);
+          assistantText = stripReplyForUser(assistantText);
           assistantText = removeDuplicatedTrailingSuffix(assistantText);
           assistantText = removeDuplicatedTrailingParagraph(assistantText);
           assistantText = collapseDuplicateConsecutiveLines(assistantText);

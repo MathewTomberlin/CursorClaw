@@ -1,8 +1,33 @@
 # Streaming UX: Replace-Then-Append Design
 
+## User-facing design (what the user sees)
+
+When the user sends a message or a heartbeat occurs, the agent runs a **thread of actions**. Each action may include:
+
+- **Thinking** (depending on model)
+- **Tool calls** or **formatted code** (depending on model)
+- **Unformatted text or message**
+
+Actions can chain (e.g. tool calls lead to further actions). Eventually a **Complete** signal is sent; then the **user-facing message** is output and shown in the message box.
+
+**Visibility rules:**
+
+| Content | Visible to user? |
+|--------|-------------------|
+| Thinking (any form) | **No** — never shown. |
+| Tool calls, formatted code, and their tags | **No** — never shown. |
+| Tags for thinking, tool calls, or code | **No** — never shown. |
+| Text/message from actions **other than the final** | **Yes** — one at a time as a **streaming update that overwrites** the previous one. |
+| When the **final** action of the thread completes | The streaming update area is **cleared**. |
+| Message/text of the **final** action | **Yes** — displayed in the message box as the assistant reply (unless another signal sets the final user message for the thread, e.g. for certain models/CLIs). |
+
+So from the user’s perspective: they see a single line of status or a single streaming reply that gets overwritten by the next, until the run completes; then the streaming area is cleared and only the final message remains in the thread. No thinking, no tool calls, no code blocks or tags.
+
+---
+
 ## Goal
 
-- **Thinking / pre-final phase:** Each new streaming or thinking event **replaces** the previous one so the user sees only the **latest** chunk (no accumulation).
+- **Thinking / pre-final phase:** Each new streaming or thinking event **replaces** the previous one so the user sees only the **latest** chunk (no accumulation). **User-facing:** thinking and tool/code are not shown at all; only a generic status or the latest reply text is shown.
 - **Final message phase:** When the agent is streaming the **final** reply, content is **appended** so the user sees the message being written.
 - **On completion:** Clear all streaming/thinking UI and show **only the final message** in the thread.
 
@@ -49,7 +74,7 @@
    - No change to assistant handling: continue setting `streamedContent` to `payload.content` on `assistant` events (backend sends accumulated content, so the message grows).
 
 2. **Chat.tsx**
-   - No structural change: loading bubble shows either thinking (when `streamedThinkingContent` is set) or status; when `streamedContent` is set we show the streaming assistant bubble. Clearing thinking on `final_message_start` ensures we don’t show thinking after the transition.
+   - No structural change: per user-facing design we do not show thinking; loading bubble shows only status (e.g. "Working…") or streaming reply (when `streamedThinkingContent` is set) or status; when `streamedContent` is set we show the streaming assistant bubble. Clearing thinking on `final_message_start` ensures we don’t clearing on `final_message_start` and `completed` as above.
    - Add `final_message_start` to `STATUS_EVENT_TYPES` and to `formatStreamEventLabel` (e.g. "Writing reply…") so the status line updates as soon as we transition to the final-message phase.
 
 ## Step-by-Step Implementation
