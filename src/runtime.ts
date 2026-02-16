@@ -2,7 +2,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
-import { getDefaultProfileId, getModelIdForProfile, type CursorClawConfig } from "./config.js";
+import {
+  getDefaultProfileId,
+  getModelIdForProfile,
+  type CursorClawConfig,
+  type ModelProviderConfig
+} from "./config.js";
 import {
   applyMaxContextTokens,
   estimateTokens,
@@ -91,6 +96,33 @@ function collapseDuplicateConsecutiveLines(text: string): string {
     }
   }
   return out.join("\n");
+}
+
+/**
+ * Decides whether to use minimal/tool-focused vs richer context for this turn when ollamaContextMode is "auto".
+ * Exported for unit tests. See docs/context-aware-system-behavior.md.
+ */
+export function shouldUseMinimalToolContext(
+  toolCount: number,
+  lastUserContent: string,
+  _modelConfig: ModelProviderConfig | undefined
+): boolean {
+  if (toolCount === 0) return false;
+  const lower = lastUserContent.toLowerCase().trim();
+  // Richer/creative: prefer full context for explanations, summaries, open-ended chat
+  const richer =
+    /\b(explain|summarize|summarise|describe|what is|how does|why does|why is|tell me about|write a (short )?story|roleplay|chat)\b/i.test(
+      lower
+    );
+  if (richer) return false;
+  // Tool-intent: file/substrate/workspace/edit/run/update
+  const toolIntent =
+    /\b(edit|update|run|read|write|substrate|ROADMAP|MEMORY|AGENTS\.md|IDENTITY\.md|file|folder|directory|exec|command|sed|cat|type)\b/i.test(
+      lower
+    ) || /[\w-]+\.(md|ts|js|json|txt)\b/.test(lastUserContent);
+  if (toolIntent) return true;
+  // Default when uncertain: minimal when tools provided (reliable tool use)
+  return true;
 }
 
 interface SessionQueueState {
@@ -819,26 +851,53 @@ export class AgentRuntime {
     const profileIdForSubstrate = request.session.profileId ?? getDefaultProfileId(this.options.config);
     const modelIdForTurn = getModelIdForProfile(this.options.config, profileIdForSubstrate);
     const modelConfigForTurn = this.options.config.models[modelIdForTurn];
-    if (
-      modelConfigForTurn?.toolTurnContext === "minimal" &&
-      this.options.toolRouter.list().length > 0 &&
-      userMessages.length > 0
-    ) {
-      const lastUser = [...freshness.messages].reverse().find((m) => m.role === "user");
-      if (lastUser) {
-        userMessages = [
-          { role: lastUser.role, content: this.scrubText(lastUser.content, scopeId) }
-        ];
+    const toolList = this.options.toolRouter.list();
+    const lastUser = [...freshness.messages].reverse().find((m) => m.role === "user");
+    const lastUserContent = lastUser?.content ?? "";
+    const hasLastUser = userMessages.length > 0 && lastUser !== undefined;
+
+    let useMinimalContext: boolean;
+    let useOllamaMinimalSystem: boolean;
+    if (modelConfigForTurn?.provider === "ollama") {
+      const mode = modelConfigForTurn.ollamaContextMode;
+      if (mode === "full") {
+        useMinimalContext = false;
+        useOllamaMinimalSystem = false;
+      } else if (mode === "minimal") {
+        useMinimalContext = toolList.length > 0 && hasLastUser;
+        useOllamaMinimalSystem = toolList.length > 0;
+      } else if (mode === "auto") {
+        const minimal = shouldUseMinimalToolContext(
+          toolList.length,
+          lastUserContent,
+          modelConfigForTurn
+        );
+        useMinimalContext = minimal && hasLastUser;
+        useOllamaMinimalSystem = minimal;
+      } else {
+        useMinimalContext =
+          modelConfigForTurn?.toolTurnContext === "minimal" &&
+          toolList.length > 0 &&
+          hasLastUser;
+        useOllamaMinimalSystem =
+          modelConfigForTurn?.ollamaMinimalSystem === true && toolList.length > 0;
       }
+    } else {
+      useMinimalContext =
+        modelConfigForTurn?.toolTurnContext === "minimal" &&
+        toolList.length > 0 &&
+        hasLastUser;
+      useOllamaMinimalSystem = false;
+    }
+
+    if (useMinimalContext && lastUser) {
+      userMessages = [
+        { role: lastUser.role, content: this.scrubText(lastUser.content, scopeId) }
+      ];
     }
     const systemMessages: Array<{ role: string; content: string }> = [];
 
     const substrate = this.options.getSubstrate?.(profileIdForSubstrate) ?? {};
-    const toolList = this.options.toolRouter.list();
-    const useOllamaMinimalSystem =
-      modelConfigForTurn?.provider === "ollama" &&
-      modelConfigForTurn?.ollamaMinimalSystem === true &&
-      toolList.length > 0;
 
     if (useOllamaMinimalSystem) {
       systemMessages.push({

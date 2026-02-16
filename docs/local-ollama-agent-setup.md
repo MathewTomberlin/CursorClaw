@@ -127,6 +127,8 @@ If the model or Ollama does not support tools, the agent still runs for text-onl
 
 **Qwen3 8B (recommended):** For strong tool use and reasoning with a single model, use **Qwen3 8B** (e.g. `ollama pull qwen3:8b`). Configure it with `ollamaModelName: "qwen3:8b"` (or the exact name from `ollama list`). Run `npm run validate-model -- --modelId=<your-qwen-model-id> --fullSuite` to confirm tool-call and reasoning checks pass. Optional **`ollamaOptions`** (e.g. `{ "temperature": 0.2, "num_ctx": 16384 }`) tunes the request; when omitted, the provider uses defaults (temperature 0.3, num_ctx 8192) when tools are sent. See [Ollama-tool-call-support.md](Ollama-tool-call-support.md) §7 (Qwen3 8B and tuning). **Granite 3.2** is also supported as an alternative.
 
+**Context mode (minimal vs richer):** Use **`toolTurnContext: "minimal"`** and **`ollamaMinimalSystem: true`** when you want the model to always use minimal, tool-focused context (best for reliable tool calls). To let the runtime **choose per turn**—minimal when the user asks for file/substrate/workspace actions and richer when the user asks for explanations, summaries, or chat—set **`ollamaContextMode: "auto"`** on the model instead. Manual override: `ollamaContextMode: "minimal"` or `"full"` to force one behavior. See [context-aware-system-behavior.md](context-aware-system-behavior.md).
+
 ---
 
 ## 9. Troubleshooting

@@ -2,7 +2,7 @@
 
 **Scope:** Define when to use **minimal/tool-focused** vs **richer text-generation** system behavior for Ollama (and, if applicable, other local providers) so the agent gets both reliable tool use when expected and better, creative, contextual text when the turn is user-facing or conversational.
 
-**Status:** Spec only; implementation and tests follow in a later tick.
+**Status:** Implemented. Runtime uses `shouldUseMinimalToolContext` when `ollamaContextMode: "auto"`; config supports `ollamaContextMode?: "auto" | "minimal" | "full"`; unit tests in `tests/context-aware-system-behavior.test.ts`. Docs updated: Ollama-tool-call-support §7, local-ollama-agent-setup §8, configuration-reference §4.15.
 
 **References:** [Ollama-tool-call-support](Ollama-tool-call-support.md) §7 and "Future improvement"; [local-ollama-agent-setup](local-ollama-agent-setup.md) for current tuning.
 
@@ -91,4 +91,4 @@ Naming and placement (model-level vs profile-level) can be refined in implementa
 
 ## 7. Completion
 
-When implemented: move this spec to "Implemented" (or add an "Implemented" section with branch/PR), update ROADMAP and the referenced docs, and run the agreed tests.
+Implemented: `src/config.ts` (ollamaContextMode), `src/runtime.ts` (shouldUseMinimalToolContext + buildPromptMessages integration), `tests/context-aware-system-behavior.test.ts` (unit tests). ROADMAP and referenced docs updated. No branch/PR required when committed on main.
