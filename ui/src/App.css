@@ -559,6 +559,41 @@ a:hover {
   font-weight: 500;
 }
 
+.chat-status-event--thinking {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.chat-thinking-block {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  background: var(--surface);
+  border-radius: 0.35rem;
+  border: 1px solid var(--border);
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.chat-thinking-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
+.chat-thinking-text {
+  font-size: 0.8rem;
+  line-height: 1.45;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+  font-family: inherit;
+}
+
 .chat-status-event--tool[data-current="true"] {
   color: var(--accent);
 }

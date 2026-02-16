@@ -39,6 +39,26 @@ import type { SubstrateContent } from "./substrate/index.js";
 import type { ChatMessage, PolicyDecisionLog, SendTurnOptions, SessionContext, ToolCall, ToolExecuteContext } from "./types.js";
 import { ToolRouter, classifyCommandIntent } from "./tools.js";
 
+const NO_THINK_SUFFIX = " /no_think";
+
+/** Returns a copy of messages with /no_think appended to the last user message content (for provider only; not stored in history). */
+function applyNoThinkToMessages(messages: ChatMessage[]): ChatMessage[] {
+  let lastUserIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg?.role === "user") {
+      lastUserIdx = i;
+      break;
+    }
+  }
+  if (lastUserIdx < 0) return messages;
+  return messages.map((m, i) =>
+    i === lastUserIdx
+      ? { ...m, content: m.content + NO_THINK_SUFFIX }
+      : { ...m }
+  );
+}
+
 type RuntimeMessage = {
   role: string;
   content: string;
@@ -62,6 +82,7 @@ export type RuntimeEventType =
   | "queued"
   | "started"
   | "streaming"
+  | "thinking"
   | "tool"
   | "assistant"
   | "compaction"
@@ -150,6 +171,17 @@ export function removeDuplicatedTrailingParagraph(text: string): string {
       break;
     }
   }
+  return out;
+}
+
+/** Remove model thinking/reasoning tags from text so they are not shown in the UI or stored in history. Handles <think>...</think> and <thinking>...</thinking>. */
+export function stripThinkingTags(text: string): string {
+  if (!text || text.length < 2) return text;
+  let out = text;
+  // <think>...</think> (case-insensitive for tag names)
+  out = out.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  // <thinking>...</thinking>
+  out = out.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "");
   return out;
 }
 
@@ -628,9 +660,13 @@ export class AgentRuntime {
           const providerSupportsToolFollowUp = isOllama || isOpenAICompatible;
 
           while (true) {
+            const messagesToSend =
+              modelConfig?.no_think === true
+                ? applyNoThinkToMessages(currentMessages)
+                : currentMessages;
             const adapterStream = this.options.adapter.sendTurn(
               modelSession,
-              currentMessages,
+              messagesToSend,
               this.options.toolRouter.list(),
               sendOptions
             );
@@ -649,27 +685,35 @@ export class AgentRuntime {
             };
 
             for await (const event of adapterStream) {
-              if (event.type === "assistant_delta") {
+              if (event.type === "thinking_delta") {
+                maybeEmitStreaming();
+                const data = event.data as { content?: string };
+                const rawContent = String(data?.content ?? "");
+                const content = this.scrubText(rawContent, scrubScopeId);
+                if (content.length > 0) {
+                  emit("thinking", { content });
+                  emittedCount += 1;
+                }
+              } else if (event.type === "assistant_delta") {
                 maybeEmitStreaming();
                 const data = event.data as { content?: string; isFullMessage?: boolean };
                 const rawContent = String(data?.content ?? "");
-                const content = this.scrubText(rawContent, scrubScopeId);
+                let content = this.scrubText(rawContent, scrubScopeId);
                 const isFullMessage = Boolean(data?.isFullMessage);
                 if (isFullMessage) {
                   // Adapter sent full message (e.g. CLI "assistant" event); replace so we never append and duplicate.
+                  content = stripThinkingTags(content);
                   assistantText = content;
                   thisRoundContent = content;
                   emit("assistant", { content, replace: true });
                 } else if (content === assistantText) {
                   // Exact duplicate (e.g. CLI sent deltas then full message); skip emit and accumulation
                 } else if (content.length >= assistantText.length && content.startsWith(assistantText)) {
-                  // Full-message replacement (e.g. CLI sent deltas then full message): emit only the new suffix so the client does not append the full content again and show duplication (e.g. with HIGH_ENTROPY_TOKEN placeholders).
-                  const delta = content.slice(assistantText.length);
+                  // Full-message replacement (e.g. CLI sent deltas then full message): use stripped content and replace so client does not show thinking tags or duplicate.
+                  content = stripThinkingTags(content);
                   assistantText = content;
                   thisRoundContent = content;
-                  if (delta.length > 0) {
-                    emit("assistant", { content: delta });
-                  }
+                  emit("assistant", { content, replace: true });
                 } else if (
                   content.length >= assistantText.length &&
                   assistantText.length >= 10 &&
@@ -680,16 +724,11 @@ export class AgentRuntime {
                     return overlap >= assistantText.length * 0.8;
                   })()
                 ) {
-                  // Fuzzy replacement: placeholder was replaced (e.g. stream had HIGH_ENTROPY_TOKEN, final has real text). Replace and emit only new suffix.
-                  let overlap = 0;
-                  const maxOverlap = Math.min(assistantText.length, content.length);
-                  for (let i = 0; i < maxOverlap && assistantText[i] === content[i]; i++) overlap += 1;
+                  // Fuzzy replacement: placeholder was replaced (e.g. stream had HIGH_ENTROPY_TOKEN, final has real text). Use stripped content and replace so client does not show thinking tags.
+                  content = stripThinkingTags(content);
                   assistantText = content;
                   thisRoundContent = content;
-                  const delta = content.slice(overlap);
-                  if (delta.length > 0) {
-                    emit("assistant", { content: delta });
-                  }
+                  emit("assistant", { content, replace: true });
                 } else if (
                   assistantText.startsWith(content) ||
                   (content.length >= 15 && assistantText.includes(content)) ||
@@ -805,6 +844,7 @@ export class AgentRuntime {
             emit("compaction", { reason: "assistant text exceeded 3000 chars" });
           }
 
+          assistantText = stripThinkingTags(assistantText);
           assistantText = removeDuplicatedTrailingSuffix(assistantText);
           assistantText = removeDuplicatedTrailingParagraph(assistantText);
           assistantText = collapseDuplicateConsecutiveLines(assistantText);

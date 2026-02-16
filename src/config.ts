@@ -77,6 +77,8 @@ export interface ModelProviderConfig {
   summarizeOldTurnsMaxTokens?: number;
   /** When true, this model uses a paid API; validation probe will skip unless providerModelResilience.runValidationAgainstPaidApis is true (PMR Phase 2). */
   paidApi?: boolean;
+  /** When true, append /no_think to the last user message content sent to the model (not stored in history or user-facing messages). Supported by some models (e.g. Qwen3) to disable thinking. May have no effect for cursor-agent-cli. */
+  no_think?: boolean;
 }
 
 export interface ToolsGhConfig {

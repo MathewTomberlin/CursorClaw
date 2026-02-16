@@ -369,6 +369,7 @@ Default model map:
 - `summarizeOldTurns?: boolean` — Optional (TU.4). When `true` and the prompt is over `maxContextTokens`, the runtime replaces the oldest messages (all but the last) with a single rule-based summary before applying the cap. Off by default; no change to truncation when disabled.
 - `summarizeOldTurnsMaxTokens?: number` — Optional. Max tokens for the summary of earlier turns when `summarizeOldTurns` is true. Default 200.
 - `paidApi?: boolean` — Optional (PMR Phase 2). When `true`, this model uses a paid API; `npm run validate-model` will refuse to run unless `providerModelResilience.runValidationAgainstPaidApis` is `true`. Use to avoid accidental validation spend.
+- `no_think?: boolean` — Optional. When `true`, the runtime appends ` /no_think` to the last user message content when sending to the model (not stored in chat history or user-facing messages). Supported by some models (e.g. Qwen3) to disable thinking/reasoning; may have no effect for cursor-agent-cli.
 
 **Provider-specific fields** (in addition to the common fields above; schema and registry: `src/config.ts`, `src/providers/registry.ts`):
 

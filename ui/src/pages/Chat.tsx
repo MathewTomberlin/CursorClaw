@@ -29,6 +29,8 @@ function formatStreamEventLabel(ev: StreamEvent): string {
       return "Started";
     case "streaming":
       return "Streaming…";
+    case "thinking":
+      return "Thinking…";
     case "tool":
       return ev.payload?.call?.name ? `Tool: ${ev.payload.call.name}` : "Tool call";
     case "assistant":
@@ -104,6 +106,7 @@ export default function Chat() {
     loading,
     streamEvents,
     streamedContent,
+    streamedThinkingContent,
     currentRunId,
     loadingStartedAt,
     error,
@@ -120,7 +123,7 @@ export default function Chat() {
           {
             id: `streaming-${currentRunId}`,
             role: "assistant" as const,
-            content: streamedContent,
+            content: stripThinkingTags(streamedContent),
             at: undefined
           }
         ]
@@ -150,6 +153,15 @@ export default function Chat() {
   /** Normalize for dedupe: trim and collapse runs of whitespace so minor differences don't create duplicates. */
   function normalizeForDedupe(s: string): string {
     return (s ?? "").trim().replace(/\s+/g, " ");
+  }
+
+  /** Remove <think>/</think> and <thinking>...</thinking> from assistant text so they are never shown. */
+  function stripThinkingTags(text: string): string {
+    if (!text || text.length < 2) return text;
+    let out = text;
+    out = out.replace(/<think>[\s\S]*?<\/think>/gi, "");
+    out = out.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "");
+    return out;
   }
 
   // Poll all profiles for proactive messages so both Cursor and Ollama (or other) agents' heartbeats are visible.
@@ -363,7 +375,7 @@ export default function Chat() {
                 <span className="chat-bubble-role">{msg.role === "user" ? "You" : "Agent"}</span>
                 {msg.role === "assistant" ? (
                   <div className="chat-bubble-content markdown-body agent-reply">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content || "—"}</ReactMarkdown>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{stripThinkingTags(msg.content ?? "") || "—"}</ReactMarkdown>
                   </div>
                 ) : (
                   <div className="chat-bubble-content chat-bubble-content--text">{msg.content}</div>
@@ -382,6 +394,12 @@ export default function Chat() {
                   <span className="chat-typing" aria-live="polite">
                     {statusLabel}
                   </span>
+                  {streamedThinkingContent.length > 0 && (
+                    <div className="chat-thinking-block" role="status" aria-label="Agent thinking">
+                      <span className="chat-thinking-label">Thinking:</span>
+                      <pre className="chat-thinking-text">{streamedThinkingContent}</pre>
+                    </div>
+                  )}
                   {statusTrail.length > 0 && (
                     <div
                       className="chat-status-trail"
@@ -395,7 +413,9 @@ export default function Chat() {
                           className={
                             runEvents[i]?.type === "tool"
                               ? "chat-status-event chat-status-event--tool"
-                              : "chat-status-event"
+                              : runEvents[i]?.type === "thinking"
+                                ? "chat-status-event chat-status-event--thinking"
+                                : "chat-status-event"
                           }
                           data-current={i === statusTrail.length - 1 ? "true" : undefined}
                         >

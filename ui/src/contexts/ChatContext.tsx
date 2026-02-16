@@ -127,6 +127,8 @@ interface ChatContextValue {
   streamEvents: StreamEvent[];
   /** Accumulated assistant content from stream for the current run (so UI can show live output). */
   streamedContent: string;
+  /** Accumulated thinking content from stream for the current run (shown while loading). */
+  streamedThinkingContent: string;
   currentRunId: string | null;
   loading: boolean;
   loadingStartedAt: number | null;
@@ -158,6 +160,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
   const [messages, setMessages] = useState<ChatMessage[]>(() => loadThread("demo-session"));
   const [streamEvents, setStreamEvents] = useState<StreamEvent[]>([]);
   const [streamedContent, setStreamedContent] = useState("");
+  const [streamedThinkingContent, setStreamedThinkingContent] = useState("");
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
@@ -293,16 +296,19 @@ export function ChatProvider({ children }: ChatProviderProps) {
       try {
         const data = JSON.parse(ev.data) as StreamEvent;
         setStreamEvents((prev) => [...prev, data]);
-        if (
-          data.type === "assistant" &&
-          data.runId &&
-          data.runId === currentRunIdRef.current
-        ) {
+        if (data.runId && data.runId !== currentRunIdRef.current) return;
+        if (data.type === "assistant") {
           const payload = data.payload as { content?: string; replace?: boolean } | undefined;
           setStreamedContent((prev) => {
             if (payload?.replace) return payload.content ?? "";
             return prev + (payload?.content ?? "");
           });
+        } else if (data.type === "thinking") {
+          const payload = data.payload as { content?: string } | undefined;
+          const content = payload?.content ?? "";
+          if (content.length > 0) {
+            setStreamedThinkingContent((prev) => prev + content);
+          }
         }
       } catch {
         // ignore
@@ -341,6 +347,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
       setError(null);
       setCurrentRunId(null);
       setStreamedContent("");
+      setStreamedThinkingContent("");
       setLoading(true);
       setLoadingStartedAt(Date.now());
 
@@ -413,6 +420,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
         const assistantText = out?.assistantText ?? "";
 
         setStreamedContent("");
+        setStreamedThinkingContent("");
         const assistantMsg: ChatMessage = {
           id: generateId(),
           role: "assistant",
@@ -456,6 +464,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
         setLoading(false);
         setLoadingStartedAt(null);
         setStreamedContent("");
+        setStreamedThinkingContent("");
         currentRunIdRef.current = null;
         setCurrentRunId(null);
         runTurnInProgressRef.current = false;
@@ -490,6 +499,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
     setMessages,
     streamEvents,
     streamedContent,
+    streamedThinkingContent,
     currentRunId,
     loading,
     loadingStartedAt,

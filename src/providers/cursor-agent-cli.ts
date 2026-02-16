@@ -327,8 +327,17 @@ export class CursorAgentCliProvider implements ModelProvider {
       }
       return null;
     }
-    if (["system", "user", "thinking", "interaction_query"].includes(candidate.type)) {
+    if (["system", "user", "interaction_query"].includes(candidate.type)) {
       return null;
+    }
+    if (candidate.type === "thinking") {
+      const content = candidate.message?.content;
+      const text = Array.isArray(content)
+        ? content.map((c) => (c && typeof c.text === "string" ? c.text : "")).join("")
+        : String((candidate.data as { content?: string })?.content ?? "");
+      if (!text) return null;
+      this.pushEventLog(redactSecrets(JSON.stringify(candidate)));
+      return { type: "thinking_delta", data: { content: text } };
     }
     if (candidate.type === "assistant") {
       const content = candidate.message?.content;

@@ -61,6 +61,7 @@ export type LifecycleEventType =
   | "queued"
   | "started"
   | "streaming"
+  | "thinking"
   | "tool"
   | "assistant"
   | "compaction"
@@ -84,6 +85,7 @@ export interface ToolCall {
 
 export type AdapterEventType =
   | "assistant_delta"
+  | "thinking_delta"
   | "tool_call"
   | "usage"
   | "error"
