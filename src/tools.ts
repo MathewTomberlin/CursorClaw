@@ -323,6 +323,29 @@ export interface ToolRouterOptions {
   decisionJournal?: DecisionJournal;
 }
 
+/** Normalize exec tool args so Ollama/local models that send extra keys or wrong types still pass schema validation. */
+function normalizeExecArgs(args: unknown): { command: string; cwd?: string } {
+  let obj: Record<string, unknown>;
+  if (args == null) {
+    obj = {};
+  } else if (typeof args === "string") {
+    try {
+      obj = (JSON.parse(args) as Record<string, unknown>) ?? {};
+    } catch {
+      obj = { command: args };
+    }
+  } else if (typeof args === "object" && args !== null) {
+    obj = args as Record<string, unknown>;
+  } else {
+    obj = {};
+  }
+  const command = typeof obj.command === "string" ? obj.command.trim() : String(obj.command ?? "").trim();
+  const cwd = typeof obj.cwd === "string" ? obj.cwd : undefined;
+  const out: { command: string; cwd?: string } = { command };
+  if (cwd !== undefined && cwd !== "") out.cwd = cwd;
+  return out;
+}
+
 export class ToolRouter {
   private readonly tools = new Map<string, ToolDefinition>();
   private readonly ajv = new Ajv({ allErrors: true, strict: false });
@@ -350,7 +373,8 @@ export class ToolRouter {
       throw new Error("tool execution blocked by incident tool isolation mode");
     }
     const validate = this.getValidator(tool);
-    if (!validate(call.args)) {
+    const argsToValidate = call.name === "exec" ? normalizeExecArgs(call.args) : call.args;
+    if (!validate(argsToValidate)) {
       this.logDecision(context, "deny", "TOOL_SCHEMA_INVALID", JSON.stringify(validate.errors));
       throw new Error(`invalid tool args for ${call.name}`);
     }
@@ -360,7 +384,7 @@ export class ToolRouter {
         tool: call.name,
         intent: "high-risk-tool",
         plan: "High-risk tool invocation proposed by model",
-        args: call.args,
+        args: argsToValidate,
         ...(context.provenance !== undefined && { provenance: context.provenance })
       });
       if (!approved) {
@@ -374,7 +398,7 @@ export class ToolRouter {
     }
 
     try {
-      const result = await tool.execute(call.args, context);
+      const result = await tool.execute(argsToValidate, context);
       this.logDecision(context, "allow", "ALLOWED", `allow:${call.name}`);
       return result;
     } catch (error) {

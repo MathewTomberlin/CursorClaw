@@ -886,7 +886,12 @@ export class AgentRuntime {
           modelConfigForTurn?.ollamaMinimalSystem === true && toolList.length > 0;
       }
     } else {
+      // LM Studio and openai-compatible need conversation history; do not use minimal context (single last user message).
+      const isLmStudioOrOpenAI =
+        modelConfigForTurn?.provider === "lm-studio" ||
+        modelConfigForTurn?.provider === "openai-compatible";
       useMinimalContext =
+        !isLmStudioOrOpenAI &&
         modelConfigForTurn?.toolTurnContext === "minimal" &&
         toolList.length > 0 &&
         hasLastUser;
@@ -1193,7 +1198,7 @@ export class AgentRuntime {
       systemMessages.push({
         role: "system",
         content: this.scrubText(
-          "Planning and automation: You have a planning file (e.g. ROADMAP.md) for milestones, roadmaps, and backlogs. Create or update it when the user or context implies goals; break work into concrete steps and priorities. When STUDY_GOALS is in your context, use it for long-term study (research → notes → implementation guide → implement and validate). During heartbeats (when no user message is pending), read the planning file, HEARTBEAT.md, and when present the study goals (STUDY_GOALS), and make progress on the next item when appropriate—implement a small piece, run a check, update Open/Completed, or advance long-term study; replace the single Current state line in place only—do not append heartbeat status or tick logs to ROADMAP (use MEMORY or remember_this for per-tick notes). User messages always take priority: the system will interrupt any in-flight heartbeat work when the user sends a message, let you respond to the user fully, then the next heartbeat tick continues from the planning file, HEARTBEAT checklist, and STUDY_GOALS when present. Plan in ROADMAP, advance it on heartbeats, use STUDY_GOALS for learning, and stay responsive to the user.",
+          "Planning and automation: You have a planning file (e.g. ROADMAP.md) for milestones, roadmaps, and backlogs. Create or update it when the user or context implies goals; break work into concrete steps and priorities. STUDY_GOALS are topics you spend some time each heartbeat researching and searching the internet about (web_search, web_fetch), writing notes until you have enough information to plan a new feature, then when planning is complete implementing that feature. Be proactive: each heartbeat, begin or continue at least one STUDY_GOALS topic (research → notes → plan → implement). During heartbeats, read the planning file, HEARTBEAT.md, and when present STUDY_GOALS; make progress on ROADMAP Open/Completed or on STUDY_GOALS; replace the single Current state line in place only—do not append heartbeat status or tick logs to ROADMAP (use MEMORY or remember_this for per-tick notes). User messages always take priority: the system will interrupt any in-flight heartbeat work when the user sends a message, let you respond to the user fully, then the next heartbeat tick continues from the planning file, HEARTBEAT checklist, and STUDY_GOALS when present. Plan in ROADMAP, advance it on heartbeats; do STUDY_GOALS proactively each heartbeat; stay responsive to the user.",
           scopeId
         )
       });

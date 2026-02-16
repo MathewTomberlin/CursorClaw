@@ -1133,7 +1133,7 @@ async function main(): Promise<void> {
         if (extra.length > 0) instructionBody += "\n\n" + extra;
       }
       let content =
-        `Instructions for this heartbeat (from HEARTBEAT.md):\n\n${instructionBody}\n\n**Alignment:** Read STUDY_GOALS (in your context as "Study goals (STUDY_GOALS)") and use it for alignment—prefer tasks that advance ROADMAP Open items or study goals.\n\n${deliveryNote}\n\n${baseInstruction}`;
+        `Instructions for this heartbeat (from HEARTBEAT.md):\n\n${instructionBody}\n\n**Alignment:** Each heartbeat, proactively spend some time on at least one STUDY_GOALS topic (in your context as "Study goals (STUDY_GOALS)"): research via web_search/web_fetch, write notes until you have enough to plan a new feature, then plan and implement it. Also prefer tasks that advance ROADMAP Open items.\n\n${deliveryNote}\n\n${baseInstruction}`;
       if (getInterrupted()) {
         clearInterrupted();
         content =

@@ -232,15 +232,15 @@ Optional summary of what the agent is allowed to do. Informational only; enforce
 
   studyGoals: `# STUDY_GOALS.md — Topics of interest (long-term study)
 
-**Role in the framework:** This file is loaded as **substrate** and injected into the agent's system prompt as "Study goals (STUDY_GOALS)" on every turn (including heartbeats). It holds broad categories and topics of interest for **multi-cycle work**: research → study → notes → implementation guide (success criteria + guardrails) → implement and validate. Separate from the task backlog (ROADMAP Open/Optional): use ROADMAP for concrete tasks; use this file for learning and research themes you or the user care about.
+**Role in the framework:** This file is loaded as **substrate** and injected into the agent's system prompt as "Study goals (STUDY_GOALS)" on every turn (including heartbeats). STUDY_GOALS are **topics you spend some time each heartbeat** researching and searching the internet about (use web_search and/or web_fetch), writing notes until you have enough information to begin **planning a new feature** for the topic. When planning is complete, **implement** that new feature. You must be **proactive**: each heartbeat, begin or continue work on at least one STUDY_GOALS topic. Separate from the task backlog (ROADMAP Open/Optional): use ROADMAP for concrete tasks; use this file for learning themes that drive research → notes → plan → implement cycles.
 
-**When advancing long-term study:** Read STUDY_GOALS.md (it is in your context). Spend cycles on: research → notes → implementation guide → implement and validate. Pick topics that are interesting and relevant; if none are yet listed, add your own or ask the user what they want to explore.
+**Each heartbeat:** Read STUDY_GOALS (it is in your context). Pick one or more topics and: (1) **Research** — search the web, fetch docs or articles, gather information. (2) **Write notes** — capture what you learn (e.g. in MEMORY.md, a notes file, or STUDY_GOALS sub-notes) until you have enough to plan a feature. (3) **Plan** — define success criteria and an implementation guide for a new feature for that topic. (4) **Implement** — when the plan is complete, build and validate the feature. If no topics are listed yet, add your own or ask the user what they want to explore.
 
 ---
 
 ## Topics / categories
 
-(Add broad themes: technologies, domains, skills, or areas to research and eventually turn into implementation guides and code. One line per topic or a short list; expand with sub-notes as you go.)
+(Add broad themes: technologies, domains, skills, or areas to research and eventually turn into plans and implemented features. One line per topic or a short list; expand with sub-notes as you go.)
 `
 };
 
@@ -289,10 +289,10 @@ Use tools. Do not guess file contents—read with exec (e.g. cat, type) then act
 - If Open is empty but **Optional** has items: promote one to Open with clear success criteria, or add a short Open item.
 - Never leave the roadmap with no Open items unless the repo is explicitly idle (e.g. waiting on operator).
 
-## 3. Active learning and research
+## 3. STUDY_GOALS — proactive each heartbeat
 
-- When advancing long-term study, read STUDY_GOALS.md (in your context); spend cycles on research → notes → implementation guide → implement and validate.
-- If the user or context implied a topic to learn or research, spend part of this tick on it (read docs, try a small experiment, or add a note to MEMORY.md or ROADMAP).
+- **Each heartbeat, do some STUDY_GOALS work.** Read STUDY_GOALS (in your context). Pick at least one topic and: (1) **Research** — use web_search and/or web_fetch to search the internet and gather information. (2) **Write notes** — capture what you learn until you have enough to plan a new feature. (3) When you have enough information, **plan** a new feature (success criteria, implementation guide). (4) When planning is complete, **implement** the feature. Be proactive: start or continue at least one STUDY_GOALS topic every tick.
+- If the user or context implied a topic to learn or research, spend part of this tick on it (search the web, read docs, try a small experiment, or add a note to MEMORY.md or ROADMAP).
 - When you infer a lesson from feedback or a repeated pattern, store it (e.g. remember_this with category 'learned' or a note in MEMORY.md).
 
 ## 4. Code and data maintenance (resilience and longevity)
