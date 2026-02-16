@@ -1114,7 +1114,7 @@ async function main(): Promise<void> {
         const extra = (await safeReadUtf8(heartbeatExtraPath))?.trim() ?? "";
         if (extra.length > 0) instructionBody += "\n\n" + extra;
       }
-      const content =
+      let content =
         `Instructions for this heartbeat (from HEARTBEAT.md):\n\n${instructionBody}\n\n${deliveryNote}\n\n${baseInstruction}`;
       if (getInterrupted()) {
         clearInterrupted();
