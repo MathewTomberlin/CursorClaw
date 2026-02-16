@@ -44,6 +44,9 @@ const ALLOWED_CONTENT_TYPE_PATTERN =
 
 export type ExecIntent = "read-only" | "mutating" | "network-impacting" | "privilege-impacting";
 
+/** Shell metacharacters that must not be used as path arguments (e.g. ls -R | yields path "|"). */
+const SHELL_META = new Set(["|", "&", ";", ">", ">>", "<", "&&", "||"]);
+
 /**
  * Parse sed -i 's/pattern/replacement/[g]' file (or double-quoted) from a command string. Returns null if not matched.
  * Handles the common in-place substitute form; delimiter must be / and pattern/replacement must not contain /.
@@ -599,7 +602,7 @@ export function createExecTool(args: {
               continue;
             }
             if ((segBin === "ls" || segBin === "dir") && segIntent === "read-only") {
-              const paths = segBinArgs.filter((a) => !a.startsWith("-"));
+              const paths = segBinArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
               const dirPath = paths.length > 0 ? resolve(cwd, paths[0]!) : cwd;
               ensureUnderProfile(dirPath);
               const long = segBinArgs.some((a) => a === "-l" || a === "-la" || a === "-al");
@@ -879,7 +882,7 @@ export function createExecTool(args: {
           return { stdout: cwd + "\n", stderr: "" };
         }
         if (platform() === "win32" && (bin === "ls" || bin === "dir") && intent === "read-only") {
-          const paths = binArgs.filter((a) => !a.startsWith("-"));
+          const paths = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           const dirPath = paths.length > 0 ? resolve(cwd, paths[0]!) : cwd;
           ensureUnderProfile(dirPath);
           const long = binArgs.some((a) => a === "-l" || a === "-la" || a === "-al");
