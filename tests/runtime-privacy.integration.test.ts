@@ -118,8 +118,10 @@ describe("runtime privacy integration", () => {
     });
 
     expect(capturedMessages.length).toBe(1);
-    expect(capturedMessages[0]?.[0]?.content).not.toContain("my-user-secret-abc123456");
-    expect(capturedMessages[0]?.[0]?.content).toContain("[SECRET_ASSIGNMENT_");
+    const messages = capturedMessages[0] ?? [];
+    expect(messages.every((m) => !m.content.includes("my-user-secret-abc123456"))).toBe(true);
+    const userMsg = messages.find((m) => m.role === "user");
+    expect(userMsg?.content).toContain("[SECRET_ASSIGNMENT_");
 
     const toolEvent = result.events.find((event) => event.type === "tool");
     const serializedToolEvent = JSON.stringify(toolEvent?.payload ?? {});

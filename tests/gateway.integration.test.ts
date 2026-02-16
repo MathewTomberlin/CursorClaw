@@ -1190,15 +1190,11 @@ describe("gateway integration", () => {
     await app.close();
   });
 
-  it("heartbeat.poll returns ok and optional proactiveMessage, and take clears it", async () => {
-    let pending: string | null = "Hello from BIRTH!";
+  it("heartbeat.poll returns ok and optional proactiveMessage (broadcast to all clients, no clear on poll)", async () => {
+    const pending = "Hello from BIRTH!";
     const app = await createGateway({
       getPendingProactiveMessage: () => pending,
-      takePendingProactiveMessage: () => {
-        const msg = pending;
-        pending = null;
-        return msg;
-      }
+      takePendingProactiveMessage: () => null
     });
     const first = await app.inject({
       method: "POST",
@@ -1216,9 +1212,9 @@ describe("gateway integration", () => {
       payload: { version: "2.0", method: "heartbeat.poll", params: {} }
     });
     expect(second.statusCode).toBe(200);
-    expect(second.json().result).toEqual({ result: "ok" });
+    expect(second.json().result).toEqual({ result: "ok", proactiveMessage: "Hello from BIRTH!" });
     const statusRes = await app.inject({ method: "GET", url: "/status" });
-    expect(statusRes.json().hasPendingProactiveMessage).toBeUndefined();
+    expect(statusRes.json().hasPendingProactiveMessage).toBe(true);
     await app.close();
   });
 

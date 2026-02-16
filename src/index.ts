@@ -1083,6 +1083,9 @@ async function main(): Promise<void> {
         if (pendingRef.current !== heartbeatFallback) {
           pendingRef.current = heartbeatFallback;
         }
+      } else {
+        // No proactive message this turn; clear so clients stop seeing the previous message after the next poll cycle.
+        pendingRef.current = null;
       }
       return reply === "" ? "HEARTBEAT_OK" : result.assistantText;
     } catch (err) {

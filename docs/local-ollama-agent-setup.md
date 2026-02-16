@@ -124,7 +124,7 @@ The Ollama provider supports **tool-call** flow: it sends tools to the Ollama AP
 
 If the model or Ollama does not support tools, the agent still runs for text-only turns. See [Ollama-tool-call-support.md](Ollama-tool-call-support.md) and [PMR](PMR-provider-model-resilience.md) §8 for version/model requirements and best-effort behavior.
 
-**Granite 3.2:** For strong tool use and reasoning with a single model, consider **Granite 3.2** (e.g. `ollama pull granite3.2`). Configure it with `ollamaModelName: "granite3.2"` (or the exact name shown by `ollama list`). Run `npm run validate-model -- --modelId=<your-granite-model-id> --fullSuite` to confirm tool-call and reasoning checks pass.
+**Granite 3.2:** For strong tool use and reasoning with a single model, consider **Granite 3.2** (e.g. `ollama pull granite3.2`). Configure it with `ollamaModelName: "granite3.2"` (or the exact name shown by `ollama list`). Run `npm run validate-model -- --modelId=<your-granite-model-id> --fullSuite` to confirm tool-call and reasoning checks pass. Optional **`ollamaOptions`** (e.g. `{ "temperature": 0.3, "num_ctx": 8192 }`) tunes the request for tool use; when omitted, the provider uses defaults (temperature 0.3, num_ctx 8192) when tools are sent. See [Ollama-tool-call-support.md](Ollama-tool-call-support.md) §7 (Tuning for tool use).
 
 ---
 

@@ -440,8 +440,9 @@ describe("scheduler, memory, and runtime", () => {
     });
 
     expect(observedMessages.length).toBeGreaterThanOrEqual(1);
-    const systemMessage = observedMessages[0]?.find((message) => message.role === "system")?.content ?? "";
-    expect(systemMessage).toContain("public preference tea");
-    expect(systemMessage).not.toContain("secret-api-key-value");
+    const systemMessages = observedMessages[0]?.filter((m) => m.role === "system") ?? [];
+    const combinedSystem = systemMessages.map((m) => m.content).join("\n");
+    expect(combinedSystem).toContain("public preference tea");
+    expect(combinedSystem).not.toContain("secret-api-key-value");
   });
 });

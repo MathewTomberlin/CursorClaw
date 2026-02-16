@@ -343,7 +343,8 @@ export function createExecTool(args: {
 
   return {
     name: "exec",
-    description: "Execute a command with strict policy controls",
+    description:
+      "Run a shell command. Use this to read files (e.g. cat, type, head), edit files (sed, echo, tee), run scripts, run tests, and execute any allowed binary. This is the primary way to read or modify substrate files (AGENTS.md, IDENTITY.md, ROADMAP.md, TOOLS.md) and the codebase. Policy controls apply (e.g. read-only vs mutating).",
     schema: {
       type: "object",
       properties: {

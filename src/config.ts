@@ -55,6 +55,8 @@ export interface ModelProviderConfig {
   apiKeyRef?: string;
   /** Provider-specific: Ollama model name (e.g. llama3.2, granite3.2). */
   ollamaModelName?: string;
+  /** Provider-specific: Ollama API options (temperature, num_ctx). Improves tool use and stability on local models (e.g. Granite 3.2). */
+  ollamaOptions?: { temperature?: number; num_ctx?: number };
   /** Provider-specific: base URL for OpenAI-compatible or Ollama (e.g. http://localhost:11434). */
   baseURL?: string;
   /** Provider-specific: OpenAI-compatible model id (e.g. gpt-4o-mini, gpt-4o). */
