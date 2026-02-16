@@ -146,12 +146,13 @@ process.on("unhandledRejection", (reason, promise) => {
       console.error("\n[CursorClaw] Build failed. Failure written to tmp/last-build-failure.log.");
       console.error("[CursorClaw] tmp/server-down written — gateway is not reachable until build succeeds and app restarts.");
       console.error("[CursorClaw] Fix the build and create tmp/recovery-done to retry in this terminal, or run build-recovery-wait manually.\n");
-      const recoveryScript = path.join(__dirname, "build-recovery-wait.js");
-      const { code: recoveryCode } = await run("node", [recoveryScript]);
+      const recoveryScriptPath = path.join(__dirname, "build-recovery-wait.js");
+      const { code: recoveryCode } = await run("node", [recoveryScriptPath]);
       if (recoveryCode === 0) {
         try {
           if (fs.existsSync(buildFailureLogPath)) fs.unlinkSync(buildFailureLogPath);
           if (fs.existsSync(buildFailureJsonPath)) fs.unlinkSync(buildFailureJsonPath);
+          if (fs.existsSync(serverDownPath)) fs.unlinkSync(serverDownPath);
         } catch (_) {}
         console.log("\n[CursorClaw] Build succeeded after recovery; restarting app.\n");
         return true;
@@ -164,8 +165,26 @@ process.on("unhandledRejection", (reason, promise) => {
     return true;
   }
 
+  const recoveryScript = path.join(__dirname, "build-recovery-wait.js");
+
   for (;;) {
     try {
+      if (fs.existsSync(serverDownPath)) {
+        console.log("\n[CursorClaw] tmp/server-down present (previous build failed). Waiting for recovery, then retrying build...\n");
+        const { code: recoveryCode } = await run("node", [recoveryScript]);
+        if (recoveryCode !== 0) {
+          console.error("[CursorClaw] Build recovery failed or timed out. Exiting so supervisor can restart.\n");
+          process.exitCode = recoveryCode != null ? recoveryCode : 1;
+          stopResilienceDaemon();
+          break;
+        }
+        try {
+          if (fs.existsSync(serverDownPath)) fs.unlinkSync(serverDownPath);
+          if (fs.existsSync(buildFailureLogPath)) fs.unlinkSync(buildFailureLogPath);
+          if (fs.existsSync(buildFailureJsonPath)) fs.unlinkSync(buildFailureJsonPath);
+        } catch (_) {}
+        console.log("\n[CursorClaw] Build succeeded; starting server.\n");
+      }
       const { code, signal } = await run("npm", ["start"]);
       if (code === RESTART_EXIT_CODE) {
         const ok = await buildAndRestart("Building and restarting in same terminal...");

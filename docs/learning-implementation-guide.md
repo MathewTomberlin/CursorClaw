@@ -21,7 +21,40 @@
 - **Preserve provenance**: In MEMORY.md and substrate, keep attribution and date context where useful (e.g. "2026-02-16: …").
 - **No silent overwrites**: Do not replace large operator-written sections without explicit scope in HEARTBEAT/ROADMAP/STUDY_GOALS instructions.
 
-## 4. Next steps (when prioritized)
+## 4. Heartbeat integration
+
+- **When learning is triggered:** Each heartbeat runs HEARTBEAT.md (resilience → ROADMAP → optional continuity). Learning is advanced via STUDY_GOALS: the agent reads STUDY_GOALS.md and advances one topic (research → notes → implementation guide → implement → validate → PR). Substrate updates (ROADMAP Current state, Completed, STUDY_GOALS sub-notes) are the primary learning capture during heartbeats; MEMORY.md and docs are updated when the agent adds durable facts or implementation notes.
+- **Touchpoints:** HEARTBEAT.md step 2 (ROADMAP) and step 4 (Study Goals); ROADMAP "Current state" and "Completed"; STUDY_GOALS sub-notes; optional MEMORY.md or docs/ updates in step 3 (Continuity).
+
+## 5. Next steps (when prioritized)
 
 - Implement or refine any of the above (e.g. MEMORY append rules, substrate update triggers).
 - Add automation or tooling for learning capture if desired (e.g. structured MEMORY updates from agent turns).
+
+## 6. Validation
+
+- **Cycle alignment:** Learning work follows research → notes → implementation guide → implement → validate → PR. Validation means: tests pass, success criteria in §2 are met, guardrails in §3 are not violated.
+- **After implementation:** Run build and tests; confirm MEMORY/substrate/STUDY_GOALS updates are append-only or scoped per instructions; no silent overwrites of operator content.
+- **When to validate:** After any implementation step for a learning-related feature; optional full validation (all criteria + guardrails) before PR.
+
+## 7. Prioritization
+
+- **When to advance learning vs ROADMAP:** HEARTBEAT.md runs resilience first, then ROADMAP (advance one Open item or promote from Optional), then Study Goals (advance one STUDY_GOALS topic). If Open has actionable items and the operator expects ROADMAP progress, prefer ROADMAP; if Open is empty or idle (e.g. "idle until operator"), advance one STUDY_GOALS topic (research → notes → implementation guide → implement → validate → PR). Resumed turns (after user interrupt) use the same order: resilience → ROADMAP Current state → advance one Open or one STUDY_GOALS topic.
+
+## 8. Idle and operator-wait
+
+- **When Open is "idle until operator":** The roadmap may explicitly mark Open items as waiting on operator input (e.g. choosing a provider to implement). On such ticks the agent still runs resilience (build/tests, tmp/last-build-failure.log), updates ROADMAP Current state, and advances one STUDY_GOALS topic; no need to promote Optional to Open or invent new Open work. Continuity (step 3) and Study Goals (step 4) remain in effect.
+
+## 9. Resumed turns
+
+- **When the user continues after an interrupt:** The user may send a message like "The previous heartbeat was interrupted… Continue with ROADMAP.md, HEARTBEAT.md, and STUDY_GOALS". On such resumed turns the same learning flow applies as a normal heartbeat: run resilience (read tmp/last-build-failure.log, optionally run build/tests), update ROADMAP Current state (branch, build status, brief note that this is a resumed turn), then advance one Open item or one STUDY_GOALS topic. Learning capture (ROADMAP Completed, STUDY_GOALS sub-notes, optional MEMORY.md) follows §2 and §3; no special handling beyond treating the turn as one heartbeat tick.
+
+## 10. Documenting a tick
+
+- **When a heartbeat completes with no Open advancement:** Still run resilience (build/tests), update ROADMAP Current state (branch, build status, uncommitted/untracked), and add a one-line Completed entry for this tick. Advance one STUDY_GOALS topic (e.g. add or update a sub-note, or add a small section to an implementation guide). This keeps learning and continuity going even when ROADMAP Open is "idle until operator".
+
+## 11. When to skip or defer study advancement
+
+- **Resilience consumed the tick:** If the agent spent the tick fixing a build failure (tmp/last-build-failure.log) or addressing a blocker documented in ROADMAP Current state, it is acceptable to update Current state and Completed only and not advance a STUDY_GOALS topic this tick; advance STUDY_GOALS on the next tick once resilience is clear.
+- **Operator pause:** If the operator explicitly asks to pause study work or focus only on ROADMAP/resilience, skip STUDY_GOALS advancement until the operator indicates otherwise.
+- **Otherwise:** When Open is "idle until operator" and no resilience work is pending, advance one STUDY_GOALS topic per §4 and §10.

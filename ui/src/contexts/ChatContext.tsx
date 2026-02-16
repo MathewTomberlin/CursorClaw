@@ -331,7 +331,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
       reconnectCleanupRef.current?.();
       scheduleTimeoutId = setTimeout(() => {
         scheduleTimeoutId = null;
-        reconnectCleanupRef.current = runReconnectRetry();
+        reconnectCleanupRef.current = runReconnectRetry() ?? null;
       }, 400);
     };
     document.addEventListener("visibilitychange", onVisibleOrOnline);
@@ -374,7 +374,26 @@ export function ChatProvider({ children }: ChatProviderProps) {
     es.onmessage = (ev) => {
       try {
         const data = JSON.parse(ev.data) as StreamEvent;
-        setStreamEvents((prev) => [...prev, data]);
+        // Streaming status updates overwrite each other: only one status event is kept (the latest). Assistant chunks replace the last assistant.
+        setStreamEvents((prev) => {
+          const isFinalAssistant =
+            data.type === "assistant" && (data.payload as { replace?: boolean } | undefined)?.replace === true;
+          const last = prev[prev.length - 1];
+          const statusTypes = ["connecting", "queued", "started", "streaming", "tool", "thinking", "compaction", "completed", "failed"];
+          let next: StreamEvent[];
+          // Assistant: replace last assistant with this one unless it's the final (replace: true) message.
+          if (data.type === "assistant") {
+            if (!isFinalAssistant && last?.type === "assistant") next = [...prev.slice(0, -1), data];
+            else next = [...prev, data];
+          } else if (statusTypes.includes(data.type)) {
+            // Status types: remove ALL status events from the array (not just trailing), then append this one so only the latest status is shown.
+            const rest = prev.filter((e) => !statusTypes.includes(e.type));
+            next = [...rest, data];
+          } else {
+            next = [...prev, data];
+          }
+          return next.length > 100 ? next.slice(-100) : next;
+        });
         // Only skip content for a different run when event has a non-empty runId (so we still process thinking/assistant if runId is missing)
         const runIdMismatch =
           currentRunIdRef.current != null &&
@@ -384,16 +403,9 @@ export function ChatProvider({ children }: ChatProviderProps) {
         if (runIdMismatch) return;
         if (data.type === "assistant") {
           const payload = data.payload as { content?: string; replace?: boolean } | undefined;
-          setStreamedContent((prev) => {
-            if (payload?.replace) {
-              const next = payload.content ?? "";
-              // Only replace when the new content is the full message: empty so far, or new content extends prev (avoids final/status segments overwriting a growing message).
-              if (prev.length === 0) return next;
-              if (next.length >= prev.length && next.startsWith(prev)) return next;
-              return prev;
-            }
-            return prev + (payload?.content ?? "");
-          });
+          const next = payload?.content ?? "";
+          // Always overwrite with the latest assistant content so streamed chunks replace each other instead of appending.
+          setStreamedContent(next);
         } else if (data.type === "thinking") {
           const payload = data.payload as { content?: string } | undefined;
           const content = payload?.content ?? "";
@@ -437,6 +449,8 @@ export function ChatProvider({ children }: ChatProviderProps) {
       currentRunIdRef.current = null;
       setError(null);
       setCurrentRunId(null);
+      // Do not clear streamEvents here: server may push "queued"/"started" before agent.run returns;
+      // keeping them lets status show as soon as events arrive (filtered by runId in the UI).
       setStreamedContent("");
       setStreamedThinkingContent("");
       setLoading(true);

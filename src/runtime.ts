@@ -715,7 +715,7 @@ export class AgentRuntime {
                   } else {
                     assistantText += content;
                     thisRoundContent += content;
-                    emit("assistant", { content });
+                    emit("assistant", { content: assistantText });
                   }
                 } else if (content === assistantText) {
                   // Exact duplicate (e.g. CLI sent deltas then full message); skip emit and accumulation
@@ -749,7 +749,7 @@ export class AgentRuntime {
                 } else {
                   assistantText += content;
                   thisRoundContent += content;
-                  emit("assistant", { content });
+                  emit("assistant", { content: assistantText });
                 }
                 emittedCount += 1;
               } else if (event.type === "tool_call") {

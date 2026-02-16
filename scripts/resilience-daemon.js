@@ -23,6 +23,7 @@
  *   RECOVERY_CMD: command when failure log appears (default when used by start:watch: fix-build script). Set "" or "0" to disable.
  *   RESILIENCE_POLL_MS: poll interval (default 15000 = 15s).
  *   CRASH_RESTART_DELAY_MS: delay before restarting wrapper after exit (default 2000). Used in --watch mode.
+ *   RESILIENCE_WRAPPER_MAX_ALIVE_MS: if wrapper does not exit within this ms, daemon kills it and restarts (default 30 min). Avoids hung wrapper.
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -37,6 +38,8 @@ const recoveryDonePath = path.join(tmpDir, "recovery-done");
 const pollMs = Number(process.env.RESILIENCE_POLL_MS) || 15_000;
 const recoveryCmd = process.env.RECOVERY_CMD;
 const crashRestartDelayMs = Math.max(0, Number(process.env.CRASH_RESTART_DELAY_MS) || 2_000);
+/** If wrapper doesn't exit within this ms, daemon kills it and restarts (avoids hung wrapper). Default 30 min. */
+const wrapperMaxAliveMs = Math.max(60_000, Number(process.env.RESILIENCE_WRAPPER_MAX_ALIVE_MS) || 30 * 60 * 1000);
 const watchMode = process.argv.includes("--watch");
 
 const runWithRestartScript = path.join(__dirname, "run-with-restart.js");
@@ -81,23 +84,56 @@ async function pollOnce() {
 function runWrapper() {
   return new Promise((resolve) => {
     let child;
+    let settled = false;
+    const done = (code) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+      resolve(code);
+    };
+    const timeoutId = setTimeout(() => {
+      if (settled) return;
+      console.error("[CursorClaw resilience-daemon] Wrapper did not exit within %d ms; killing and restarting...", wrapperMaxAliveMs);
+      let forceTimeout;
+      try {
+        child?.kill("SIGTERM");
+        forceTimeout = setTimeout(() => {
+          if (settled) return;
+          try {
+            child?.kill("SIGKILL");
+          } catch (_) {}
+          done(1);
+        }, 5000);
+        child?.once("close", () => {
+          clearTimeout(forceTimeout);
+          done(1);
+        });
+      } catch (err) {
+        if (forceTimeout) clearTimeout(forceTimeout);
+        done(1);
+      }
+    }, wrapperMaxAliveMs);
     try {
       child = spawn(process.execPath, [runWithRestartScript], {
         cwd,
         stdio: "inherit",
-        env: { ...process.env, RESILIENCE_DAEMON: "0" }
+        env: { ...process.env, RESILIENCE_DAEMON: "0" },
+        windowsHide: true
       });
     } catch (err) {
       console.error("[CursorClaw resilience-daemon] Wrapper spawn failed:", err.message);
-      resolve(1);
+      done(1);
       return;
     }
     child.on("error", (err) => {
       console.error("[CursorClaw resilience-daemon] Wrapper failed to start:", err.message);
-      resolve(1);
+      done(1);
     });
     child.on("close", (code, signal) => {
-      resolve(code ?? (signal ? 1 : 0));
+      if (code != null || signal) {
+        console.error("[CursorClaw resilience-daemon] Wrapper exited (code=%s, signal=%s). Restarting in %d ms...", code ?? "null", signal ?? "none", crashRestartDelayMs);
+      }
+      done(code ?? (signal ? 1 : 0));
     });
   });
 }
@@ -106,7 +142,6 @@ async function supervisorLoop() {
   for (;;) {
     try {
       const code = await runWrapper();
-      console.error("[CursorClaw resilience-daemon] Wrapper exited (code=%s). Restarting in %d ms...", code, crashRestartDelayMs);
       await new Promise((r) => setTimeout(r, crashRestartDelayMs));
     } catch (err) {
       console.error("[CursorClaw resilience-daemon] Error in supervisor loop:", err.message);
@@ -141,10 +176,14 @@ process.on("uncaughtException", (err) => {
   console.error("[CursorClaw resilience-daemon] uncaughtException:", err.message);
   if (err.stack) console.error(err.stack);
   // Do not exit: daemon must keep running to restart the wrapper.
+  // Keep event loop alive in watch mode so supervisor loop can continue.
+  if (watchMode) setImmediate(() => {});
 });
 
 process.on("unhandledRejection", (reason, promise) => {
   console.error("[CursorClaw resilience-daemon] unhandledRejection:", reason);
+  // Mark the promise as handled so Node does not terminate (Node 15+ terminates by default).
+  promise.catch(() => {});
   // Do not exit: daemon must keep running to restart the wrapper.
 });
 
