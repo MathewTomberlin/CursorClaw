@@ -180,7 +180,10 @@ export interface AgentRuntimeOptions {
   config: CursorClawConfig;
   adapter: CursorAgentModelAdapter;
   toolRouter: ToolRouter;
-  memory: MemoryStore;
+  /** Single memory store (used when getMemoryStore is not set, or as fallback). */
+  memory?: MemoryStore;
+  /** When set, used each turn to get the memory store for the run's profile so each agent gets its own MEMORY.md and daily files. */
+  getMemoryStore?: (profileId: string) => MemoryStore;
   pluginHost?: PluginHost;
   observationStore?: RuntimeObservationStore;
   decisionJournal?: DecisionJournal;
@@ -196,8 +199,8 @@ export interface AgentRuntimeOptions {
   lifecycleStream?: LifecycleStream;
   snapshotDir: string;
   onEvent?: (event: RuntimeEvent) => void;
-  /** When set, used each turn to get current substrate (Identity, Soul, etc.) for the system prompt. */
-  getSubstrate?: () => SubstrateContent;
+  /** When set, used each turn to get current substrate (Identity, Soul, etc.) for the system prompt. Receives profileId so each agent gets its own substrate. */
+  getSubstrate?: (profileId: string) => SubstrateContent;
   /** When set, used to resolve profile root for the current turn (e.g. for profile-scoped provider API keys). */
   getProfileRoot?: (profileId: string) => string | undefined;
   /** When set, used for main session only to load MEMORY.md + memory/today+yesterday and inject into system prompt. */
@@ -239,10 +242,13 @@ export class AgentRuntime {
       hardLimit: options.config.session.queueHardLimit,
       dropStrategy: options.config.session.queueDropStrategy
     });
+    const defaultMemory =
+      options.memory ??
+      (options.getMemoryStore ? options.getMemoryStore(getDefaultProfileId(options.config)) : undefined);
     this.promptPluginHost =
       options.pluginHost ??
       createDefaultPromptPluginHost({
-        memory: options.memory,
+        memory: defaultMemory!,
         allowSecretMemory: options.config.memory.includeSecretsInPrompt,
         ...(options.observationStore ? { observationStore: options.observationStore } : {})
       });
@@ -498,11 +504,13 @@ export class AgentRuntime {
               if (!checkpointHandle && this.shouldCreateCheckpoint(call)) {
                 checkpointHandle = await this.options.gitCheckpointManager?.createCheckpoint(runId) ?? null;
               }
-              const profileRootForTool = this.options.getProfileRoot?.(request.session.profileId ?? getDefaultProfileId(this.options.config));
+              const profileIdForTool = request.session.profileId ?? getDefaultProfileId(this.options.config);
+              const profileRootForTool = this.options.getProfileRoot?.(profileIdForTool);
               const toolContext: ToolExecuteContext = {
                 auditId: runId,
                 decisionLogs: this.decisionLogs,
                 provenance: turnProvenance,
+                ...(profileIdForTool !== undefined ? { profileId: profileIdForTool } : {}),
                 ...(profileRootForTool !== undefined && profileRootForTool !== "" ? { profileRoot: profileRootForTool } : {}),
                 ...(request.session.channelKind !== undefined ? { channelKind: request.session.channelKind } : {}),
                 ...(request.session.sessionId !== undefined ? { sessionId: request.session.sessionId } : {})
@@ -552,16 +560,20 @@ export class AgentRuntime {
             checkpointHandle = null;
           }
 
+          const memoryStore =
+            this.options.getMemoryStore?.(request.session.profileId ?? getDefaultProfileId(this.options.config)) ??
+            this.options.memory;
           if (assistantText.length > 3_000) {
-            if (this.options.config.compaction.memoryFlush) {
-              await this.options.memory.flushPreCompaction(request.session.sessionId);
+            if (this.options.config.compaction.memoryFlush && memoryStore) {
+              await memoryStore.flushPreCompaction(request.session.sessionId);
             }
             emit("compaction", { reason: "assistant text exceeded 3000 chars" });
           }
 
           assistantText = collapseDuplicateConsecutiveLines(assistantText);
 
-          await this.options.memory.append({
+          if (memoryStore) {
+            await memoryStore.append({
             sessionId: request.session.sessionId,
             category: "turn-summary",
             text: assistantText.slice(0, 500),
@@ -572,6 +584,7 @@ export class AgentRuntime {
               sensitivity: "operational"
             }
           });
+          }
 
           this.metrics.turnsCompleted += 1;
           this.options.failureLoopGuard?.recordSuccess(sessionId);
@@ -761,7 +774,8 @@ export class AgentRuntime {
     }));
     const systemMessages: Array<{ role: string; content: string }> = [];
 
-    const substrate = this.options.getSubstrate?.() ?? {};
+    const profileIdForSubstrate = request.session.profileId ?? getDefaultProfileId(this.options.config);
+    const substrate = this.options.getSubstrate?.(profileIdForSubstrate) ?? {};
     // AGENTS.md is the coordinating rules file (session start, memory, safety). Inject first so the agent
     // sees workspace rules before Identity/Soul/User; matches OpenClaw/Claude Code use of AGENTS.md as rules.
     if (substrate.agents?.trim()) {
@@ -990,10 +1004,14 @@ export class AgentRuntime {
       }
     }
 
+    const profileIdForMemory = request.session.profileId ?? getDefaultProfileId(this.options.config);
+    const memoryStoreForTurn =
+      this.options.getMemoryStore?.(profileIdForMemory) ?? this.options.memory;
     const pluginResult = await this.promptPluginHost.run({
       runId,
       sessionId: request.session.sessionId,
-      inputMessages: userMessages
+      inputMessages: userMessages,
+      ...(memoryStoreForTurn !== undefined ? { memoryStore: memoryStoreForTurn } : {})
     });
     for (const message of pluginResult.messages) {
       systemMessages.push({

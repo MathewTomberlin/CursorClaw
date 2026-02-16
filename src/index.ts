@@ -291,22 +291,36 @@ async function main(): Promise<void> {
   let memoryEmbeddingIndex: MemoryEmbeddingIndex | null = null;
   const hasRollingWindow =
     config.continuity?.memoryMaxRecords != null || config.continuity?.memoryMaxChars != null;
-  const memory = new MemoryStore({
-    workspaceDir: profileRoot,
-    ...(hasRollingWindow && {
-      rollingWindow: {
-        ...(config.continuity!.memoryMaxRecords != null && { maxRecords: config.continuity!.memoryMaxRecords }),
-        ...(config.continuity!.memoryMaxChars != null && { maxChars: config.continuity!.memoryMaxChars }),
-        ...(config.continuity!.memoryArchivePath != null && { archivePath: config.continuity!.memoryArchivePath }),
-        onTrim: async () => {
-          if (memoryEmbeddingIndex) {
-            const records = await memory.readAll();
-            await memoryEmbeddingIndex.upsertFromRecords(records, config.memory.includeSecretsInPrompt);
+  /** Per-profile memory stores so each agent gets its own MEMORY.md and memory/YYYY-MM-DD.md. */
+  const memoryStoresByProfileId = new Map<string, MemoryStore>();
+  for (const [id, ctx] of profileContextMap) {
+    const isDefaultProfile = id === defaultProfileId;
+    memoryStoresByProfileId.set(
+      id,
+      new MemoryStore({
+        workspaceDir: ctx.profileRoot,
+        ...(hasRollingWindow && {
+          rollingWindow: {
+            ...(config.continuity!.memoryMaxRecords != null && { maxRecords: config.continuity!.memoryMaxRecords }),
+            ...(config.continuity!.memoryMaxChars != null && { maxChars: config.continuity!.memoryMaxChars }),
+            ...(config.continuity!.memoryArchivePath != null && { archivePath: config.continuity!.memoryArchivePath }),
+            ...(isDefaultProfile && {
+              onTrim: async () => {
+                const store = memoryStoresByProfileId.get(defaultProfileId);
+                if (memoryEmbeddingIndex && store) {
+                  const records = await store.readAll();
+                  await memoryEmbeddingIndex.upsertFromRecords(records, config.memory.includeSecretsInPrompt);
+                }
+              }
+            })
           }
-        }
-      }
-    })
-  });
+        })
+      })
+    );
+  }
+  const getMemoryStore = (profileId: string): MemoryStore =>
+    memoryStoresByProfileId.get(profileId) ?? memoryStoresByProfileId.get(defaultProfileId)!;
+  const memory = getMemoryStore(defaultProfileId);
   if (config.continuity?.memoryEmbeddingsEnabled) {
     memoryEmbeddingIndex = new MemoryEmbeddingIndex({
       stateFile: join(profileRoot, "tmp", "memory-embeddings.json"),
@@ -426,7 +440,7 @@ async function main(): Promise<void> {
   }
   toolRouter.register(
     createRememberThisTool({
-      appendRecord: (record) => memory.append(record)
+      getMemoryStore
     })
   );
   if (config.substrate?.allowSoulIdentityEvolution) {
@@ -483,7 +497,10 @@ async function main(): Promise<void> {
   });
   let recentBackgroundTestsPassing = false;
 
-  const getSubstrate = (): SubstrateContent => defaultCtx.substrateStore!.get();
+  const getSubstrate = (profileId: string): SubstrateContent => {
+    const ctx = profileContextMap.get(profileId) ?? defaultCtx;
+    return ctx.substrateStore?.get() ?? {};
+  };
 
   const runStore = new RunStore({
     stateFile: join(profileRoot, "tmp", "run-store.json"),
@@ -508,6 +525,7 @@ async function main(): Promise<void> {
     adapter,
     toolRouter,
     memory,
+    getMemoryStore,
     pluginHost,
     observationStore,
     decisionJournal,

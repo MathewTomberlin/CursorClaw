@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
 import Fastify, { type FastifyInstance } from "fastify";
@@ -857,6 +857,33 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         await mkdir(profileRootPath, { recursive: true });
         const substrateConfig = configCreate.substrate;
         if (substrateConfig) {
+          const defaultProfileRoot = resolveProfileRoot(
+            deps.workspaceRoot,
+            configCreate,
+            getDefaultProfileId(configCreate)
+          );
+          const pathKeys: Array<keyof typeof DEFAULT_SUBSTRATE_PATHS> = [
+            "agentsPath",
+            "identityPath",
+            "soulPath",
+            "birthPath",
+            "capabilitiesPath",
+            "userPath",
+            "toolsPath",
+            "roadmapPath"
+          ];
+          for (const pathKey of pathKeys) {
+            const rel =
+              (substrateConfig as Record<string, string>)[pathKey] ??
+              DEFAULT_SUBSTRATE_PATHS[pathKey];
+            const src = join(defaultProfileRoot, rel);
+            const dest = join(profileRootPath, rel);
+            try {
+              await copyFile(src, dest);
+            } catch {
+              continue;
+            }
+          }
           const substrateStore = new SubstrateStore();
           await substrateStore.reload(profileRootPath, substrateConfig);
           await substrateStore.ensureDefaults(profileRootPath, substrateConfig, { includeBirth: true });

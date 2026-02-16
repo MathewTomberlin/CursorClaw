@@ -13,6 +13,7 @@ import {
 } from "./security/capabilities.js";
 import { fetchWithPinnedDns } from "./network/ssrf-pin.js";
 import { redactSecrets, resolveSafeFetchTarget, wrapUntrustedContent } from "./security.js";
+import type { MemoryStore } from "./memory.js";
 import type {
   DecisionReasonCode,
   PolicyDecisionLog,
@@ -1016,14 +1017,16 @@ export function createRecallMemoryTool(args: {
 
 const SENSITIVITY_LABELS: SensitivityLabel[] = ["public", "private-user", "secret", "operational"];
 
-/** Main-session-only tool: append a "remember this" entry to long-term memory. Requires profileRoot, channelKind, and sessionId in context. */
+/** Main-session-only tool: append a "remember this" entry to long-term memory. Requires profileId (or profileRoot), channelKind, and sessionId in context. Use getMemoryStore when each agent profile has its own memory; otherwise use appendRecord. */
 export function createRememberThisTool(args: {
-  appendRecord: (record: {
+  appendRecord?: (record: {
     sessionId: string;
     category: string;
     text: string;
     provenance: { sourceChannel: string; confidence: number; timestamp: string; sensitivity: SensitivityLabel };
   }) => Promise<{ id: string }>;
+  /** When set, the tool uses this store for the run's profile so each agent gets its own MEMORY.md. Requires profileId in context. */
+  getMemoryStore?: (profileId: string) => MemoryStore;
 }): ToolDefinition {
   return {
     name: "remember_this",
@@ -1055,7 +1058,11 @@ export function createRememberThisTool(args: {
     riskLevel: "low",
     execute: async (rawArgs: unknown, ctx?: ToolExecuteContext) => {
       const parsed = rawArgs as { text: string; category?: string; sensitivity?: string };
-      if (ctx?.channelKind !== "web" || !ctx?.profileRoot || !ctx?.sessionId) {
+      const hasMainSessionContext =
+        ctx?.channelKind === "web" &&
+        (ctx?.profileRoot ?? ctx?.profileId) != null &&
+        ctx?.sessionId != null;
+      if (!hasMainSessionContext) {
         return { error: "remember_this is only available in the main session." };
       }
       const category = (parsed.category ?? "note").trim() || "note";
@@ -1063,7 +1070,7 @@ export function createRememberThisTool(args: {
         ? (parsed.sensitivity as SensitivityLabel)
         : "private-user";
       const record = {
-        sessionId: ctx.sessionId,
+        sessionId: ctx!.sessionId!,
         category,
         text: parsed.text.trim(),
         provenance: {
@@ -1073,8 +1080,16 @@ export function createRememberThisTool(args: {
           sensitivity
         }
       };
-      const { id } = await args.appendRecord(record);
-      return { ok: true, id };
+      if (args.getMemoryStore && ctx?.profileId) {
+        const store = args.getMemoryStore(ctx.profileId);
+        const appended = await store.append(record);
+        return { ok: true, id: appended.id };
+      }
+      if (args.appendRecord) {
+        const { id } = await args.appendRecord(record);
+        return { ok: true, id };
+      }
+      return { error: "remember_this is not configured with a memory store." };
     }
   };
 }

@@ -1,3 +1,4 @@
+import type { MemoryStore } from "../memory.js";
 import type { ObservationEvent } from "../runtime-observation.js";
 import type { MemoryRecord } from "../types.js";
 
@@ -10,6 +11,8 @@ export interface PluginContext {
   runId: string;
   sessionId: string;
   inputMessages: PromptMessage[];
+  /** When set, collectors (e.g. memory) use this store for this turn so each agent profile gets its own memory. */
+  memoryStore?: MemoryStore;
 }
 
 export interface PluginHealth {

@@ -144,6 +144,8 @@ export interface ToolExecuteContext {
   auditId: string;
   decisionLogs: PolicyDecisionLog[];
   provenance?: "system" | "operator" | "untrusted";
+  /** Profile id for the current turn (used by profile-scoped tools e.g. remember_this to get the correct memory store). */
+  profileId?: string;
   /** Profile root for the current turn (used by profile-scoped tools e.g. recall_memory). */
   profileRoot?: string;
   /** Channel kind (e.g. "web" for main session). Used to restrict tools to main session when required. */
