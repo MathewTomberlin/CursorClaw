@@ -768,13 +768,27 @@ export class AgentRuntime {
     pluginDiagnosticCount: number;
   }> {
     const freshness = this.applyUserMessageFreshness(request.messages);
-    const userMessages = freshness.messages.map((message) => ({
+    let userMessages = freshness.messages.map((message) => ({
       role: message.role,
       content: this.scrubText(message.content, scopeId)
     }));
+    const profileIdForSubstrate = request.session.profileId ?? getDefaultProfileId(this.options.config);
+    const modelIdForTurn = getModelIdForProfile(this.options.config, profileIdForSubstrate);
+    const modelConfigForTurn = this.options.config.models[modelIdForTurn];
+    if (
+      modelConfigForTurn?.toolTurnContext === "minimal" &&
+      this.options.toolRouter.list().length > 0 &&
+      userMessages.length > 0
+    ) {
+      const lastUser = [...freshness.messages].reverse().find((m) => m.role === "user");
+      if (lastUser) {
+        userMessages = [
+          { role: lastUser.role, content: this.scrubText(lastUser.content, scopeId) }
+        ];
+      }
+    }
     const systemMessages: Array<{ role: string; content: string }> = [];
 
-    const profileIdForSubstrate = request.session.profileId ?? getDefaultProfileId(this.options.config);
     const substrate = this.options.getSubstrate?.(profileIdForSubstrate) ?? {};
     // AGENTS.md is the coordinating rules file (session start, memory, safety). Inject first so the agent
     // sees workspace rules before Identity/Soul/User; matches OpenClaw/Claude Code use of AGENTS.md as rules.

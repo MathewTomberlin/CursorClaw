@@ -57,6 +57,8 @@ export interface ModelProviderConfig {
   ollamaModelName?: string;
   /** Provider-specific: Ollama API options (temperature, num_ctx). Improves tool use and stability on local models (e.g. Granite 3.2). */
   ollamaOptions?: { temperature?: number; num_ctx?: number };
+  /** When "minimal", only the latest user message is sent for tool turns. Use for Ollama/Granite 3.2: the model often does not call tools when given full conversation history (see docs/Ollama-tool-call-support.md). */
+  toolTurnContext?: "full" | "minimal";
   /** Provider-specific: base URL for OpenAI-compatible or Ollama (e.g. http://localhost:11434). */
   baseURL?: string;
   /** Provider-specific: OpenAI-compatible model id (e.g. gpt-4o-mini, gpt-4o). */

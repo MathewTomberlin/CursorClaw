@@ -32,13 +32,39 @@ This section summarizes which Ollama models support tool use, how to validate th
 
 Ollama may stream tool-call content (e.g. `function.name` in one chunk, `function.arguments` in later chunks). The provider accumulates by call index and emits one `tool_call` event per call when the arguments form valid JSON (or on `done`). No additional provider changes are needed for Granite 3.2 or other models that stream tool calls in this way.
 
+### Why Granite 3.2 may not call tools (chat structure)
+
+Granite 3.2’s tool-calling behavior is sensitive to **how many messages** are in the request:
+
+- **Ollama / IBM examples** use a **single user message** plus `tools`: `messages = [{ role: "user", content: "…" }]`. In that setup the model reliably returns `tool_calls`.
+- **With full conversation history** (many user/assistant turns), the same model often **does not** call tools: it may answer from context, say it will “update” substrate, but never emit `tool_calls`. This is consistent with [reported issues](https://github.com/ollama/ollama/issues) where tool use fails when “message history contains more than just the current user query.”
+- **Chat format:** Ollama expects `messages` with roles `user`, `assistant`, and (after a tool call) `tool` with `tool_name` and `content`. Our provider sends `system` + `user`/`assistant`; we do not send prior `tool` results in the same turn (we run tools and continue in a single turn). The main issue is **volume of history**, not the role names.
+
+**Fix:** Set **`toolTurnContext: "minimal"`** on the Granite model in `openclaw.json`. The runtime will then send only the **latest user message** (plus system messages) for that turn, so the model sees a single-query style prompt and is much more likely to call tools. Conversation continuity is reduced for that turn (the model does not see prior turns), but tool use works. Example:
+
+```json
+"models": {
+  "ollama-granite": {
+    "provider": "ollama",
+    "ollamaModelName": "granite3.2",
+    "toolTurnContext": "minimal",
+    "ollamaOptions": { "temperature": 0.3, "num_ctx": 8192 },
+    "timeoutMs": 120000,
+    "authProfiles": ["default"],
+    "fallbackModels": [],
+    "enabled": true
+  }
+}
+```
+
 ### Tuning for tool use (Granite 3.2, 16GB VRAM)
 
 When tools are sent, the Ollama provider and runtime work together so the model reliably uses tools and reads/edits files:
 
 - **Defaults (when `ollamaOptions` is not set):** `temperature: 0.3`, `num_ctx: 8192`. Lower temperature helps tool-call consistency; `num_ctx` gives enough context for substrate and codebase.
 - **Override in config:** Add `ollamaOptions: { "temperature": 0.2, "num_ctx": 4096 }` (or other values) to your model entry in `openclaw.json` to tune for your hardware. For 16GB VRAM, 8192 or 4096 context is typical; reduce if you hit OOM.
-- **Runtime prompt:** The runtime injects a generic tool-use nudge for all providers, and when the active model is Ollama it adds a **second, stronger system message** that explicitly requires the model to use the provided tools: e.g. to read substrate (AGENTS.md, IDENTITY.md, ROADMAP.md) or any file via `exec` (cat/type/head), and to update files via exec (sed/echo). This addresses cases where capable models (e.g. Granite 3.2) otherwise answer from context without calling tools. The exec tool description already states it is the primary way to read or modify substrate and codebase files.
+- **`toolTurnContext: "minimal"`:** For Granite 3.2 (and similar Ollama models), set this on the model so only the latest user message is sent; see “Why Granite 3.2 may not call tools” above.
+- **Runtime prompt:** The runtime injects a generic tool-use nudge for all providers, and when the active model is Ollama it adds a **second, stronger system message** that explicitly requires the model to use the provided tools: e.g. to read substrate (AGENTS.md, IDENTITY.md, ROADMAP.md) or any file via `exec` (cat/type/head), and to update files via exec (sed/echo). The exec tool description states it is the primary way to read or modify substrate and codebase files.
 
 ---
 
