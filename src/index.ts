@@ -38,7 +38,13 @@ import {
 } from "./privacy/secret-scanner.js";
 import { RunStore } from "./run-store.js";
 import { getThread, setThread, appendMessage } from "./thread-store.js";
-import { AgentRuntime } from "./runtime.js";
+import {
+  AgentRuntime,
+  removeAllButFirstSummaryParagraph,
+  removeDuplicateSummaryParagraph,
+  removeDuplicatedTrailingParagraph,
+  removeDuplicatedTrailingSuffix
+} from "./runtime.js";
 import { NetworkTraceCollector } from "./network/trace-collector.js";
 import { FunctionExplainer } from "./reflection/function-explainer.js";
 import { IdleReflectionScheduler } from "./reflection/idle-scheduler.js";
@@ -57,6 +63,7 @@ import {
   PresenceManager,
   TypingPolicy
 } from "./responsiveness.js";
+import { receiveMessages } from "./mailbox.js";
 import { ApprovalWorkflow } from "./security/approval-workflow.js";
 import { CapabilityStore } from "./security/capabilities.js";
 import { AuthService, IncidentCommander, MethodRateLimiter, PolicyDecisionLogger, validateBindAddress } from "./security.js";
@@ -71,6 +78,8 @@ import {
   createMcpListResourcesTool,
   createMcpReadResourceTool,
   createProposeSoulIdentityUpdateTool,
+  createInterAgentSendMessageTool,
+  createComposerInboxTool,
   createRecallMemoryTool,
   createRememberThisTool,
   createWebFetchTool,
@@ -545,6 +554,11 @@ async function main(): Promise<void> {
       getMemoryStore
     })
   );
+  toolRouter.register(
+    createComposerInboxTool({
+      inboxPath: join(workspaceDir, "tmp", "composer-inbox.md")
+    })
+  );
   if (config.substrate?.allowSoulIdentityEvolution) {
     const getSubstrateContent = (profileRoot: string): SubstrateContent | undefined => {
       if (profileContextMap) {
@@ -556,6 +570,9 @@ async function main(): Promise<void> {
       return undefined;
     };
     toolRouter.register(createProposeSoulIdentityUpdateTool({ getSubstrateContent }));
+  }
+  if (config.heartbeat?.interAgentMailbox === true) {
+    toolRouter.register(createInterAgentSendMessageTool({ getRecipientProfileRoot: getProfileRootForId }));
   }
   if (config.tools.gh?.enabled) {
     const ghRepoScope = config.tools.gh.repoScope && String(config.tools.gh.repoScope).trim() ? config.tools.gh.repoScope : undefined;
@@ -1134,15 +1151,29 @@ async function main(): Promise<void> {
       }
       let content =
         `Instructions for this heartbeat (from HEARTBEAT.md):\n\n${instructionBody}\n\n**Alignment:** Each heartbeat, proactively spend some time on at least one STUDY_GOALS topic (in your context as "Study goals (STUDY_GOALS)"): research via web_search/web_fetch, write notes until you have enough to plan a new feature, then plan and implement it. Also prefer tasks that advance ROADMAP Open items.\n\n${deliveryNote}\n\n${baseInstruction}`;
-      if (getInterrupted()) {
+      const wasContinuation = getInterrupted();
+      if (wasContinuation) {
         clearInterrupted();
         content =
           "The previous heartbeat was interrupted by a user message. Continue with ROADMAP.md, HEARTBEAT.md, and STUDY_GOALS (in context) as appropriate.\n\n" +
+          "**Important:** Do not repeat or summarize what you had already written before the interrupt. Report only new progress since the interrupt (a few short sentences or bullets), then HEARTBEAT_OK. Do not add any paragraph that rephrases, summarizes, or wraps up earlier content—only new progress. Do not add a closing summary or wrap-up paragraph.\n\n" +
           content;
       }
       if (birthPending) {
         content =
           `BIRTH.md is present. You must complete BIRTH proactively: reply with your message to the user (e.g. introduce yourself and ask for their use case and identity). Do not reply HEARTBEAT_OK — your reply will be delivered as a proactive message in the CursorClaw web UI Chat tab (the user is there, not in Cursor IDE).\n\n${content}`;
+      }
+      if (configRef.current.heartbeat?.interAgentMailbox === true) {
+        const pending = await receiveMessages(profileRoot);
+        if (pending.length > 0) {
+          const summary = pending
+            .map(
+              (m) =>
+                `- from=${m.from} type=${m.type} at=${m.at}: ${typeof m.payload === "object" && m.payload !== null ? JSON.stringify(m.payload).slice(0, 200) : String(m.payload)}`
+            )
+            .join("\n");
+          content += `\n\n**Pending inter-agent messages:**\n${summary}`;
+        }
       }
       const result = await runtime.runTurn({
         session: {
@@ -1156,10 +1187,20 @@ async function main(): Promise<void> {
       const reply = result.assistantText.trim();
       const okMarker = "HEARTBEAT_OK";
       const okIndex = reply.indexOf(okMarker);
-      const messageToUser =
-        okIndex >= 0 ? reply.slice(0, okIndex).trim() : reply;
+      const complete = okIndex >= 0;
+      // Never deliver truncated response (no HEARTBEAT_OK): avoids half-summary on continuation and partial output when user message paused/cancelled the heartbeat. Always replace with a short notice so the UI does not show stale or partial content.
+      const truncatedIncomplete = !complete && reply.length > 0 && !birthPending;
+      let messageToUser =
+        complete ? reply.slice(0, okIndex).trim() : truncatedIncomplete ? "" : reply;
+      // Always dedup heartbeat output: continuation often appends a rephrased summary (middle or end); non-continuation can too.
+      if (messageToUser.length > 0) {
+        messageToUser = removeDuplicatedTrailingSuffix(messageToUser);
+        messageToUser = removeDuplicatedTrailingParagraph(messageToUser);
+        messageToUser = removeDuplicateSummaryParagraph(messageToUser);
+        messageToUser = removeAllButFirstSummaryParagraph(messageToUser);
+      }
       const hasProactiveContent =
-        messageToUser.length > 0 && reply !== okMarker;
+        messageToUser.length > 0 && (complete || birthPending);
       const heartbeatHadContent = existsSync(heartbeatPath);
       if (process.env.NODE_ENV !== "test") {
         console.warn(
@@ -1168,11 +1209,15 @@ async function main(): Promise<void> {
           "profileId:",
           profileId,
           "hasProactiveContent:",
-          hasProactiveContent
+          hasProactiveContent,
+          "wasContinuation:",
+          wasContinuation,
+          "truncatedIncomplete:",
+          truncatedIncomplete
         );
       }
       if (hasProactiveContent) {
-        const textToDeliver = okIndex >= 0 ? messageToUser : result.assistantText;
+        const textToDeliver = complete ? messageToUser : result.assistantText;
         await channelHub.send({
           channelId,
           text: textToDeliver,
@@ -1190,6 +1235,15 @@ async function main(): Promise<void> {
         if (pendingRef.current !== fallbackMessage) {
           pendingRef.current = fallbackMessage;
         }
+      } else if (truncatedIncomplete) {
+        // Incomplete run (no HEARTBEAT_OK): e.g. continuation interrupted again, user message paused/cancelled heartbeat, or timeout. We never deliver partial content; send a short notice so the UI replaces any previous proactive message.
+        const truncatedNotice = "Heartbeat was interrupted; no update this time.";
+        await channelHub.send({
+          channelId,
+          text: truncatedNotice,
+          proactive: true
+        });
+        pendingRef.current = truncatedNotice;
       } else if (heartbeatHadContent) {
         const heartbeatFallback =
           "Heartbeat ran. No update from the agent this time.";

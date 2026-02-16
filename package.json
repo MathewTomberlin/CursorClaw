@@ -9,7 +9,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && cd ui && npm install && npm run build",
     "start": "tsx src/index.ts",
-    "start:watch": "node scripts/run-with-restart.js",
+    "start:watch": "node scripts/resilience-daemon.js --watch",
     "resilience:daemon": "node scripts/resilience-daemon.js",
     "commit-memory": "node scripts/commit-memory-branch.js",
     "commit-substrate": "node scripts/commit-substrate-branch.js",

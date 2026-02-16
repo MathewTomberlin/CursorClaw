@@ -102,7 +102,16 @@ function normalizeFetchError(base: string, err: unknown): Error {
   return err instanceof Error ? err : new Error(msg);
 }
 
-export async function rpc<T = unknown>(method: string, params?: Record<string, unknown>): Promise<RpcResponse<T>> {
+export interface RpcOptions {
+  /** When aborted, fetch is cancelled and rpc throws. Use for timeouts and user cancel. */
+  signal?: AbortSignal;
+}
+
+export async function rpc<T = unknown>(
+  method: string,
+  params?: Record<string, unknown>,
+  options?: RpcOptions
+): Promise<RpcResponse<T>> {
   const base = getBaseUrl();
   const token = getToken();
   let res: Response;
@@ -117,9 +126,11 @@ export async function rpc<T = unknown>(method: string, params?: Record<string, u
         version: "2.0",
         method,
         ...(params !== undefined ? { params } : {})
-      })
+      }),
+      signal: options?.signal
     });
   } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") throw err;
     throw normalizeFetchError(base, err);
   }
   let data: RpcResponse<T>;

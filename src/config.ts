@@ -331,7 +331,8 @@ export const DEFAULT_CONFIG: CursorClawConfig = {
     everyMs: 30 * 60_000,
     minMs: 5 * 60_000,
     maxMs: 60 * 60_000,
-    visibility: "silent"
+    visibility: "silent",
+    interAgentMailbox: false
   },
   compaction: {
     memoryFlush: true

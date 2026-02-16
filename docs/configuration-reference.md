@@ -117,6 +117,7 @@ Optional:
 - `activeHours: { "startHour": number, "endHour": number }`
 - `prompt`: custom instruction for the heartbeat turn (appended after HEARTBEAT.md content).
 - `skipWhenEmpty`: when `true`, do not issue a heartbeat API call when HEARTBEAT.md is missing, empty, or contains only comment lines (default `false` for backward compatibility).
+- `interAgentMailbox`: when `true`, at the start of each heartbeat turn the runtime reads pending messages from `profiles/<id>/mailbox/inbox/` and appends a "Pending inter-agent messages" section to the heartbeat content so the agent can act on them. Default `false`. See [Inter-agent profile communication](inter-agent-communication.md).
 
 ## 4.4 `compaction`
 

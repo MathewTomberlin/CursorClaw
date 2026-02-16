@@ -60,6 +60,7 @@ export type LifecycleEventType =
   | "connecting"
   | "queued"
   | "started"
+  | "streaming"
   | "tool"
   | "assistant"
   | "compaction"
@@ -200,6 +201,8 @@ export interface HeartbeatConfig {
   prompt?: string;
   /** When true, skip issuing a heartbeat API call when HEARTBEAT.md is missing, empty, or contains only comments/whitespace. Default false (backward compatible). */
   skipWhenEmpty?: boolean;
+  /** When true, at start of each heartbeat turn receive inter-agent messages from profiles/<id>/mailbox/inbox and append to content. See docs/inter-agent-communication.md. Default false. */
+  interAgentMailbox?: boolean;
 }
 
 export interface AutonomyBudgetConfig {

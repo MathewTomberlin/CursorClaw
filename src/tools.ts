@@ -1,6 +1,6 @@
 import type { Dirent } from "node:fs";
 import { appendFile, copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, unlink, utimes, writeFile } from "node:fs/promises";
-import { resolve, sep } from "node:path";
+import { dirname, resolve, sep } from "node:path";
 import { platform } from "node:os";
 
 import { Ajv, type ValidateFunction } from "ajv";
@@ -28,6 +28,7 @@ import type {
 } from "./types.js";
 import type { SensitivityLabel } from "./types.js";
 import type { SubstrateContent } from "./substrate/types.js";
+import { sendMessage as sendMailboxMessage } from "./mailbox.js";
 
 function isENOENT(e: unknown): boolean {
   return (e as { code?: string })?.code === "ENOENT";
@@ -2273,6 +2274,36 @@ export function createRememberThisTool(args: {
   };
 }
 
+/** Tool for agent-to-Composer communication: append a message to the well-known inbox file so the Cursor Composer agent (or another agent) can read it. See docs/composer-inbox.md. */
+export function createComposerInboxTool(args: { inboxPath: string }): ToolDefinition {
+  return {
+    name: "post_to_composer_inbox",
+    description:
+      "Append a message to the Composer inbox file so the Cursor Composer agent (or another agent in this workspace) can read it. Use when you need to hand off context, ask for help, or leave a note for the other agent. The message appears in tmp/composer-inbox.md with a timestamp and optional sender id. Alignment: keep all inter-agent messages safe for work (SFW)—professional, appropriate, and free of offensive, adult, or harmful content.",
+    schema: {
+      type: "object",
+      properties: {
+        message: { type: "string", minLength: 1, description: "Message to leave for the Composer agent" },
+        from: { type: "string", description: "Optional sender identifier (e.g. profile id or 'heartbeat')" }
+      },
+      required: ["message"],
+      additionalProperties: false
+    },
+    riskLevel: "low",
+    execute: async (rawArgs: unknown, ctx?: ToolExecuteContext) => {
+      const parsed = rawArgs as { message: string; from?: string };
+      const line = [
+        new Date().toISOString(),
+        parsed.from ?? (ctx?.profileId ?? ctx?.sessionId ?? "agent"),
+        parsed.message.trim().replace(/\n/g, " ")
+      ].join("\t") + "\n";
+      await mkdir(dirname(args.inboxPath), { recursive: true });
+      await appendFile(args.inboxPath, line, "utf8");
+      return { ok: true, path: args.inboxPath };
+    }
+  };
+}
+
 const SOUL_IDENTITY_KEYS = ["soul", "identity"] as const;
 
 /** Proposal-only tool for SOUL.md/IDENTITY.md evolution. Does not write; returns current + proposed for user to apply. */
@@ -2326,6 +2357,78 @@ export function createProposeSoulIdentityUpdateTool(args: {
         proposed_content: proposedContent,
         message: `Proposed update to ${fileLabel}. Review the proposed_content above; apply manually (e.g. via Settings or substrate.update) if you want to save it. No file was written.`
       };
+    }
+  };
+}
+
+/** Inter-agent send: deliver a message to another profile's mailbox. Only registered when heartbeat.interAgentMailbox is true. */
+export function createInterAgentSendMessageTool(args: {
+  getRecipientProfileRoot: (profileId: string) => string;
+}): ToolDefinition {
+  return {
+    name: "inter_agent_send_message",
+    description:
+      "Send a message to another agent profile. The message is delivered to that profile's mailbox and will appear in their next heartbeat as 'Pending inter-agent messages'. Use for handoffs, notes, or requests between profiles (e.g. default and Fun). Only available when inter-agent mailbox is enabled.",
+    schema: {
+      type: "object",
+      properties: {
+        recipient_profile_id: {
+          type: "string",
+          description: "Profile id of the recipient (e.g. 'default', 'Fun')"
+        },
+        type: {
+          type: "string",
+          description: "Message type (e.g. 'note', 'handoff', 'request')"
+        },
+        payload: {
+          type: "object",
+          description: "Message payload (any JSON-serializable object)"
+        },
+        id: {
+          type: "string",
+          description: "Optional unique message id; if omitted one is generated"
+        },
+        reply_to: {
+          type: "string",
+          description: "Optional id of the message this is replying to"
+        }
+      },
+      required: ["recipient_profile_id", "type", "payload"],
+      additionalProperties: false
+    },
+    riskLevel: "low",
+    execute: async (rawArgs: unknown, ctx?: ToolExecuteContext) => {
+      const profileRoot = ctx?.profileRoot;
+      const profileId = ctx?.profileId ?? "default";
+      if (!profileRoot) {
+        return { error: "Profile context not available." };
+      }
+      const parsed = rawArgs as {
+        recipient_profile_id: string;
+        type: string;
+        payload: unknown;
+        id?: string;
+        reply_to?: string;
+      };
+      const to = String(parsed.recipient_profile_id ?? "").trim();
+      if (!to) {
+        return { error: "recipient_profile_id is required." };
+      }
+      const recipientRoot = args.getRecipientProfileRoot(to);
+      const msgType = String(parsed.type ?? "note").trim();
+      const payload = parsed.payload;
+      const id = parsed.id?.trim() ?? `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      const envelope = {
+        id,
+        from: profileId,
+        to,
+        at: new Date().toISOString(),
+        type: msgType,
+        payload: payload ?? {},
+        ...(parsed.reply_to != null && parsed.reply_to !== "" ? { replyTo: String(parsed.reply_to).trim() } : {})
+      };
+      await sendMailboxMessage(recipientRoot, envelope);
+      return { ok: true, id, to, type: msgType };
     }
   };
 }

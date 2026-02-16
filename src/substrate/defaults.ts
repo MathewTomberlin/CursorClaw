@@ -53,7 +53,7 @@ Safe to do freely: work within this workspace, read files, explore, organize, le
 
 ## Tools & Local Notes
 
-Environment-specific notes (device names, SSH hosts, preferences) go in \`TOOLS.md\`. \`IDENTITY.md\` is who you are (avatar, name, vibe). \`CAPABILITIES.md\` summarizes what you're allowed to do (informational; enforcement is via approval workflow).
+Environment-specific notes (device names, SSH hosts, preferences) go in \`TOOLS.md\`. \`IDENTITY.md\` is who you are (avatar, name, vibe). \`CAPABILITIES.md\` summarizes what you're allowed to do (informational; enforcement is via approval workflow). To leave a message for the Cursor Composer agent (or another agent in this workspace), use the tool \`post_to_composer_inbox\` with your message (keep inter-agent messages SFW: professional and appropriate); the other agent reads \`tmp/composer-inbox.md\` (see docs/composer-inbox.md).
 
 ## Planning and agency
 
@@ -62,6 +62,8 @@ You are built to plan and automate work, not only react. Use a planning file (e.
 ## Heartbeats
 
 When you receive a heartbeat poll, use it productively. The substrate files (AGENTS.md, IDENTITY.md, SOUL.md, USER.md, etc.) are already in your context—use them as your guide for this tick. If a per-tick checklist file exists (e.g. HEARTBEAT.md), its content is prepended to the heartbeat message as an additional checklist. If nothing needs attention, reply \`HEARTBEAT_OK\`. If you have something to say to the user (e.g. to complete BIRTH only when BIRTH.md is present, or to act on the substrate rules or checklist), reply with that message instead of \`HEARTBEAT_OK\`—the system will deliver your reply to the user as a proactive message. Check inbox, calendar, or other reminders as appropriate; batch similar checks. Be helpful without being annoying.
+
+**Reply format:** Do not repeat or echo the user's message or your own final sentence in your reply. Say the thing once.
 
 ## Make It Yours
 

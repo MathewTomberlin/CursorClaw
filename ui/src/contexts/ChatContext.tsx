@@ -19,12 +19,19 @@ export interface ChatMessage {
   at?: string;
 }
 
-/** Lifecycle event from /stream (queued, started, tool, assistant, compaction, completed, failed). */
+/** Lifecycle event from /stream (queued, started, streaming, tool, assistant, compaction, completed, failed). */
 export interface StreamEvent {
   type: string;
   sessionId?: string;
   runId?: string;
-  payload?: { call?: { name?: string }; content?: string; error?: string; reason?: string };
+  payload?: {
+    call?: { name?: string };
+    content?: string;
+    error?: string;
+    reason?: string;
+    /** When true, assistant content replaces the streamed buffer instead of appending. */
+    replace?: boolean;
+  };
   at?: string;
 }
 
@@ -118,6 +125,8 @@ interface ChatContextValue {
   messages: ChatMessage[];
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
   streamEvents: StreamEvent[];
+  /** Accumulated assistant content from stream for the current run (so UI can show live output). */
+  streamedContent: string;
   currentRunId: string | null;
   loading: boolean;
   loadingStartedAt: number | null;
@@ -148,6 +157,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
   const [channelKind, setChannelKind] = useState<ChannelKind>("dm");
   const [messages, setMessages] = useState<ChatMessage[]>(() => loadThread("demo-session"));
   const [streamEvents, setStreamEvents] = useState<StreamEvent[]>([]);
+  const [streamedContent, setStreamedContent] = useState("");
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
@@ -157,12 +167,18 @@ export function ChatProvider({ children }: ChatProviderProps) {
   const serverLoadDoneRef = useRef(false);
   /** Prevents duplicate assistant messages from double-submit or racing agent.wait responses. */
   const runTurnInProgressRef = useRef(false);
+  /** Run ID from server once agent.run returns; cleared in finally. Used to know when server has persisted the user message. */
+  const currentRunIdRef = useRef<string | null>(null);
+  /** AbortController for in-flight runTurn; aborted on timeout or unmount so loading is never stuck. */
+  const runTurnAbortRef = useRef<AbortController | null>(null);
   /** Proactive messages received while that profile was not selected; injected when user switches to that profile. */
   const [pendingProactiveByProfile, setPendingProactiveByProfile] = useState<Record<string, string[]>>({});
   const pendingProactiveRef = useRef<Record<string, string[]>>({});
   const selectedProfileIdRef = useRef(selectedProfileId);
   selectedProfileIdRef.current = selectedProfileId;
   pendingProactiveRef.current = pendingProactiveByProfile;
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
 
   const addPendingProactive = useCallback((profileId: string, text: string) => {
     setPendingProactiveByProfile((prev) => ({
@@ -172,6 +188,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
   }, []);
 
   // Load thread from server when session or profile changes (shared message list for desktop and mobile)
+  // When a run is in progress but server hasn't confirmed yet (no runId), merge server + optimistic tail so we don't lose the just-sent user message when switching profile/view.
   useEffect(() => {
     const sid = sessionId.trim();
     if (!sid || !selectedProfileId) return;
@@ -183,7 +200,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
         if (!cancelled && Array.isArray(serverMessages)) {
           const deduped = dedupeConsecutiveAssistantReplies(serverMessages);
           const pending = pendingProactiveRef.current[profileIdForLoad] ?? [];
-          const toSet =
+          let toSet: ChatMessage[] =
             pending.length > 0 && selectedProfileIdRef.current === profileIdForLoad
               ? [
                   ...deduped,
@@ -195,7 +212,25 @@ export function ChatProvider({ children }: ChatProviderProps) {
                   }))
                 ]
               : deduped;
-          setMessages(toSet);
+          const stillForCurrentProfile =
+            sessionIdRef.current === sid && selectedProfileIdRef.current === profileIdForLoad;
+          if (!stillForCurrentProfile) {
+            // Load was for a different session/profile; don't overwrite current view
+          } else if (
+            currentRunIdRef.current === null &&
+            runTurnInProgressRef.current
+          ) {
+            // Preserve optimistic user message when runTurn sent but agent.run not returned yet
+            setMessages((local) => {
+              if (local.length <= toSet.length) return toSet;
+              const tail = local.slice(toSet.length);
+              const hasUser = tail.some((m) => m.role === "user");
+              if (hasUser) return [...toSet, ...tail];
+              return toSet;
+            });
+          } else {
+            setMessages(toSet);
+          }
           if (pending.length > 0 && selectedProfileIdRef.current === profileIdForLoad) {
             setPendingProactiveByProfile((prev) => {
               const next = { ...prev };
@@ -227,6 +262,23 @@ export function ChatProvider({ children }: ChatProviderProps) {
     }
   }, [messages, sessionId, selectedProfileId]);
 
+  // Safety net: clear loading if it has been stuck for too long (e.g. server hung without closing connection)
+  const LOADING_MAX_MS = 11 * 60 * 1000; // 11 min
+  useEffect(() => {
+    if (!loading || loadingStartedAt == null) return;
+    const interval = setInterval(() => {
+      if (loadingStartedAt != null && Date.now() - loadingStartedAt > LOADING_MAX_MS) {
+        setLoading(false);
+        setLoadingStartedAt(null);
+        setCurrentRunId(null);
+        currentRunIdRef.current = null;
+        runTurnInProgressRef.current = false;
+        setError("Send timed out. You can try again.");
+      }
+    }, 30_000);
+    return () => clearInterval(interval);
+  }, [loading, loadingStartedAt]);
+
   // Keep lifecycle stream open for current session (survives tab switch)
   useEffect(() => {
     const sid = sessionId.trim();
@@ -241,6 +293,17 @@ export function ChatProvider({ children }: ChatProviderProps) {
       try {
         const data = JSON.parse(ev.data) as StreamEvent;
         setStreamEvents((prev) => [...prev, data]);
+        if (
+          data.type === "assistant" &&
+          data.runId &&
+          data.runId === currentRunIdRef.current
+        ) {
+          const payload = data.payload as { content?: string; replace?: boolean } | undefined;
+          setStreamedContent((prev) => {
+            if (payload?.replace) return payload.content ?? "";
+            return prev + (payload?.content ?? "");
+          });
+        }
       } catch {
         // ignore
       }
@@ -261,6 +324,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
         streamRef.current.close();
         streamRef.current = null;
       }
+      runTurnAbortRef.current?.abort();
     };
   }, []);
 
@@ -273,10 +337,17 @@ export function ChatProvider({ children }: ChatProviderProps) {
       }
       if (runTurnInProgressRef.current) return;
       runTurnInProgressRef.current = true;
+      currentRunIdRef.current = null;
       setError(null);
       setCurrentRunId(null);
+      setStreamedContent("");
       setLoading(true);
       setLoadingStartedAt(Date.now());
+
+      const abort = new AbortController();
+      runTurnAbortRef.current = abort;
+      const RUN_TURN_TIMEOUT_MS = 10 * 60 * 1000; // 10 min total
+      const timeoutId = setTimeout(() => abort.abort(), RUN_TURN_TIMEOUT_MS);
 
       const userMsg: ChatMessage = {
         id: generateId(),
@@ -299,13 +370,26 @@ export function ChatProvider({ children }: ChatProviderProps) {
         };
         const trimmedMessages = trimMessagesToFit(session, apiMessages);
 
-        const runRes = await rpc<{ runId: string }>("agent.run", {
-          session,
-          messages: trimmedMessages
-        });
+        const runRes = await rpc<{ runId: string }>(
+          "agent.run",
+          { session, messages: trimmedMessages },
+          { signal: abort.signal }
+        );
         const runId = runRes.result?.runId;
         if (!runId) throw new Error("No runId returned");
+        currentRunIdRef.current = runId;
         setCurrentRunId(runId);
+
+        // Sync from server so thread is source of truth (avoids lost messages when switching profile/view)
+        const sid = sessionId.trim();
+        const pid = selectedProfileId;
+        getThread(sid, pid)
+          .then(({ messages: serverMessages }) => {
+            if (sessionIdRef.current === sid && selectedProfileIdRef.current === pid && Array.isArray(serverMessages)) {
+              setMessages(dedupeConsecutiveAssistantReplies(serverMessages));
+            }
+          })
+          .catch(() => {});
 
         // Poll agent.wait instead of one long-lived request to avoid browser/proxy timeouts ("Failed to fetch")
         const POLL_INTERVAL_MS = 2000;
@@ -315,7 +399,8 @@ export function ChatProvider({ children }: ChatProviderProps) {
         for (;;) {
           const waitRes = await rpc<{ status?: string; runId?: string; assistantText?: string; events?: unknown[] }>(
             "agent.wait",
-            { runId }
+            { runId },
+            { signal: abort.signal }
           );
           out = waitRes.result;
           if (out && (out as { status?: string }).status === "pending") {
@@ -327,6 +412,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
         }
         const assistantText = out?.assistantText ?? "";
 
+        setStreamedContent("");
         const assistantMsg: ChatMessage = {
           id: generateId(),
           role: "assistant",
@@ -335,24 +421,42 @@ export function ChatProvider({ children }: ChatProviderProps) {
         };
         setMessages((prev) => {
           const last = prev[prev.length - 1];
-          if (last?.role !== "assistant") return [...prev, assistantMsg];
-          const lastNorm = normalizeForDedupe(last.content ?? "");
+          const isStreamingBubble =
+            last?.role === "assistant" &&
+            last.id === `streaming-${runId}`;
+          const base = isStreamingBubble ? prev.slice(0, prev.length - 1) : prev;
+          const effectiveLast = base[base.length - 1];
+          if (effectiveLast?.role !== "assistant")
+            return [...base, assistantMsg];
+          const lastNorm = normalizeForDedupe(effectiveLast.content ?? "");
           const newNorm = normalizeForDedupe(assistantText);
-          if (lastNorm === newNorm) return prev;
+          if (lastNorm === newNorm) return base.length < prev.length ? base : prev;
           if (newNorm.length > lastNorm.length && newNorm.startsWith(lastNorm)) {
-            return [...prev.slice(0, prev.length - 1), { ...last, content: assistantText, at: assistantMsg.at }];
+            return [
+              ...base.slice(0, base.length - 1),
+              { ...effectiveLast, content: assistantText, at: assistantMsg.at }
+            ];
           }
-          if (lastNorm.length > newNorm.length && lastNorm.startsWith(newNorm)) return prev;
-          return [...prev, assistantMsg];
+          if (lastNorm.length > newNorm.length && lastNorm.startsWith(newNorm))
+            return base.length < prev.length ? base : prev;
+          return [...base, assistantMsg];
         });
       } catch (e) {
-        setError(
-          e instanceof Error ? e.message : mapRpcError({ error: { code: "INTERNAL", message: String(e) } })
-        );
+        const msg =
+          e instanceof Error && e.name === "AbortError"
+            ? "Request was cancelled or timed out. You can send again."
+            : e instanceof Error
+              ? e.message
+              : mapRpcError({ error: { code: "INTERNAL", message: String(e) } });
+        setError(msg);
         // Keep the user message so they see what they sent and the error
       } finally {
+        clearTimeout(timeoutId);
+        runTurnAbortRef.current = null;
         setLoading(false);
         setLoadingStartedAt(null);
+        setStreamedContent("");
+        currentRunIdRef.current = null;
         setCurrentRunId(null);
         runTurnInProgressRef.current = false;
       }
@@ -385,6 +489,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
     messages,
     setMessages,
     streamEvents,
+    streamedContent,
     currentRunId,
     loading,
     loadingStartedAt,

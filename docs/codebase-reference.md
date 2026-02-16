@@ -73,6 +73,12 @@ Implemented in `src/gateway.ts`.
 - **Extension:** New adapters (e.g. Discord, webhook) can be added by implementing the `ChannelAdapter` interface (`src/channels.ts`) and registering with the hub.
 - **Optional callback:** The gateway accepts an optional `onBeforeSend?(channelId, text): Promise<boolean>`. If provided, it is called before `channelHub.send`. If it returns `false`, delivery is skipped and the RPC response indicates `delivered: false` with detail `"onBeforeSend returned false"`. This allows operator-defined webhooks or filtering without implementing a full adapter.
 
+### 3.2 Composer inbox (agent-to-Composer)
+
+- **Purpose:** The CursorClaw agent can leave messages for the Cursor Composer agent (or another agent in the same workspace) via the tool `post_to_composer_inbox`. Messages are appended to `tmp/composer-inbox.md` (workspace root). The Composer agent reads that file to receive handoffs or context.
+- **Contract:** See [docs/composer-inbox.md](composer-inbox.md). Tool: `post_to_composer_inbox` (message, optional from). Format: one line per message, tab-separated `ISO8601\tfrom\tmessage`.
+- **User transparency:** When communicating with another agent, each agent should tell the user what it said to the other and what the other said back; see [composer-inbox.md § User transparency](composer-inbox.md#user-transparency).
+
 ## 4) Security model (defense in depth)
 
 Security logic spans `src/security.ts`, `src/tools.ts`, `src/security/*`, and config defaults.

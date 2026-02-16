@@ -61,6 +61,7 @@ export interface TurnResult {
 export type RuntimeEventType =
   | "queued"
   | "started"
+  | "streaming"
   | "tool"
   | "assistant"
   | "compaction"
@@ -96,6 +97,119 @@ function collapseDuplicateConsecutiveLines(text: string): string {
     }
   }
   return out.join("\n");
+}
+
+/**
+ * If the text ends with a segment that was already present immediately before (e.g. adapter sent
+ * full message then streamed again, or model echoed), remove the duplicated trailing copy.
+ * Iterates longest suffix first so we remove the full duplicate (e.g. "Hello world. Hello world." → "Hello world.").
+ * Exported for use when deduping heartbeat continuation proactive messages.
+ */
+export function removeDuplicatedTrailingSuffix(text: string): string {
+  if (!text || text.length < 2) return text;
+  for (let len = text.length - 1; len >= 1; len--) {
+    const suffix = text.slice(-len);
+    const before = text.slice(0, -len);
+    if (before.endsWith(suffix)) return before;
+  }
+  return text;
+}
+
+/**
+ * Remove a duplicated trailing paragraph: if the text ends with "\n\n" + a block that equals
+ * the previous block (trimmed), drop the trailing copy (e.g. "A\n\nA" → "A"). Re-run until no change.
+ * Also removes last paragraph if it duplicates any earlier paragraph (e.g. duplicated summary on heartbeat continuation).
+ * Exported for use when deduping heartbeat continuation proactive messages.
+ */
+export function removeDuplicatedTrailingParagraph(text: string): string {
+  if (!text || text.length < 2) return text;
+  const parts = text.split(/\n\n+/);
+  if (parts.length < 2) return text;
+  let out = text;
+  for (;;) {
+    const segments = out.split(/\n\n+/);
+    if (segments.length < 2) break;
+    const last = segments[segments.length - 1]?.trim() ?? "";
+    if (last === "") break;
+    // Remove last paragraph if it duplicates the immediately previous one
+    const prev = segments[segments.length - 2]?.trim() ?? "";
+    if (last === prev) {
+      out = segments.slice(0, -1).join("\n\n");
+      if (out === text) break;
+      text = out;
+      continue;
+    }
+    // Remove last paragraph if it duplicates any earlier paragraph (e.g. duplicated "summary" block)
+    const rest = segments.slice(0, -1);
+    const duplicateIndex = rest.findIndex((s) => s.trim() === last);
+    if (duplicateIndex >= 0) {
+      out = rest.join("\n\n");
+      if (out === text) break;
+      text = out;
+    } else {
+      break;
+    }
+  }
+  return out;
+}
+
+/** Prefixes that indicate a paragraph is a summary/wrap-up (for deduping duplicated summaries on heartbeat continuation). */
+const SUMMARY_LIKE_PREFIXES = /^(Summary|In summary|In short|TL;DR|Wrap-up|Bottom line|Overall|To summarize|In brief|That's it for|No further (updates?|progress)|Nothing else to report|All set for this (tick|cycle)|Done for now)\s*[:.]?\s*/i;
+
+/**
+ * Returns true if the trimmed paragraph looks like a summary or wrap-up block.
+ */
+function isSummaryLikeParagraph(paragraph: string): boolean {
+  const t = paragraph.trim();
+  if (t.length < 10) return false;
+  return SUMMARY_LIKE_PREFIXES.test(t) || /\b(summary|wrap-up|bottom line)\s*[:.]/i.test(t.slice(0, 80));
+}
+
+/**
+ * On heartbeat continuation the model sometimes appends a second summary paragraph that rephrases
+ * the first; exact-paragraph dedup misses it. Remove the last paragraph if it is summary-like and
+ * an earlier paragraph is also summary-like (root-cause fix for duplicated heartbeat output).
+ * Re-runs until no change so multiple trailing summary duplicates are removed.
+ * Exported for use when deduping heartbeat continuation proactive messages in index.
+ */
+export function removeDuplicateSummaryParagraph(text: string): string {
+  if (!text || text.length < 2) return text;
+  let out = text;
+  for (;;) {
+    const segments = out.split(/\n\n+/).map((s) => s.trim()).filter(Boolean);
+    if (segments.length < 2) break;
+    const last = segments[segments.length - 1] ?? "";
+    if (!isSummaryLikeParagraph(last)) break;
+    const rest = segments.slice(0, -1);
+    const hasEarlierSummary = rest.some((s) => isSummaryLikeParagraph(s));
+    if (!hasEarlierSummary) break;
+    const next = rest.join("\n\n").trim();
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
+/**
+ * On heartbeat continuation the model may append a rephrased summary in the middle or at the end,
+ * so the middle paragraph looks different but is still a duplicate. Remove all summary-like
+ * paragraphs except the first one (keeps one summary, drops any later "rephrased" summaries).
+ * Exported for use when deduping heartbeat continuation proactive messages in index.
+ */
+export function removeAllButFirstSummaryParagraph(text: string): string {
+  if (!text || text.length < 2) return text;
+  const segments = text.split(/\n\n+/);
+  if (segments.length < 2) return text;
+  let seenSummary = false;
+  const kept = segments.filter((seg) => {
+    const t = seg.trim();
+    if (t === "") return true;
+    const isSummary = isSummaryLikeParagraph(t);
+    if (isSummary && seenSummary) return false;
+    if (isSummary) seenSummary = true;
+    return true;
+  });
+  return kept.join("\n\n").replace(/\n\n+/g, "\n\n").trim();
 }
 
 /**
@@ -525,14 +639,29 @@ export class AgentRuntime {
             let thisRoundContent = "";
             /** Tool calls this round with outputs (for agent loop: assistant message + tool result messages). */
             const thisRoundToolCalls: Array<{ name: string; args: unknown; output: unknown; id?: string }> = [];
+            /** Emit "streaming" once when first adapter event is received (so UI can show progress instead of "Waiting for stream"). */
+            let streamStartedEmitted = false;
+            const maybeEmitStreaming = (): void => {
+              if (!streamStartedEmitted) {
+                streamStartedEmitted = true;
+                emit("streaming");
+              }
+            };
 
             for await (const event of adapterStream) {
               if (event.type === "assistant_delta") {
-                const rawContent = String((event.data as { content?: string })?.content ?? "");
+                maybeEmitStreaming();
+                const data = event.data as { content?: string; isFullMessage?: boolean };
+                const rawContent = String(data?.content ?? "");
                 const content = this.scrubText(rawContent, scrubScopeId);
-                thisRoundContent += content;
-                if (content === assistantText) {
-                  // Exact duplicate (e.g. CLI sent deltas then full message); skip emit
+                const isFullMessage = Boolean(data?.isFullMessage);
+                if (isFullMessage) {
+                  // Adapter sent full message (e.g. CLI "assistant" event); replace so we never append and duplicate.
+                  assistantText = content;
+                  thisRoundContent = content;
+                  emit("assistant", { content, replace: true });
+                } else if (content === assistantText) {
+                  // Exact duplicate (e.g. CLI sent deltas then full message); skip emit and accumulation
                 } else if (content.length >= assistantText.length && content.startsWith(assistantText)) {
                   // Full-message replacement (e.g. CLI sent deltas then full message): emit only the new suffix so the client does not append the full content again and show duplication (e.g. with HIGH_ENTROPY_TOKEN placeholders).
                   const delta = content.slice(assistantText.length);
@@ -541,14 +670,40 @@ export class AgentRuntime {
                   if (delta.length > 0) {
                     emit("assistant", { content: delta });
                   }
-                } else if (content.length >= 15 && assistantText.includes(content)) {
-                  // Skip duplicate segment (e.g. Cursor CLI re-sending same chunk)
+                } else if (
+                  content.length >= assistantText.length &&
+                  assistantText.length >= 10 &&
+                  (() => {
+                    let overlap = 0;
+                    const maxOverlap = Math.min(assistantText.length, content.length);
+                    for (let i = 0; i < maxOverlap && assistantText[i] === content[i]; i++) overlap += 1;
+                    return overlap >= assistantText.length * 0.8;
+                  })()
+                ) {
+                  // Fuzzy replacement: placeholder was replaced (e.g. stream had HIGH_ENTROPY_TOKEN, final has real text). Replace and emit only new suffix.
+                  let overlap = 0;
+                  const maxOverlap = Math.min(assistantText.length, content.length);
+                  for (let i = 0; i < maxOverlap && assistantText[i] === content[i]; i++) overlap += 1;
+                  assistantText = content;
+                  thisRoundContent = content;
+                  const delta = content.slice(overlap);
+                  if (delta.length > 0) {
+                    emit("assistant", { content: delta });
+                  }
+                } else if (
+                  assistantText.startsWith(content) ||
+                  (content.length >= 15 && assistantText.includes(content)) ||
+                  (assistantText.endsWith(content) && content.length >= 1)
+                ) {
+                  // Skip: content is a prefix (e.g. CLI sent full message first then streamed same text); or duplicate segment; or duplicate trailing suffix (avoids duplicated final message). Do not add to thisRoundContent.
                 } else {
                   assistantText += content;
+                  thisRoundContent += content;
                   emit("assistant", { content });
                 }
                 emittedCount += 1;
               } else if (event.type === "tool_call") {
+                maybeEmitStreaming();
                 const call = event.data as ToolCall;
                 this.recordTouchedFileHints(sessionId, this.extractTouchedFileHints(call));
                 if (!checkpointHandle && this.shouldCreateCheckpoint(call)) {
@@ -650,7 +805,13 @@ export class AgentRuntime {
             emit("compaction", { reason: "assistant text exceeded 3000 chars" });
           }
 
+          assistantText = removeDuplicatedTrailingSuffix(assistantText);
+          assistantText = removeDuplicatedTrailingParagraph(assistantText);
           assistantText = collapseDuplicateConsecutiveLines(assistantText);
+          // Heartbeat turns often get a second summary appended on continuation; dedup so we don't deliver duplicated content.
+          if (request.session.sessionId.startsWith("heartbeat")) {
+            assistantText = removeDuplicateSummaryParagraph(assistantText);
+          }
 
           if (memoryStore) {
             await memoryStore.append({

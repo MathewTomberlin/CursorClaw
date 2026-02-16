@@ -336,9 +336,9 @@ export class CursorAgentCliProvider implements ModelProvider {
         ? content.map((c) => (c && typeof c.text === "string" ? c.text : "")).join("")
         : "";
       if (!text) return null;
-      // Forward full assistant content; runtime dedupes if we already got it via assistant_delta.
+      // Forward full assistant content with isFullMessage so runtime replaces streamed text instead of appending (avoids duplication).
       this.pushEventLog(redactSecrets(JSON.stringify(candidate)));
-      return { type: "assistant_delta", data: { content: text } };
+      return { type: "assistant_delta", data: { content: text, isFullMessage: true } };
     }
     if (candidate.type === "result") {
       return { type: "done", data: {} };

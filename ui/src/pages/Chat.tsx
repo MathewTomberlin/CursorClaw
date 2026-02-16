@@ -6,6 +6,19 @@ import { useChat } from "../contexts/ChatContext";
 import { useProfile } from "../contexts/ProfileContext";
 import type { StreamEvent } from "../contexts/ChatContext";
 
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() =>
+    typeof window !== "undefined" ? window.matchMedia(query).matches : false
+  );
+  useEffect(() => {
+    const m = window.matchMedia(query);
+    const handler = () => setMatches(m.matches);
+    m.addEventListener("change", handler);
+    return () => m.removeEventListener("change", handler);
+  }, [query]);
+  return matches;
+}
+
 function formatStreamEventLabel(ev: StreamEvent): string {
   switch (ev.type) {
     case "connecting":
@@ -14,6 +27,8 @@ function formatStreamEventLabel(ev: StreamEvent): string {
       return "Queued";
     case "started":
       return "Started";
+    case "streaming":
+      return "Streaming…";
     case "tool":
       return ev.payload?.call?.name ? `Tool: ${ev.payload.call.name}` : "Tool call";
     case "assistant":
@@ -39,6 +54,7 @@ function ChatInput({
   onSubmit: (text: string) => void;
 }) {
   const [value, setValue] = useState("");
+  const portraitMobile = useMediaQuery("(max-width: 640px) and (orientation: portrait)");
   const handleSubmit = () => {
     const text = value.trim();
     if (!text || submitDisabled) return;
@@ -58,7 +74,7 @@ function ChatInput({
           }
         }}
         placeholder="Message the agent…"
-        rows={2}
+        rows={portraitMobile ? 1 : 2}
         aria-label="Message the agent"
       />
       <button
@@ -87,6 +103,7 @@ export default function Chat() {
     setMessages,
     loading,
     streamEvents,
+    streamedContent,
     currentRunId,
     loadingStartedAt,
     error,
@@ -94,6 +111,20 @@ export default function Chat() {
     clearThread,
     addPendingProactive
   } = useChat();
+
+  /** Messages to render: when loading and we have streamed content, append a live assistant bubble so output updates as it streams. */
+  const displayMessages =
+    loading && currentRunId && streamedContent
+      ? [
+          ...messages,
+          {
+            id: `streaming-${currentRunId}`,
+            role: "assistant" as const,
+            content: streamedContent,
+            at: undefined
+          }
+        ]
+      : messages;
 
   const [channelConfigOpen, setChannelConfigOpen] = useState(false);
   const [chatSendResult, setChatSendResult] = useState<string | null>(null);
@@ -114,7 +145,7 @@ export default function Chat() {
   // Auto-scroll to bottom when new messages arrive (instant so tab switch doesn’t animate the whole log)
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "auto" });
-  }, [messages, streamEvents]);
+  }, [messages, streamEvents, streamedContent]);
 
   /** Normalize for dedupe: trim and collapse runs of whitespace so minor differences don't create duplicates. */
   function normalizeForDedupe(s: string): string {
@@ -199,7 +230,8 @@ export default function Chat() {
   const lastStreamEvent = runEvents.length > 0 ? runEvents[runEvents.length - 1] : null;
   const statusTrail = runEvents.map(formatStreamEventLabel);
   const hasRealProgress = runEvents.some(
-    (e) => e.type !== "connecting" && e.type !== "queued"
+    (e) =>
+      e.type !== "connecting" && e.type !== "queued" && e.type !== "started"
   );
   const loadingDurationMs = loadingStartedAt != null ? Date.now() - loadingStartedAt : 0;
   const showWorkingFallback =
@@ -316,12 +348,12 @@ export default function Chat() {
           )}
 
           <div className="chat-messages" ref={scrollRef} role="log" aria-live="polite">
-            {messages.length === 0 && !loading && (
+            {displayMessages.length === 0 && !loading && (
               <div className="chat-empty">
                 <p>No messages yet. Send a message to start a conversation with the agent.</p>
               </div>
             )}
-            {messages.map((msg) => (
+            {displayMessages.map((msg) => (
               <div
                 key={msg.id}
                 className={`chat-bubble chat-bubble--${msg.role}`}
