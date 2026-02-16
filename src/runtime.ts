@@ -659,6 +659,8 @@ export class AgentRuntime {
           const isOpenAICompatible =
             modelConfig?.provider === "openai-compatible" || modelConfig?.provider === "lm-studio";
           const providerSupportsToolFollowUp = isOllama || isOpenAICompatible;
+          /** Accumulated thinking across all rounds so we strip it from the final assistant message (CLI may send one full message after tool use). */
+          let previousThinkingContent = "";
 
           while (true) {
             const messagesToSend =
@@ -686,8 +688,6 @@ export class AgentRuntime {
             };
             // Emit "streaming" immediately so status updates appear before first adapter event (e.g. Cursor-Agent CLI).
             maybeEmitStreaming();
-            /** For thinking: emit only the chunk that should replace the display (never accumulated). Each emit clears previous in UI. */
-            let previousThinkingContent = "";
             /** Emit final_message_start once when first assistant content arrives so UI clears thinking and shows append. */
             let finalMessageStartEmitted = false;
 
