@@ -51,14 +51,16 @@ export default function Heartbeat() {
     <div className="card">
       <h2>HEARTBEAT.md</h2>
       <p style={{ marginBottom: "1rem" }}>
-        Per-tick checklist for the agent. The server reads this file on each heartbeat run. If the agent has
-        something to say (e.g. a task here or BIRTH), it will reply with a message instead of{" "}
+        Per-tick <strong>action list</strong> for the agent. The server reads this file on each heartbeat run.
+        When empty or missing, a default template is used (repo state, roadmap, learning, maintenance, memory).
+        If the agent has something to say (e.g. a task here or BIRTH), it will reply with a message instead of{" "}
         <code>HEARTBEAT_OK</code> and that message is delivered as a <strong>proactive message</strong> in the
         Chat tab.
       </p>
       <p style={{ marginBottom: "1rem" }}>
-        Edits here take effect on the <strong>next heartbeat</strong> (no restart). To test proactive messages,
-        add a line like: &quot;Say hello to the user in the web Chat.&quot;
+        Edits here take effect on the <strong>next heartbeat</strong> (no restart). The template includes an
+        &quot;Agent-added actions&quot; section—add your own items there or in <code>HEARTBEAT_EXTRA.md</code> (same
+        profile root) so they are merged without replacing the default instructions.
       </p>
       <textarea
         value={content}

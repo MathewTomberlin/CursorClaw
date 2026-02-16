@@ -479,10 +479,10 @@ User messages are prioritized over background work. When a user sends a message 
 
 ### Substrate and heartbeat
 
-- **HEARTBEAT.md** is the per-tick checklist: read from the workspace on each heartbeat turn and prepended to the heartbeat user message (with `heartbeat.prompt` appended). Same as before; not part of the substrate loader.
+- **HEARTBEAT.md** is the per-tick **action list** for the agent: read from the profile root on each heartbeat turn and prepended to the heartbeat user message (with `heartbeat.prompt` appended). Not part of the substrate loader. When **HEARTBEAT.md** is missing or has no substantive content (empty or comments-only), a **default template** is used instead. That template includes highly encouraged actions: local repo/codebase state, goals and roadmap, active learning and research, code and data maintenance (resilience and longevity), memory compaction/summarization and vector-store hygiene, and an **Agent-added actions** section at the end. The agent may add its own actions under that section or in **HEARTBEAT_EXTRA.md** (same profile root); that file, if present, is appended to the checklist each tick so agent-defined actions are merged without altering the default instructions.
 - **Identity and Soul** are in the system prompt for every turn, including heartbeat, so the agent that interprets the checklist has consistent identity and behavior.
 - **BIRTH** is included only on the first turn per session; heartbeat reuses the same session, so BIRTH is not re-injected on every heartbeat.
-- When **HEARTBEAT.md** is missing, empty, or comments-only, set `heartbeat.skipWhenEmpty: true` to skip issuing a heartbeat API call for that cycle; see `heartbeat` section.
+- When **HEARTBEAT.md** is missing, empty, or comments-only, set `heartbeat.skipWhenEmpty: true` to skip issuing a heartbeat API call for that cycle; see `heartbeat` section. When `skipWhenEmpty` is false (default), the heartbeat still runs using the default template when the file is empty.
 
 **BOOT.md (future):** Short startup instructions; when implemented, would run at process/gateway startup (e.g. send welcome, run check). Not injected into the chat system prompt. Optional memory layer (MEMORY.md, memory/YYYY-MM-DD.md) for session-start continuity is documented as future work in the implementation spec.
 

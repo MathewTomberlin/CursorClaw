@@ -79,6 +79,7 @@ import {
 import type { CursorClawConfig } from "./config.js";
 import { getDefaultProfileId, isDevMode, loadConfigFromDisk, validateStartupConfig, resolveConfigPath, resolveProfileRoot, DEFAULT_PROFILE_ROOT } from "./config.js";
 import { AutonomyOrchestrator, type HeartbeatTarget } from "./orchestrator.js";
+import { HEARTBEAT_TEMPLATE } from "./substrate/defaults.js";
 import { loadSubstrate, SubstrateStore } from "./substrate/index.js";
 import type { SubstrateContent } from "./substrate/index.js";
 import { DEFAULT_SUBSTRATE_PATHS } from "./substrate/index.js";
@@ -1092,16 +1093,29 @@ async function main(): Promise<void> {
       }
       const baseInstruction =
         heartbeatConfig.prompt ?? "If no action needed, reply HEARTBEAT_OK.";
-      let content: string;
+      const deliveryNote =
+        "Anything you write before HEARTBEAT_OK will be delivered to the user as a proactive message in the CursorClaw web Chat. So if HEARTBEAT.md asks for an update or message, write it first, then end with HEARTBEAT_OK.";
+      let instructionBody: string;
       if (existsSync(heartbeatPath)) {
         const fileContent = await safeReadUtf8(heartbeatPath);
-        const deliveryNote =
-          "Anything you write before HEARTBEAT_OK will be delivered to the user as a proactive message in the CursorClaw web Chat. So if HEARTBEAT.md asks for an update or message, write it first, then end with HEARTBEAT_OK.";
-        content =
-          `Instructions for this heartbeat (from HEARTBEAT.md):\n\n${(fileContent ?? "").trim()}\n\n${deliveryNote}\n\n${baseInstruction}`;
+        const trimmed = (fileContent ?? "").trim();
+        const hasSubstantive = trimmed
+          .split(/\n/)
+          .some((line) => {
+            const s = line.trim();
+            return s.length > 0 && !s.startsWith("#");
+          });
+        instructionBody = hasSubstantive ? trimmed : HEARTBEAT_TEMPLATE;
       } else {
-        content = `Read HEARTBEAT.md if present. ${baseInstruction}`;
+        instructionBody = HEARTBEAT_TEMPLATE;
       }
+      const heartbeatExtraPath = join(profileRoot, "HEARTBEAT_EXTRA.md");
+      if (existsSync(heartbeatExtraPath)) {
+        const extra = (await safeReadUtf8(heartbeatExtraPath))?.trim() ?? "";
+        if (extra.length > 0) instructionBody += "\n\n" + extra;
+      }
+      const content =
+        `Instructions for this heartbeat (from HEARTBEAT.md):\n\n${instructionBody}\n\n${deliveryNote}\n\n${baseInstruction}`;
       if (getInterrupted()) {
         clearInterrupted();
         content =

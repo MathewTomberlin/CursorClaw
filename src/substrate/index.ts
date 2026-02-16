@@ -1,4 +1,4 @@
-export { SUBSTRATE_DEFAULTS } from "./defaults.js";
+export { HEARTBEAT_TEMPLATE, SUBSTRATE_DEFAULTS } from "./defaults.js";
 export { loadSubstrate } from "./loader.js";
 export { SubstrateStore } from "./store.js";
 export {

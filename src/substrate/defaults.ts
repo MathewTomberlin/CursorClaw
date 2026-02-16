@@ -228,3 +228,58 @@ Optional summary of what the agent is allowed to do. Informational only; enforce
 
 - (Backlog with clear success criteria.)`
 };
+
+/**
+ * Default HEARTBEAT.md content used when the file is missing or empty.
+ * This is the per-tick action list for the agent: highly encouraged actions
+ * so heartbeats are proactive, learning-oriented, and resilient.
+ * The agent may add its own actions under "## Agent-added actions" below,
+ * or in HEARTBEAT_EXTRA.md (same profile root); do not remove or alter the
+ * sections above when adding.
+ */
+export const HEARTBEAT_TEMPLATE = `# HEARTBEAT.md — Per-tick action list
+
+Use tools. Do not guess file contents—read with exec (e.g. cat, type) then act. Be **proactive**: each tick, pick at least one action that moves the needle. Constantly learn and improve; update memory and substrate when you discover something useful.
+
+---
+
+## 1. Local repo and codebase state (do first when relevant)
+
+- Check git status (branch, uncommitted changes, upstream). If \`tmp/last-build-failure.log\` exists, read it and either fix the failure or update ROADMAP.md Current state / Open with the blocker.
+- Optionally run build/tests (exec) and update ROADMAP.md **Current state** with branch and build status.
+- Keep a one-line "Current state" in ROADMAP.md so you and the user know where things stand.
+
+## 2. Goals and roadmap
+
+- Read ROADMAP.md (also in your context as Planning).
+- If there is an **Open** item: advance it one step (e.g. open PR, implement a piece, run a check, update status) and update ROADMAP.md (move to Completed or update Open).
+- If Open is empty but **Optional** has items: promote one to Open with clear success criteria, or add a short Open item.
+- Never leave the roadmap with no Open items unless the repo is explicitly idle (e.g. waiting on operator).
+
+## 3. Active learning and research
+
+- If the user or context implied a topic to learn or research, spend part of this tick on it (read docs, try a small experiment, or add a note to MEMORY.md or ROADMAP).
+- When you infer a lesson from feedback or a repeated pattern, store it (e.g. remember_this with category 'learned' or a note in MEMORY.md).
+
+## 4. Code and data maintenance (resilience and longevity)
+
+- Ensure important decisions and context are written down (MEMORY.md, ROADMAP.md Current state, or daily memory).
+- If config or substrate points to memory/substrate size limits, check current sizes and act if near or over (see continuity instructions in your system prompt if present).
+
+## 5. Memory and context (compaction, summarization, vector store)
+
+- If MEMORY.md or daily memory is large or near a configured cap: consider summarizing, merging old turn-summary lines, or compacting so the store stays within limits and remains responsive.
+- If embeddings/vector store is enabled: ensure important facts are still findable (e.g. run an integrity check or recall test if documented). Prefer writing high-signal facts to MEMORY.md so recall stays useful over time.
+
+## 6. Continuity (optional)
+
+- If you learned something useful this tick (e.g. from build or ROADMAP work), update MEMORY.md or substrate (e.g. ROADMAP.md Current state) via exec.
+
+---
+
+## Agent-added actions
+
+(Add your own checklist items below. **Do not remove or alter the sections above.** You may also append actions in \`HEARTBEAT_EXTRA.md\` in the same profile root; that file is merged into this checklist on each heartbeat.)
+
+- (Your custom actions here.)
+`;

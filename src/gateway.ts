@@ -37,6 +37,7 @@ import {
 import type { LifecycleStream } from "./lifecycle-stream/types.js";
 import {
   DEFAULT_SUBSTRATE_PATHS,
+  HEARTBEAT_TEMPLATE,
   SUBSTRATE_DEFAULTS,
   SUBSTRATE_KEYS,
   SubstrateStore
@@ -957,7 +958,17 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           throw new RpcGatewayError(400, "BAD_REQUEST", "workspace not configured");
         }
         const heartbeatPath = join(profileCtx.profileRoot, "HEARTBEAT.md");
-        const content = (await safeReadUtf8(heartbeatPath)) ?? "";
+        let content = (await safeReadUtf8(heartbeatPath)) ?? "";
+        const trimmed = content.trim();
+        const hasSubstantive = trimmed
+          .split(/\n/)
+          .some((line) => {
+            const s = line.trim();
+            return s.length > 0 && !s.startsWith("#");
+          });
+        if (!trimmed || !hasSubstantive) {
+          content = HEARTBEAT_TEMPLATE;
+        }
         result = { content };
       } else if (body.method === "heartbeat.update") {
         if (!profileCtx.profileRoot) {
