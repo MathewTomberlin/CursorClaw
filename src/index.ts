@@ -1133,11 +1133,11 @@ async function main(): Promise<void> {
         if (extra.length > 0) instructionBody += "\n\n" + extra;
       }
       let content =
-        `Instructions for this heartbeat (from HEARTBEAT.md):\n\n${instructionBody}\n\n${deliveryNote}\n\n${baseInstruction}`;
+        `Instructions for this heartbeat (from HEARTBEAT.md):\n\n${instructionBody}\n\n**Alignment:** Read STUDY_GOALS (in your context as "Study goals (STUDY_GOALS)") and use it for alignment—prefer tasks that advance ROADMAP Open items or study goals.\n\n${deliveryNote}\n\n${baseInstruction}`;
       if (getInterrupted()) {
         clearInterrupted();
         content =
-          "The previous heartbeat was interrupted by a user message. Continue with ROADMAP.md and HEARTBEAT.md as appropriate.\n\n" +
+          "The previous heartbeat was interrupted by a user message. Continue with ROADMAP.md, HEARTBEAT.md, and STUDY_GOALS (in context) as appropriate.\n\n" +
           content;
       }
       if (birthPending) {
