@@ -1,5 +1,5 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { resolve, sep } from "node:path";
 import { platform } from "node:os";
 
 import { Ajv, type ValidateFunction } from "ajv";
@@ -27,6 +27,14 @@ import type {
 } from "./types.js";
 import type { SensitivityLabel } from "./types.js";
 import type { SubstrateContent } from "./substrate/types.js";
+
+/** Return true if resolvedPath is under profileRoot (so agent can only touch its own profile files). */
+function pathUnderProfileRoot(resolvedPath: string, profileRoot: string): boolean {
+  const a = resolve(resolvedPath);
+  const b = resolve(profileRoot);
+  const prefix = b.endsWith(sep) ? b : b + sep;
+  return a === b || (a.startsWith(prefix));
+}
 
 const WEB_FETCH_MAX_REDIRECTS = 5;
 const WEB_FETCH_MAX_BODY_BYTES = 20_000;
@@ -460,15 +468,33 @@ export function createExecTool(args: {
             throw new Error(`command intent "${intent}" requires approval${suffix}`);
           }
         }
-        // Use current agent profile root as default cwd so substrate/memory/heartbeat paths resolve to this profile only.
-        const cwd =
-          parsed.cwd !== undefined && parsed.cwd !== ""
-            ? parsed.cwd
-            : (ctx?.profileRoot ?? process.cwd());
+        // Use current agent profile root so substrate/memory/heartbeat are profile-isolated. When profileRoot is set, cwd must stay under it.
+        const profileRoot = ctx?.profileRoot;
+        let cwd: string;
+        if (profileRoot) {
+          const base = resolve(profileRoot);
+          const requestedCwd =
+            parsed.cwd !== undefined && parsed.cwd !== "" ? resolve(base, parsed.cwd) : base;
+          if (!pathUnderProfileRoot(requestedCwd, base)) {
+            throw new Error("exec cwd must be under the current agent profile root");
+          }
+          cwd = requestedCwd;
+        } else {
+          cwd =
+            parsed.cwd !== undefined && parsed.cwd !== ""
+              ? parsed.cwd
+              : process.cwd();
+        }
+        const ensureUnderProfile = (pathResolved: string): void => {
+          if (profileRoot && !pathUnderProfileRoot(pathResolved, profileRoot)) {
+            throw new Error("path must be under the current agent profile root (only this profile's substrate, memory, and files are allowed)");
+          }
+        };
         if (platform() === "win32" && (bin === "cat" || bin === "type") && binArgs.length > 0 && intent === "read-only") {
           const chunks: string[] = [];
           for (const fileArg of binArgs) {
             const pathResolved = resolve(cwd, fileArg);
+            ensureUnderProfile(pathResolved);
             const content = await readFile(pathResolved, "utf8");
             chunks.push(content);
           }
@@ -479,6 +505,7 @@ export function createExecTool(args: {
           const sedSub = parseSedInPlace(parsed.command);
           if (sedSub) {
             const pathResolved = resolve(cwd, sedSub.filePath);
+            ensureUnderProfile(pathResolved);
             const content = await readFile(pathResolved, "utf8");
             const regex = new RegExp(sedSub.pattern, sedSub.global ? "g" : "");
             const newContent = content.replace(regex, sedSub.replacement);
@@ -488,6 +515,7 @@ export function createExecTool(args: {
           const sedChange = parseSedInPlaceChange(parsed.command);
           if (sedChange) {
             const pathResolved = resolve(cwd, sedChange.filePath);
+            ensureUnderProfile(pathResolved);
             const content = await readFile(pathResolved, "utf8");
             const regex = new RegExp(sedChange.pattern);
             const newContent = content
@@ -502,8 +530,15 @@ export function createExecTool(args: {
           const echo = parseEchoRedirect(bin, binArgs);
           if (echo) {
             const pathResolved = resolve(cwd, echo.filePath);
+            ensureUnderProfile(pathResolved);
             await writeFile(pathResolved, echo.content);
             return { stdout: "", stderr: "" };
+          }
+        }
+        if (profileRoot) {
+          for (const arg of binArgs) {
+            const pathResolved = resolve(cwd, arg);
+            ensureUnderProfile(pathResolved);
           }
         }
         const result = await sandbox.run(bin, binArgs, {
