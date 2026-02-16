@@ -443,7 +443,7 @@ If you see "heartbeat skipped: budget limit or quiet hours", it was from an olde
 
 Optional. When present, workspace markdown files (AGENTS, Identity, Soul, Birth, etc.) are loaded at startup and injected into the system prompt for every turn, including heartbeat.
 
-Path defaults (workspace root): `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `BIRTH.md`, `CAPABILITIES.md`, `USER.md`, `TOOLS.md`, `ROADMAP.md`.
+Path defaults (workspace root): `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `BIRTH.md`, `CAPABILITIES.md`, `USER.md`, `TOOLS.md`, `ROADMAP.md`, `STUDY_GOALS.md`.
 
 ```json
 {
@@ -456,6 +456,7 @@ Path defaults (workspace root): `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `BIRTH.md
     "userPath": "USER.md",
     "toolsPath": "TOOLS.md",
     "roadmapPath": "ROADMAP.md",
+    "studyGoalsPath": "STUDY_GOALS.md",
     "includeCapabilitiesInPrompt": false,
     "allowSoulIdentityEvolution": false
   }
@@ -468,10 +469,11 @@ Path defaults (workspace root): `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `BIRTH.md
 - **USER.md:** Injected only in main session (web channel). Contains information about the human (name, timezone, preferences). Do not put secrets here; treat as private.
 - **BIRTH (Bootstrap):** Injected only on the first turn per session (e.g. "wake" behavior). Not repeated on later turns. **BIRTH.md** is created automatically only when an agent profile is first created (with other substrate templates); it is never auto-created on reload or when filling other missing substrate files, so it exists only at profile creation until the agent completes BIRTH and removes it.
 - **ROADMAP.md (planning):** When present, injected as "Planning (ROADMAP)" so the agent natively sees milestones, roadmaps, and backlogs. The default AGENTS text instructs the agent to use this file for planning and to advance it during heartbeats; user messages always take priority and can interrupt heartbeat work (see § User priority below).
+- **STUDY_GOALS.md (topics of interest):** When present, injected as "Study goals (STUDY_GOALS)" so the agent sees broad categories and topics for long-term multi-cycle work (research → notes → implementation guide → implement and validate). Separate from the task backlog (ROADMAP); the heartbeat template instructs the agent to advance long-term study using this file when in context.
 - **Capabilities:** When `includeCapabilitiesInPrompt` is `true` and `CAPABILITIES.md` exists, a short summary (up to 500 chars) is appended to the system prompt. Informational only; `CapabilityStore` and approval workflow remain the source of truth for tool execution.
 - If `substrate` is absent, no substrate loading occurs (backward compatible). Substrate loading must not block startup; on loader failure, the process continues with empty substrate.
 
-**Guardrail:** Substrate files are included in the agent prompt. Do not put secrets in AGENTS.md, IDENTITY.md, SOUL.md, BIRTH.md, CAPABILITIES.md, USER.md, TOOLS.md, or ROADMAP.md.
+**Guardrail:** Substrate files are included in the agent prompt. Do not put secrets in AGENTS.md, IDENTITY.md, SOUL.md, BIRTH.md, CAPABILITIES.md, USER.md, TOOLS.md, ROADMAP.md, or STUDY_GOALS.md.
 
 ### User priority and responsiveness
 
@@ -479,7 +481,7 @@ User messages are prioritized over background work. When a user sends a message 
 
 ### Substrate and heartbeat
 
-- **HEARTBEAT.md** is the per-tick **action list** for the agent: read from the profile root on each heartbeat turn and prepended to the heartbeat user message (with `heartbeat.prompt` appended). Not part of the substrate loader. When **HEARTBEAT.md** is missing or has no substantive content (empty or comments-only), a **default template** is used instead. That template includes highly encouraged actions: local repo/codebase state, goals and roadmap, active learning and research, code and data maintenance (resilience and longevity), memory compaction/summarization and vector-store hygiene, and an **Agent-added actions** section at the end. The agent may add its own actions under that section or in **HEARTBEAT_EXTRA.md** (same profile root); that file, if present, is appended to the checklist each tick so agent-defined actions are merged without altering the default instructions.
+- **HEARTBEAT.md** is the per-tick **action list** for the agent: read from the profile root on each heartbeat turn and prepended to the heartbeat user message (with `heartbeat.prompt` appended). Not part of the substrate loader. When **HEARTBEAT.md** is missing or has no substantive content (empty or comments-only), a **default template** is used instead. That template includes highly encouraged actions: local repo/codebase state, goals and roadmap, active learning and research (including long-term study via STUDY_GOALS.md: research → notes → implementation guide → implement and validate), code and data maintenance (resilience and longevity), memory compaction/summarization and vector-store hygiene, and an **Agent-added actions** section at the end. The agent may add its own actions under that section or in **HEARTBEAT_EXTRA.md** (same profile root); that file, if present, is appended to the checklist each tick so agent-defined actions are merged without altering the default instructions.
 - **Identity and Soul** are in the system prompt for every turn, including heartbeat, so the agent that interprets the checklist has consistent identity and behavior.
 - **BIRTH** is included only on the first turn per session; heartbeat reuses the same session, so BIRTH is not re-injected on every heartbeat.
 - When **HEARTBEAT.md** is missing, empty, or comments-only, set `heartbeat.skipWhenEmpty: true` to skip issuing a heartbeat API call for that cycle; see `heartbeat` section. When `skipWhenEmpty` is false (default), the heartbeat still runs using the default template when the file is empty.

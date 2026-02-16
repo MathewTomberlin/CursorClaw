@@ -889,7 +889,8 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
             "capabilitiesPath",
             "userPath",
             "toolsPath",
-            "roadmapPath"
+            "roadmapPath",
+            "studyGoalsPath"
           ];
           for (const pathKey of pathKeys) {
             const rel =
@@ -993,6 +994,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
           if (sub.userPath) pathKeys.userPath = sub.userPath;
           if (sub.toolsPath) pathKeys.toolsPath = sub.toolsPath;
           if (sub.roadmapPath) pathKeys.roadmapPath = sub.roadmapPath;
+          if (sub.studyGoalsPath) pathKeys.studyGoalsPath = sub.studyGoalsPath;
         }
         result = {
           keys: SUBSTRATE_KEYS.map((key) => {

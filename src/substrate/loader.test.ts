@@ -30,6 +30,7 @@ describe("substrate loader", () => {
     expect(content.user).toBeUndefined();
     expect(content.tools).toBeUndefined();
     expect(content.roadmap).toBeUndefined();
+    expect(content.studyGoals).toBeUndefined();
   });
 
   it("reads present files and trims content", async () => {

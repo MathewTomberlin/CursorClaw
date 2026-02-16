@@ -1025,6 +1025,15 @@ export class AgentRuntime {
         )
       });
     }
+    if (substrate.studyGoals?.trim()) {
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(
+          `Study goals (STUDY_GOALS):\n\n${substrate.studyGoals.trim()}`,
+          scopeId
+        )
+      });
+    }
     const allowSoulIdentityEvolution = this.options.config.substrate?.allowSoulIdentityEvolution === true;
     if (allowSoulIdentityEvolution && isMainSession) {
       systemMessages.push({

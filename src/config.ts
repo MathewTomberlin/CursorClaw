@@ -208,6 +208,8 @@ export interface SubstrateConfig {
   toolsPath?: string;
   /** Path to planning file (milestones, roadmap). Default ROADMAP.md. */
   roadmapPath?: string;
+  /** Path to study goals / topics of interest for long-term multi-cycle work. Default STUDY_GOALS.md. */
+  studyGoalsPath?: string;
   /** When true, include a short capabilities summary in the system prompt (default false). */
   includeCapabilitiesInPrompt?: boolean;
   /** When true, allow the agent to propose SOUL.md/IDENTITY.md updates via propose_soul_identity_update (proposal-only; no direct write). Default false. */

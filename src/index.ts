@@ -1,5 +1,5 @@
 import { existsSync, unlinkSync, watch } from "node:fs";
-import { copyFile, mkdir, stat, unlink } from "node:fs/promises";
+import { copyFile, mkdir, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { safeReadUtf8 } from "./fs-utils.js";
 
@@ -79,7 +79,7 @@ import {
 import type { CursorClawConfig } from "./config.js";
 import { getDefaultProfileId, isDevMode, loadConfigFromDisk, validateStartupConfig, resolveConfigPath, resolveProfileRoot, DEFAULT_PROFILE_ROOT } from "./config.js";
 import { AutonomyOrchestrator, type HeartbeatTarget } from "./orchestrator.js";
-import { HEARTBEAT_TEMPLATE } from "./substrate/defaults.js";
+import { HEARTBEAT_TEMPLATE, MEMORY_TEMPLATE } from "./substrate/defaults.js";
 import { loadSubstrate, SubstrateStore } from "./substrate/index.js";
 import type { SubstrateContent } from "./substrate/index.js";
 import { DEFAULT_SUBSTRATE_PATHS } from "./substrate/index.js";
@@ -145,6 +145,17 @@ async function buildProfileContext(
     // eslint-disable-next-line no-console
     console.warn("[CursorClaw] substrate load failed for profile root, continuing with empty:", (err as Error).message);
   }
+  try {
+    await mkdir(join(profileRoot, "memory"), { recursive: true });
+    const memoryPath = join(profileRoot, "MEMORY.md");
+    const existing = await safeReadUtf8(memoryPath);
+    if (existing == null || existing.trim() === "") {
+      await writeFile(memoryPath, MEMORY_TEMPLATE, "utf8");
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn("[CursorClaw] MEMORY.md ensure failed, continuing:", (err as Error).message);
+  }
   const approvalsDir = join(profileRoot, "tmp", "approvals");
   const capabilityStore = new CapabilityStore({ stateDir: approvalsDir });
   await capabilityStore.load();
@@ -195,7 +206,8 @@ async function migrateRootSubstrateToDefaultProfile(
     "capabilitiesPath",
     "userPath",
     "toolsPath",
-    "roadmapPath"
+    "roadmapPath",
+    "studyGoalsPath"
   ];
   const paths = config.substrate
     ? { ...DEFAULT_SUBSTRATE_PATHS, ...(config.substrate as Partial<typeof DEFAULT_SUBSTRATE_PATHS>) }
@@ -390,12 +402,15 @@ async function main(): Promise<void> {
             ...(config.continuity!.memoryMaxChars != null && { maxChars: config.continuity!.memoryMaxChars }),
             ...(config.continuity!.memoryArchivePath != null && { archivePath: config.continuity!.memoryArchivePath }),
             ...(isDefaultProfile && {
-              onTrim: async () => {
+              getSyncAfterTrim: () => {
+                if (!memoryEmbeddingIndex) return null;
                 const store = memoryStoresByProfileId.get(defaultProfileId);
-                if (memoryEmbeddingIndex && store) {
+                if (!store) return null;
+                const includeSecrets = config.memory.includeSecretsInPrompt;
+                return async () => {
                   const records = await store.readAll();
-                  await memoryEmbeddingIndex.upsertFromRecords(records, config.memory.includeSecretsInPrompt);
-                }
+                  await memoryEmbeddingIndex!.upsertFromRecords(records, includeSecrets);
+                };
               }
             })
           }

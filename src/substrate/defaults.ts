@@ -226,8 +226,39 @@ Optional summary of what the agent is allowed to do. Informational only; enforce
 
 ## Optional (add to Open when starting)
 
-- (Backlog with clear success criteria.)`
+- (Backlog with clear success criteria.)`,
+
+  studyGoals: `# STUDY_GOALS.md — Topics of interest (long-term study)
+
+**Role in the framework:** This file is loaded as **substrate** and injected into the agent's system prompt as "Study goals (STUDY_GOALS)" on every turn (including heartbeats). It holds broad categories and topics of interest for **multi-cycle work**: research → study → notes → implementation guide (success criteria + guardrails) → implement and validate. Separate from the task backlog (ROADMAP Open/Optional): use ROADMAP for concrete tasks; use this file for learning and research themes you or the user care about.
+
+**When advancing long-term study:** Read STUDY_GOALS.md (it is in your context). Spend cycles on: research → notes → implementation guide → implement and validate. Pick topics that are interesting and relevant; if none are yet listed, add your own or ask the user what they want to explore.
+
+---
+
+## Topics / categories
+
+(Add broad themes: technologies, domains, skills, or areas to research and eventually turn into implementation guides and code. One line per topic or a short list; expand with sub-notes as you go.)
+`
 };
+
+/**
+ * Default MEMORY.md content used when the file is missing or empty.
+ * Created with other substrate files on profile load so long-term memory is ready from the start.
+ * Format: append-only; each record is one line: "- " + JSON with id, sessionId, category, text, provenance.
+ * Categories include turn-summary, note, heartbeat, learned, compaction, etc.
+ */
+export const MEMORY_TEMPLATE = `# MEMORY.md — Long-term memory
+
+This file stores curated memories: decisions, preferences, facts, and lessons. Main session only; do not load in shared contexts.
+
+**Format:** Append-only. Each record is a single line: \`- \` followed by a JSON object with \`id\`, \`sessionId\`, \`category\`, \`text\`, \`provenance\`. Categories include \`turn-summary\`, \`note\`, \`heartbeat\`, \`learned\`, \`compaction\`. Use the \`remember_this\` tool to append; use \`recall_memory\` (when embeddings are enabled) to query by similarity.
+
+**Daily logs:** \`memory/YYYY-MM-DD.md\` uses the same line format for the same day's records.
+
+---
+
+`;
 
 /**
  * Default HEARTBEAT.md content used when the file is missing or empty.
@@ -258,6 +289,7 @@ Use tools. Do not guess file contents—read with exec (e.g. cat, type) then act
 
 ## 3. Active learning and research
 
+- When advancing long-term study, read STUDY_GOALS.md (in your context); spend cycles on research → notes → implementation guide → implement and validate.
 - If the user or context implied a topic to learn or research, spend part of this tick on it (read docs, try a small experiment, or add a note to MEMORY.md or ROADMAP).
 - When you infer a lesson from feedback or a repeated pattern, store it (e.g. remember_this with category 'learned' or a note in MEMORY.md).
 

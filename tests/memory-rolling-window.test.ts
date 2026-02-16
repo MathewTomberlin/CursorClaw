@@ -63,7 +63,7 @@ describe("memory rolling window", () => {
     tempDirs.push(dir);
     const memory = new MemoryStore({
       workspaceDir: dir,
-      rollingWindow: { maxChars: 200 }
+      rollingWindow: { maxChars: 600 }
     });
     await memory.init();
     await memory.append(makeRecord("short"));
@@ -72,7 +72,7 @@ describe("memory rolling window", () => {
     const all = await memory.readAll();
     expect(all.length).toBeLessThanOrEqual(2);
     const content = await readFile(join(dir, "MEMORY.md"), "utf8");
-    expect(content.length).toBeLessThanOrEqual(250);
+    expect(content.length).toBeLessThanOrEqual(650);
   });
 
   it("appends trimmed lines to archive when memoryArchivePath is set", async () => {
@@ -117,6 +117,29 @@ describe("memory rolling window", () => {
     expect(trimCalled).toBe(true);
   });
 
+  it("calls getSyncAfterTrim at trim time (resolved when trim runs)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "memory-rw-getSync-"));
+    tempDirs.push(dir);
+    let syncCalled = false;
+    const memory = new MemoryStore({
+      workspaceDir: dir,
+      rollingWindow: {
+        maxRecords: 2,
+        getSyncAfterTrim: () => () => {
+          syncCalled = true;
+          return Promise.resolve();
+        }
+      }
+    });
+    await memory.init();
+    await memory.append(makeRecord("a"));
+    expect(syncCalled).toBe(false);
+    await memory.append(makeRecord("b"));
+    expect(syncCalled).toBe(false);
+    await memory.append(makeRecord("c"));
+    expect(syncCalled).toBe(true);
+  });
+
   it("preserves MEMORY.md header when trimming", async () => {
     const dir = await mkdtemp(join(tmpdir(), "memory-rw-header-"));
     tempDirs.push(dir);
@@ -128,7 +151,7 @@ describe("memory rolling window", () => {
     await memory.append(makeRecord("one"));
     await memory.append(makeRecord("two"));
     const content = await readFile(join(dir, "MEMORY.md"), "utf8");
-    expect(content).toMatch(/^# CursorClaw Memory/);
+    expect(content).toMatch(/^# MEMORY.md — Long-term memory/);
     const all = await memory.readAll();
     expect(all).toHaveLength(1);
     expect(all[0]!.text).toBe("two");

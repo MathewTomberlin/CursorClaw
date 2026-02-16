@@ -15,6 +15,8 @@ export interface SubstrateContent {
   tools?: string;
   /** Optional planning file: milestones, roadmap, feature backlog. Injected so the agent natively plans and automates work. */
   roadmap?: string;
+  /** Optional study goals / topics of interest for long-term multi-cycle work (research → notes → implementation guide → implement). Injected so the agent sees it every turn. */
+  studyGoals?: string;
 }
 
 /** Workspace-relative paths for each substrate file. Defaults are root filenames. */
@@ -27,6 +29,7 @@ export interface SubstratePaths {
   userPath?: string;
   toolsPath?: string;
   roadmapPath?: string;
+  studyGoalsPath?: string;
 }
 
 /** Default filenames in workspace root (no subdir). AGENTS.md is the OpenClaw-style rules file (session start, memory, safety). */
@@ -38,7 +41,8 @@ export const DEFAULT_SUBSTRATE_PATHS: Required<SubstratePaths> = {
   capabilitiesPath: "CAPABILITIES.md",
   userPath: "USER.md",
   toolsPath: "TOOLS.md",
-  roadmapPath: "ROADMAP.md"
+  roadmapPath: "ROADMAP.md",
+  studyGoalsPath: "STUDY_GOALS.md"
 };
 
 /** Allowed keys for substrate content (used by store/RPC validation). */
@@ -50,7 +54,8 @@ export const SUBSTRATE_KEYS = [
   "capabilities",
   "user",
   "tools",
-  "roadmap"
+  "roadmap",
+  "studyGoals"
 ] as const;
 
 export type SubstrateKey = (typeof SUBSTRATE_KEYS)[number];

@@ -16,7 +16,8 @@ const KEY_LABELS: Record<string, string> = {
   capabilities: "Capabilities (CAPABILITIES.md)",
   user: "User (USER.md)",
   tools: "Tools (TOOLS.md)",
-  roadmap: "Planning (ROADMAP.md)"
+  roadmap: "Planning (ROADMAP.md)",
+  studyGoals: "Study goals (STUDY_GOALS.md)"
 };
 
 export default function Substrate() {
@@ -44,7 +45,7 @@ export default function Substrate() {
       const res = await rpcWithProfile("substrate.get", undefined, selectedProfileId);
       const result = (res.result ?? {}) as Record<string, string | undefined>;
       const next: Record<string, string> = {};
-      for (const k of ["agents", "identity", "soul", "birth", "capabilities", "user", "tools", "roadmap"]) {
+      for (const k of ["agents", "identity", "soul", "birth", "capabilities", "user", "tools", "roadmap", "studyGoals"]) {
         next[k] = result[k] ?? "";
       }
       setContent(next);

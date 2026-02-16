@@ -2,11 +2,11 @@
 /**
  * Commits substrate and planning files to the branch `agent-substrate` so they are
  * not included in main/source pushes. Run when you want to back up or version
- * agent substrate (AGENTS.md, IDENTITY.md, SOUL.md, etc.) and ROADMAP.md separately.
+ * agent substrate (AGENTS.md, IDENTITY.md, SOUL.md, etc.), ROADMAP.md, and STUDY_GOALS.md separately.
  * Push the branch to a different remote (or keep it local) so main stays clean.
  *
  * Usage: npm run commit-substrate
- * Requires: Substrate files and ROADMAP.md are in .gitignore (they are
+ * Requires: Substrate files, ROADMAP.md, and STUDY_GOALS.md are in .gitignore (they are
  * force-added only to this branch).
  */
 
@@ -24,7 +24,8 @@ const paths = [
   "SOUL.md",
   "TOOLS.md",
   "CAPABILITIES.md",
-  "ROADMAP.md"
+  "ROADMAP.md",
+  "STUDY_GOALS.md"
 ];
 
 function run(cmd, opts = {}) {
@@ -58,7 +59,7 @@ try {
     console.log("No changes in substrate/ROADMAP files.");
   } else {
     run('git commit -m "chore: agent substrate and ROADMAP snapshot"');
-    console.log("Committed substrate and ROADMAP to branch agent-substrate.");
+    console.log("Committed substrate, ROADMAP, and STUDY_GOALS to branch agent-substrate.");
   }
 } finally {
   run(`git checkout ${currentBranch}`);

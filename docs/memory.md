@@ -4,7 +4,7 @@ How persistent memory and session-start context work.
 
 ## 1. Storage
 
-- **MEMORY.md** (workspace root): Primary long-term memory file. Append-only list of `MemoryRecord` lines (JSON per line, prefixed with `- `). Created on first use if missing.
+- **MEMORY.md** (workspace root): Primary long-term memory file. Append-only list of `MemoryRecord` lines (JSON per line, prefixed with `- `). Created with other substrate files when the profile loads (empty or missing); if still missing on first append, created with the same template. Not tracked in git (see .gitignore).
 - **memory/YYYY-MM-DD.md**: Daily logs in the same line format. One file per calendar day; created when a record is appended that day.
 
 Records have: `id`, `sessionId`, `category`, `text`, `provenance` (sourceChannel, confidence, timestamp, sensitivity). Categories include `turn-summary`, `compaction`, `note`, `heartbeat`, `learned`, etc.

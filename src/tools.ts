@@ -76,14 +76,18 @@ function parseSedInPlaceDelete(command: string): { pattern: string; filePath: st
 }
 
 /**
- * Parse sed -i '/pattern/a\line' file or sed -i '/pattern/a line' file (append after matching line). Returns null if not matched.
+ * Parse sed -i '/pattern/a\line' or '/pattern/a line' (append after matching line).
+ * Uses two-step: extract quoted script and file, then parse script so the line can contain spaces and quotes.
  */
 function parseSedInPlaceAppend(command: string): { pattern: string; line: string; filePath: string } | null {
-  const m = command.match(/sed\s+-i\s+['"]\/([^/]*)\/a\s*(?:\\([^'"]*)|([^'"]*))['"]\s+(\S+)/);
-  if (!m || m[1] === undefined || m[4] === undefined) return null;
-  const lineRaw = (m[2] ?? m[3] ?? "") as string;
-  const line = lineRaw.replace(/\\n/g, "\n").trim();
-  return { pattern: m[1], line, filePath: m[4] };
+  const outer = command.match(/sed\s+-i\s+(['"])(.*?)\1\s+(\S+)/s);
+  if (!outer || outer[2] === undefined || outer[3] === undefined) return null;
+  const script = outer[2].trim();
+  const filePath = outer[3];
+  const inner = script.match(/^\/([^/]*)\/a\s*\\?\s*(.*)/s);
+  if (!inner || inner[1] === undefined) return null;
+  const line = (inner[2] ?? "").replace(/\\n/g, "\n").trim();
+  return { pattern: inner[1], line, filePath };
 }
 
 /**
@@ -597,6 +601,9 @@ export function createExecTool(args: {
                 lastResult = { stdout: "", stderr: "" };
                 continue;
               }
+              throw new Error(
+                "Unsupported sed command on Windows. Supported: sed -i 's/old/new/[g]' file, sed -i '/p/c replacement' file, sed -i '/p/d' file, sed -i '/p/a line' file."
+              );
             }
             if (segBin === "echo" && segIntent === "mutating") {
               const echo = parseEchoRedirect(segBin, segBinArgs);
@@ -910,6 +917,14 @@ export function createExecTool(args: {
             await writeFile(pathResolved, newLines.join("\n"));
             return { stdout: "", stderr: "" };
           }
+          throw new Error(
+            "Unsupported sed command on Windows. Supported: sed -i 's/old/new/[g]' file, sed -i '/p/c replacement' file, sed -i '/p/d' file, sed -i '/p/a line' file."
+          );
+        }
+        if (platform() === "win32" && bin === "sed") {
+          throw new Error(
+            "Unsupported sed command on Windows. Supported: sed -i 's/old/new/[g]' file, sed -i '/p/c replacement' file, sed -i '/p/d' file, sed -i '/p/a line' file."
+          );
         }
         if (platform() === "win32" && bin === "echo" && intent === "mutating") {
           const echo = parseEchoRedirect(bin, binArgs);

@@ -2,6 +2,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
+import { MEMORY_TEMPLATE } from "./substrate/defaults.js";
 import { safeReadUtf8 } from "./fs-utils.js";
 import type { MemoryRecord, SensitivityLabel } from "./types.js";
 
@@ -13,6 +14,8 @@ export interface RollingWindowOptions {
   archivePath?: string;
   /** Called after trim so the caller can re-sync e.g. the memory embedding index. */
   onTrim?: () => Promise<void>;
+  /** Resolved at trim time; use when sync depends on later-initialized resources (e.g. embedding index). Return a no-arg async function to run after trim. */
+  getSyncAfterTrim?: () => (() => Promise<void>) | null;
 }
 
 export interface MemoryStoreOptions {
@@ -70,7 +73,7 @@ export class MemoryStore {
     try {
       await stat(this.primaryFile);
     } catch {
-      await writeFile(this.primaryFile, "# CursorClaw Memory\n\n", "utf8");
+      await writeFile(this.primaryFile, MEMORY_TEMPLATE, "utf8");
     }
   }
 
@@ -128,6 +131,8 @@ export class MemoryStore {
       await mkdir(dirname(archiveFull), { recursive: true });
       await writeFile(archiveFull, toDrop.map((l) => l + "\n").join(""), { encoding: "utf8", flag: "a" });
     }
+    const syncAfterTrim = rw.getSyncAfterTrim?.();
+    if (syncAfterTrim) await syncAfterTrim();
     await rw.onTrim?.();
   }
 

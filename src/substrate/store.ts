@@ -16,7 +16,8 @@ const KEY_TO_PATH_KEY: Record<string, keyof SubstratePaths> = {
   capabilities: "capabilitiesPath",
   user: "userPath",
   tools: "toolsPath",
-  roadmap: "roadmapPath"
+  roadmap: "roadmapPath",
+  studyGoals: "studyGoalsPath"
 };
 
 /**
