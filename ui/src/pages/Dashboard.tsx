@@ -50,7 +50,7 @@ export default function Dashboard() {
 
   return (
     <>
-      {status?.pendingProactiveMessage != null && status.pendingProactiveMessage !== "" && (
+      {status?.hasPendingProactiveMessage === true && (
         <div className="card" style={{ borderColor: "var(--focus)", background: "rgba(0,120,212,0.08)" }}>
           <p style={{ margin: 0 }}>
             <strong>Proactive message waiting.</strong> Open the <strong>Chat</strong> tab to see it (it will appear within a few seconds).

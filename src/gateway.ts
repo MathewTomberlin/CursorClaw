@@ -357,8 +357,10 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         toolIsolationEnabled: deps.incidentCommander.isToolIsolationEnabled()
       }
     };
-    const pendingProactive = defaultCtx.getPendingProactiveMessage?.() ?? null;
-    return pendingProactive !== null ? { ...base, pendingProactiveMessage: pendingProactive } : base;
+    // Expose only a flag so the message body is delivered once via heartbeat.poll; avoids duplicate display and leaking scrubbed placeholder text (e.g. HIGH_ENTROPY_TOKEN) in status/summary views.
+    const hasPendingProactiveMessage =
+      (defaultCtx.getPendingProactiveMessage?.() ?? null) !== null;
+    return hasPendingProactiveMessage ? { ...base, hasPendingProactiveMessage: true } : base;
   });
 
   app.post("/rpc", async (request, reply) => {
