@@ -59,6 +59,8 @@ export interface ModelProviderConfig {
   ollamaOptions?: { temperature?: number; num_ctx?: number };
   /** When "minimal", only the latest user message is sent for tool turns. Use for Ollama/Granite 3.2: the model often does not call tools when given full conversation history (see docs/Ollama-tool-call-support.md). */
   toolTurnContext?: "full" | "minimal";
+  /** When true (Ollama only), use a single short system message and prepend "use tools" to the user message. Use when the model still does not call tools with toolTurnContext: minimal. */
+  ollamaMinimalSystem?: boolean;
   /** Provider-specific: base URL for OpenAI-compatible or Ollama (e.g. http://localhost:11434). */
   baseURL?: string;
   /** Provider-specific: OpenAI-compatible model id (e.g. gpt-4o-mini, gpt-4o). */

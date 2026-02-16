@@ -7,6 +7,7 @@ import { redactSecrets } from "../security.js";
 import type { ModelProviderConfig } from "../config.js";
 import type {
   AdapterEvent,
+  ChatMessage,
   ModelSessionHandle,
   SendTurnOptions,
   ToolDefinition
@@ -60,7 +61,7 @@ export class CursorAgentCliProvider implements ModelProvider {
   async *sendTurn(
     session: ModelSessionHandle,
     modelConfig: ModelProviderConfig,
-    messages: Array<{ role: string; content: string }>,
+    messages: ChatMessage[],
     tools: ToolDefinition[],
     options: SendTurnOptions
   ): AsyncIterable<AdapterEvent> {
@@ -109,7 +110,7 @@ export class CursorAgentCliProvider implements ModelProvider {
   private async *runOneAttempt(
     session: ModelSessionHandle,
     modelConfig: ModelProviderConfig & { provider: "cursor-agent-cli"; command: string },
-    messages: Array<{ role: string; content: string }>,
+    messages: ChatMessage[],
     tools: ToolDefinition[],
     options: SendTurnOptions,
     lastUserContent: string,

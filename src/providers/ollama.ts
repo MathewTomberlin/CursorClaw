@@ -2,6 +2,7 @@ import type { ModelProvider } from "./types.js";
 import type { ModelProviderConfig } from "../config.js";
 import type {
   AdapterEvent,
+  ChatMessage,
   ModelSessionHandle,
   SendTurnOptions,
   ToolDefinition
@@ -34,15 +35,25 @@ function buildOllamaOptions(
   return out;
 }
 
-/** Map adapter ToolDefinition to Ollama API tools format (OpenAI-style). */
-function mapToolsToOllama(tools: ToolDefinition[]): Array<{ type: "function"; function: { name: string; description: string; parameters: object } }> {
+/** Ollama tool parameters schema: type, required, properties (per docs). */
+function normalizeParameters(schema: object | undefined): { type: "object"; required: string[]; properties: Record<string, { type: string; description?: string }> } {
+  const s = schema && typeof schema === "object" ? schema as Record<string, unknown> : {};
+  return {
+    type: "object",
+    required: Array.isArray(s.required) ? (s.required as string[]) : [],
+    properties: (typeof s.properties === "object" && s.properties !== null ? s.properties as Record<string, { type?: string; description?: string }> : {}) as Record<string, { type: string; description?: string }>
+  };
+}
+
+/** Map adapter ToolDefinition to Ollama API tools format (OpenAI-style, with required + properties). */
+function mapToolsToOllama(tools: ToolDefinition[]): Array<{ type: "function"; function: { name: string; description: string; parameters: ReturnType<typeof normalizeParameters> } }> {
   if (tools.length === 0) return [];
   return tools.map((t) => ({
     type: "function" as const,
     function: {
       name: t.name,
       description: t.description,
-      parameters: t.schema ?? { type: "object", properties: {} }
+      parameters: normalizeParameters(t.schema)
     }
   }));
 }
@@ -57,7 +68,7 @@ export class OllamaProvider implements ModelProvider {
   async *sendTurn(
     _session: ModelSessionHandle,
     modelConfig: ModelProviderConfig,
-    messages: Array<{ role: string; content: string }>,
+    messages: ChatMessage[],
     tools: ToolDefinition[],
     options: SendTurnOptions
   ): AsyncIterable<AdapterEvent> {
@@ -70,10 +81,20 @@ export class OllamaProvider implements ModelProvider {
     const model = modelConfig.ollamaModelName;
     const timeoutMs = options.timeoutMs ?? modelConfig.timeoutMs ?? 120_000;
 
-    const ollamaMessages = messages.map((m) => ({
-      role: m.role === "assistant" ? "assistant" : m.role === "system" ? "system" : "user",
-      content: m.content
-    }));
+    const ollamaMessages = messages.map((m): Record<string, unknown> => {
+      const role = m.role === "assistant" ? "assistant" : m.role === "system" ? "system" : m.role === "tool" ? "tool" : "user";
+      const out: Record<string, unknown> = { role, content: m.content ?? "" };
+      if (role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+        out.tool_calls = m.tool_calls.map((tc) => ({
+          type: "function",
+          function: { index: tc.function.index, name: tc.function.name, arguments: tc.function.arguments }
+        }));
+      }
+      if (role === "tool" && typeof m.tool_name === "string") {
+        out.tool_name = m.tool_name;
+      }
+      return out;
+    });
 
     const body: {
       model: string;

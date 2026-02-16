@@ -47,6 +47,15 @@ function parseSedInPlace(command: string): { pattern: string; replacement: strin
 }
 
 /**
+ * Parse sed -i '/pattern/c\replacement' file (change command). Returns null if not matched.
+ */
+function parseSedInPlaceChange(command: string): { pattern: string; replacement: string; filePath: string } | null {
+  const m = command.match(/sed\s+-i\s+['"]\/([^/]*)\/c\\([^'"]*)['"]\s+(\S+)/);
+  if (!m || m[1] === undefined || m[2] === undefined || m[3] === undefined) return null;
+  return { pattern: m[1], replacement: m[2], filePath: m[3] };
+}
+
+/**
  * Parse echo ... > file from (bin, binArgs). Returns { content, filePath } or null.
  * Content is joined from args before ">"; optional surrounding quotes are stripped.
  */
@@ -451,7 +460,11 @@ export function createExecTool(args: {
             throw new Error(`command intent "${intent}" requires approval${suffix}`);
           }
         }
-        const cwd = parsed.cwd !== undefined && parsed.cwd !== "" ? parsed.cwd : process.cwd();
+        // Use current agent profile root as default cwd so substrate/memory/heartbeat paths resolve to this profile only.
+        const cwd =
+          parsed.cwd !== undefined && parsed.cwd !== ""
+            ? parsed.cwd
+            : (ctx?.profileRoot ?? process.cwd());
         if (platform() === "win32" && (bin === "cat" || bin === "type") && binArgs.length > 0 && intent === "read-only") {
           const chunks: string[] = [];
           for (const fileArg of binArgs) {
@@ -463,12 +476,24 @@ export function createExecTool(args: {
           return { stdout: result.stdout, stderr: result.stderr };
         }
         if (platform() === "win32" && bin === "sed" && intent === "mutating") {
-          const sed = parseSedInPlace(parsed.command);
-          if (sed) {
-            const pathResolved = resolve(cwd, sed.filePath);
+          const sedSub = parseSedInPlace(parsed.command);
+          if (sedSub) {
+            const pathResolved = resolve(cwd, sedSub.filePath);
             const content = await readFile(pathResolved, "utf8");
-            const regex = new RegExp(sed.pattern, sed.global ? "g" : "");
-            const newContent = content.replace(regex, sed.replacement);
+            const regex = new RegExp(sedSub.pattern, sedSub.global ? "g" : "");
+            const newContent = content.replace(regex, sedSub.replacement);
+            await writeFile(pathResolved, newContent);
+            return { stdout: "", stderr: "" };
+          }
+          const sedChange = parseSedInPlaceChange(parsed.command);
+          if (sedChange) {
+            const pathResolved = resolve(cwd, sedChange.filePath);
+            const content = await readFile(pathResolved, "utf8");
+            const regex = new RegExp(sedChange.pattern);
+            const newContent = content
+              .split(/\r?\n/)
+              .map((line) => (regex.test(line) ? sedChange.replacement : line))
+              .join("\n");
             await writeFile(pathResolved, newContent);
             return { stdout: "", stderr: "" };
           }
@@ -482,9 +507,9 @@ export function createExecTool(args: {
           }
         }
         const result = await sandbox.run(bin, binArgs, {
+          cwd,
           maxBufferBytes: maxBuffer,
-          timeoutMs: 15_000,
-          ...(parsed.cwd !== undefined && parsed.cwd !== "" && { cwd: parsed.cwd })
+          timeoutMs: 15_000
         });
         return {
           stdout: result.stdout,

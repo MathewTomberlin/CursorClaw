@@ -104,6 +104,25 @@ export interface SendTurnOptions {
   profileRoot?: string;
 }
 
+/** One assistant tool call for Ollama-style follow-up (index, name, arguments). */
+export interface ChatMessageToolCall {
+  type: "function";
+  function: { index: number; name: string; arguments: object };
+}
+
+/**
+ * Message for chat API: system/user are role+content; assistant may include tool_calls;
+ * tool carries tool result (tool_name + content). Used for Ollama agent loop (tool results sent back).
+ */
+export interface ChatMessage {
+  role: string;
+  content: string;
+  /** Assistant message: tool calls from the model (Ollama format). */
+  tool_calls?: ChatMessageToolCall[];
+  /** Tool result message: which tool this result is for. */
+  tool_name?: string;
+}
+
 export interface CreateSessionOptions {
   /** Override model id for this session (e.g. from profile); must exist in config.models. */
   modelId?: string;
@@ -113,7 +132,7 @@ export interface ModelAdapter {
   createSession(context: SessionContext, options?: CreateSessionOptions): Promise<ModelSessionHandle>;
   sendTurn(
     session: ModelSessionHandle,
-    messages: Array<{ role: string; content: string }>,
+    messages: ChatMessage[],
     tools: ToolDefinition[],
     options: SendTurnOptions
   ): AsyncIterable<AdapterEvent>;

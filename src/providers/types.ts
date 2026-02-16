@@ -1,5 +1,6 @@
 import type {
   AdapterEvent,
+  ChatMessage,
   ModelSessionHandle,
   SendTurnOptions,
   ToolDefinition
@@ -18,7 +19,7 @@ export interface ModelProvider {
   sendTurn(
     session: ModelSessionHandle,
     modelConfig: ModelProviderConfig,
-    messages: Array<{ role: string; content: string }>,
+    messages: ChatMessage[],
     tools: ToolDefinition[],
     options: SendTurnOptions
   ): AsyncIterable<AdapterEvent>;
