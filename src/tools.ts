@@ -524,9 +524,11 @@ export function createExecTool(args: {
           const requestedCwd =
             parsed.cwd !== undefined && parsed.cwd !== "" ? resolve(base, parsed.cwd) : base;
           if (!pathUnderProfileRoot(requestedCwd, base)) {
-            throw new Error("exec cwd must be under the current agent profile root");
+            // Model requested cwd outside this profile (e.g. another profile's path). Clamp to profile root so we only modify this agent's substrate.
+            cwd = base;
+          } else {
+            cwd = requestedCwd;
           }
-          cwd = requestedCwd;
         } else {
           cwd =
             parsed.cwd !== undefined && parsed.cwd !== ""

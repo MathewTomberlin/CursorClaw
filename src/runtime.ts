@@ -902,6 +902,18 @@ export class AgentRuntime {
 
     const substrate = this.options.getSubstrate?.(profileIdForSubstrate) ?? {};
 
+    // When multiple profiles exist, ensure the agent only uses its own profile (exec cwd and paths are scoped to profile root).
+    const profileList = this.options.config.profiles;
+    if (Array.isArray(profileList) && profileList.length > 1 && profileIdForSubstrate) {
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(
+          `You are agent profile "${profileIdForSubstrate}". All file paths and exec cwd are relative to your profile root only. Do not use paths or cwd pointing to other profiles (e.g. profiles/default).`,
+          scopeId
+        )
+      });
+    }
+
     if (useOllamaMinimalSystem) {
       systemMessages.push({
         role: "system",

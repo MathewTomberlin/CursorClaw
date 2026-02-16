@@ -26,3 +26,10 @@ At-a-glance summary of CursorClaw’s built-in inference providers: what they ar
 ## Adding or changing providers
 
 New providers follow the implementation-guide-first approach; see [PMR §8](PMR-provider-model-resilience.md#8-local-and-optional-providers-ollama) for the “optional local provider” pattern and implementation-guide-first approach.
+
+### Runbook: when to add a new provider
+
+1. **Decide scope** — New local server (e.g. another OpenAI-compatible UI) vs new first-class provider (fixed name, default base URL). Option A (reuse `openai-compatible` with `baseURL`) often suffices; see [Other OpenAI-compatible provider guide](./other-openai-compatible-provider-implementation-guide.md).
+2. **Create implementation guide** — Add a doc in `docs/` (e.g. `docs/<provider>-implementation-guide.md`) covering: config shape, validation flow, [PMR §8](PMR-provider-model-resilience.md#8-local-and-optional-providers-ollama) alignment (§8.1 hardware, §8.2 validation suite, §8.3 graceful degradation).
+3. **Implement** — Adapter/registry if first-class provider; otherwise document in this file and config reference. Sync [Configuration Reference §4.15](./configuration-reference.md#415-models-and-defaultmodel), this file, and any runbook (e.g. [Local Ollama setup](./local-ollama-agent-setup.md) or RUNBOOK.md) with the new guide.
+4. **Validate** — Run `npm run validate-model -- --modelId=<id> --fullSuite`; update validation store and docs as needed.
