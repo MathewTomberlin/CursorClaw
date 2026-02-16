@@ -28,6 +28,10 @@ import type {
 import type { SensitivityLabel } from "./types.js";
 import type { SubstrateContent } from "./substrate/types.js";
 
+function isENOENT(e: unknown): boolean {
+  return (e as { code?: string })?.code === "ENOENT";
+}
+
 /** Return true if resolvedPath is under profileRoot (so agent can only touch its own profile files). */
 function pathUnderProfileRoot(resolvedPath: string, profileRoot: string): boolean {
   const a = resolve(resolvedPath);
@@ -542,13 +546,22 @@ export function createExecTool(args: {
               if (segBinArgs.length > 0 && segIntent === "read-only") {
                 const fileArgs = segBinArgs.filter((a) => !SHELL_META.has(a) && a !== "");
                 const chunks: string[] = [];
+                const stderrLines: string[] = [];
                 for (const fileArg of fileArgs) {
                   const pathResolved = resolve(cwd, fileArg);
                   ensureUnderProfile(pathResolved);
-                  const content = await readFile(pathResolved, "utf8");
-                  chunks.push(content);
+                  try {
+                    const content = await readFile(pathResolved, "utf8");
+                    chunks.push(content);
+                  } catch (e) {
+                    if (isENOENT(e)) {
+                      stderrLines.push(`${segBin}: ${fileArg}: No such file or directory`);
+                    } else {
+                      throw e;
+                    }
+                  }
                 }
-                lastResult = { stdout: chunks.join(""), stderr: "" };
+                lastResult = { stdout: chunks.join(""), stderr: stderrLines.join("\n") + (stderrLines.length ? "\n" : "") };
                 continue;
               }
             }
@@ -557,7 +570,16 @@ export function createExecTool(args: {
               if (sedSub) {
                 const pathResolved = resolve(cwd, sedSub.filePath);
                 ensureUnderProfile(pathResolved);
-                const content = await readFile(pathResolved, "utf8");
+                let content: string;
+                try {
+                  content = await readFile(pathResolved, "utf8");
+                } catch (e) {
+                  if (isENOENT(e)) {
+                    lastResult = { stdout: "", stderr: `sed: ${sedSub.filePath}: No such file or directory\n` };
+                    continue;
+                  }
+                  throw e;
+                }
                 const regex = new RegExp(sedSub.pattern, sedSub.global ? "g" : "");
                 await writeFile(pathResolved, content.replace(regex, sedSub.replacement));
                 lastResult = { stdout: "", stderr: "" };
@@ -567,7 +589,16 @@ export function createExecTool(args: {
               if (sedChange) {
                 const pathResolved = resolve(cwd, sedChange.filePath);
                 ensureUnderProfile(pathResolved);
-                const content = await readFile(pathResolved, "utf8");
+                let content: string;
+                try {
+                  content = await readFile(pathResolved, "utf8");
+                } catch (e) {
+                  if (isENOENT(e)) {
+                    lastResult = { stdout: "", stderr: `sed: ${sedChange.filePath}: No such file or directory\n` };
+                    continue;
+                  }
+                  throw e;
+                }
                 const regex = new RegExp(sedChange.pattern);
                 const newContent = content
                   .split(/\r?\n/)
@@ -581,7 +612,16 @@ export function createExecTool(args: {
               if (sedDelete) {
                 const pathResolved = resolve(cwd, sedDelete.filePath);
                 ensureUnderProfile(pathResolved);
-                const content = await readFile(pathResolved, "utf8");
+                let content: string;
+                try {
+                  content = await readFile(pathResolved, "utf8");
+                } catch (e) {
+                  if (isENOENT(e)) {
+                    lastResult = { stdout: "", stderr: `sed: ${sedDelete.filePath}: No such file or directory\n` };
+                    continue;
+                  }
+                  throw e;
+                }
                 const regex = new RegExp(sedDelete.pattern);
                 const newContent = content.split(/\r?\n/).filter((line) => !regex.test(line)).join("\n");
                 await writeFile(pathResolved, newContent);
@@ -592,7 +632,16 @@ export function createExecTool(args: {
               if (sedAppend) {
                 const pathResolved = resolve(cwd, sedAppend.filePath);
                 ensureUnderProfile(pathResolved);
-                const content = await readFile(pathResolved, "utf8");
+                let content: string;
+                try {
+                  content = await readFile(pathResolved, "utf8");
+                } catch (e) {
+                  if (isENOENT(e)) {
+                    lastResult = { stdout: "", stderr: `sed: ${sedAppend.filePath}: No such file or directory\n` };
+                    continue;
+                  }
+                  throw e;
+                }
                 const regex = new RegExp(sedAppend.pattern);
                 const newLines = content.split(/\r?\n/).flatMap((ln) =>
                   regex.test(ln) ? [ln, sedAppend.line] : [ln]
@@ -681,9 +730,14 @@ export function createExecTool(args: {
               if (filePath) {
                 const pathResolved = resolve(cwd, filePath);
                 ensureUnderProfile(pathResolved);
-                const content = await readFile(pathResolved, "utf8");
-                const lines = content.split(/\r?\n/);
-                lastResult = { stdout: lines.slice(0, n).join("\n") + (lines.length ? "\n" : ""), stderr: "" };
+                try {
+                  const content = await readFile(pathResolved, "utf8");
+                  const lines = content.split(/\r?\n/);
+                  lastResult = { stdout: lines.slice(0, n).join("\n") + (lines.length ? "\n" : ""), stderr: "" };
+                } catch (e) {
+                  if (isENOENT(e)) lastResult = { stdout: "", stderr: `head: ${filePath}: No such file or directory\n` };
+                  else throw e;
+                }
               }
               continue;
             }
@@ -701,9 +755,14 @@ export function createExecTool(args: {
               if (filePath) {
                 const pathResolved = resolve(cwd, filePath);
                 ensureUnderProfile(pathResolved);
-                const content = await readFile(pathResolved, "utf8");
-                const lines = content.split(/\r?\n/);
-                lastResult = { stdout: lines.slice(-n).join("\n") + (lines.length ? "\n" : ""), stderr: "" };
+                try {
+                  const content = await readFile(pathResolved, "utf8");
+                  const lines = content.split(/\r?\n/);
+                  lastResult = { stdout: lines.slice(-n).join("\n") + (lines.length ? "\n" : ""), stderr: "" };
+                } catch (e) {
+                  if (isENOENT(e)) lastResult = { stdout: "", stderr: `tail: ${filePath}: No such file or directory\n` };
+                  else throw e;
+                }
               }
               continue;
             }
@@ -859,21 +918,35 @@ export function createExecTool(args: {
         if (platform() === "win32" && (bin === "cat" || bin === "type") && binArgs.length > 0 && intent === "read-only") {
           const fileArgs = binArgs.filter((a) => !SHELL_META.has(a) && a !== "");
           const chunks: string[] = [];
+          const stderrLines: string[] = [];
           for (const fileArg of fileArgs) {
             const pathResolved = resolve(cwd, fileArg);
             ensureUnderProfile(pathResolved);
-            const content = await readFile(pathResolved, "utf8");
-            chunks.push(content);
+            try {
+              const content = await readFile(pathResolved, "utf8");
+              chunks.push(content);
+            } catch (e) {
+              if (isENOENT(e)) {
+                stderrLines.push(`${bin}: ${fileArg}: No such file or directory`);
+              } else {
+                throw e;
+              }
+            }
           }
-          const result = { stdout: chunks.join(""), stderr: "", code: 0 as const };
-          return { stdout: result.stdout, stderr: result.stderr };
+          return { stdout: chunks.join(""), stderr: stderrLines.join("\n") + (stderrLines.length ? "\n" : "") };
         }
         if (platform() === "win32" && bin === "sed" && intent === "mutating") {
           const sedSub = parseSedInPlace(parsed.command);
           if (sedSub) {
             const pathResolved = resolve(cwd, sedSub.filePath);
             ensureUnderProfile(pathResolved);
-            const content = await readFile(pathResolved, "utf8");
+            let content: string;
+            try {
+              content = await readFile(pathResolved, "utf8");
+            } catch (e) {
+              if (isENOENT(e)) return { stdout: "", stderr: `sed: ${sedSub.filePath}: No such file or directory\n` };
+              throw e;
+            }
             const regex = new RegExp(sedSub.pattern, sedSub.global ? "g" : "");
             const newContent = content.replace(regex, sedSub.replacement);
             await writeFile(pathResolved, newContent);
@@ -883,7 +956,13 @@ export function createExecTool(args: {
           if (sedChange) {
             const pathResolved = resolve(cwd, sedChange.filePath);
             ensureUnderProfile(pathResolved);
-            const content = await readFile(pathResolved, "utf8");
+            let content: string;
+            try {
+              content = await readFile(pathResolved, "utf8");
+            } catch (e) {
+              if (isENOENT(e)) return { stdout: "", stderr: `sed: ${sedChange.filePath}: No such file or directory\n` };
+              throw e;
+            }
             const regex = new RegExp(sedChange.pattern);
             const newContent = content
               .split(/\r?\n/)
@@ -896,7 +975,13 @@ export function createExecTool(args: {
           if (sedDelete) {
             const pathResolved = resolve(cwd, sedDelete.filePath);
             ensureUnderProfile(pathResolved);
-            const content = await readFile(pathResolved, "utf8");
+            let content: string;
+            try {
+              content = await readFile(pathResolved, "utf8");
+            } catch (e) {
+              if (isENOENT(e)) return { stdout: "", stderr: `sed: ${sedDelete.filePath}: No such file or directory\n` };
+              throw e;
+            }
             const regex = new RegExp(sedDelete.pattern);
             const newContent = content
               .split(/\r?\n/)
@@ -909,7 +994,13 @@ export function createExecTool(args: {
           if (sedAppend) {
             const pathResolved = resolve(cwd, sedAppend.filePath);
             ensureUnderProfile(pathResolved);
-            const content = await readFile(pathResolved, "utf8");
+            let content: string;
+            try {
+              content = await readFile(pathResolved, "utf8");
+            } catch (e) {
+              if (isENOENT(e)) return { stdout: "", stderr: `sed: ${sedAppend.filePath}: No such file or directory\n` };
+              throw e;
+            }
             const regex = new RegExp(sedAppend.pattern);
             const newLines = content.split(/\r?\n/).flatMap((ln) =>
               regex.test(ln) ? [ln, sedAppend.line] : [ln]
@@ -997,9 +1088,14 @@ export function createExecTool(args: {
           if (filePath) {
             const pathResolved = resolve(cwd, filePath);
             ensureUnderProfile(pathResolved);
-            const content = await readFile(pathResolved, "utf8");
-            const lines = content.split(/\r?\n/);
-            return { stdout: lines.slice(0, n).join("\n") + (lines.length ? "\n" : ""), stderr: "" };
+            try {
+              const content = await readFile(pathResolved, "utf8");
+              const lines = content.split(/\r?\n/);
+              return { stdout: lines.slice(0, n).join("\n") + (lines.length ? "\n" : ""), stderr: "" };
+            } catch (e) {
+              if (isENOENT(e)) return { stdout: "", stderr: `head: ${filePath}: No such file or directory\n` };
+              throw e;
+            }
           }
         }
         if (platform() === "win32" && bin === "tail" && intent === "read-only" && binArgs.length > 0) {
@@ -1016,9 +1112,14 @@ export function createExecTool(args: {
           if (filePath) {
             const pathResolved = resolve(cwd, filePath);
             ensureUnderProfile(pathResolved);
-            const content = await readFile(pathResolved, "utf8");
-            const lines = content.split(/\r?\n/);
-            return { stdout: lines.slice(-n).join("\n") + (lines.length ? "\n" : ""), stderr: "" };
+            try {
+              const content = await readFile(pathResolved, "utf8");
+              const lines = content.split(/\r?\n/);
+              return { stdout: lines.slice(-n).join("\n") + (lines.length ? "\n" : ""), stderr: "" };
+            } catch (e) {
+              if (isENOENT(e)) return { stdout: "", stderr: `tail: ${filePath}: No such file or directory\n` };
+              throw e;
+            }
           }
         }
         if (platform() === "win32" && bin === "grep" && intent === "read-only" && binArgs.length >= 2) {
