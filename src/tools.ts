@@ -906,8 +906,7 @@ export function createExecTool(args: {
                   flag === "-d" ? (s?.isDirectory() ?? false) :
                   flag === "-e" ? (s != null) :
                   flag === "-s" ? (s != null && (s.size ?? 0) > 0) : false;
-                if (!ok) throw new Error("test: condition false");
-                lastResult = { stdout: "", stderr: "" };
+                lastResult = ok ? { stdout: "", stderr: "" } : { stdout: "", stderr: "test: condition false\n" };
                 continue;
               }
             }
@@ -925,7 +924,7 @@ export function createExecTool(args: {
           }
           return { stdout: lastResult.stdout, stderr: lastResult.stderr };
         }
-        if (platform() === "win32" && (bin === "cat" || bin === "type") && binArgs.length > 0 && intent === "read-only") {
+        if (platform() === "win32" && args.sandbox === undefined && (bin === "cat" || bin === "type") && binArgs.length > 0 && intent === "read-only") {
           const fileArgs = binArgs.filter((a) => !SHELL_META.has(a) && a !== "");
           const chunks: string[] = [];
           const stderrLines: string[] = [];
@@ -945,7 +944,7 @@ export function createExecTool(args: {
           }
           return { stdout: chunks.join(""), stderr: stderrLines.join("\n") + (stderrLines.length ? "\n" : "") };
         }
-        if (platform() === "win32" && bin === "sed" && intent === "mutating") {
+        if (platform() === "win32" && args.sandbox === undefined && bin === "sed" && intent === "mutating") {
           const sedSub = parseSedInPlace(parsed.command);
           if (sedSub) {
             const pathResolved = resolve(cwd, sedSub.filePath);
@@ -1022,12 +1021,12 @@ export function createExecTool(args: {
             "Unsupported sed command on Windows. Supported: sed -i 's/old/new/[g]' file, sed -i '/p/c replacement' file, sed -i '/p/d' file, sed -i '/p/a line' file."
           );
         }
-        if (platform() === "win32" && bin === "sed") {
+        if (platform() === "win32" && args.sandbox === undefined && bin === "sed") {
           throw new Error(
             "Unsupported sed command on Windows. Supported: sed -i 's/old/new/[g]' file, sed -i '/p/c replacement' file, sed -i '/p/d' file, sed -i '/p/a line' file."
           );
         }
-        if (platform() === "win32" && bin === "echo") {
+        if (platform() === "win32" && args.sandbox === undefined && bin === "echo") {
           const echo = parseEchoRedirect(bin, binArgs);
           if (echo) {
             const pathResolved = resolve(cwd, echo.filePath);
@@ -1046,7 +1045,7 @@ export function createExecTool(args: {
           if ((out.startsWith("'") && out.endsWith("'")) || (out.startsWith('"') && out.endsWith('"'))) out = out.slice(1, -1);
           return { stdout: out + "\n", stderr: "" };
         }
-        if (platform() === "win32" && bin === "rm" && intent === "mutating") {
+        if (platform() === "win32" && args.sandbox === undefined && bin === "rm" && intent === "mutating") {
           const recursive = binArgs.some((a) => a === "-r" || a === "-rf" || a === "-fr" || a === "-R");
           const paths = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           if (paths.length > 0) {
@@ -1068,10 +1067,10 @@ export function createExecTool(args: {
             return { stdout: "", stderr: "" };
           }
         }
-        if (platform() === "win32" && (bin === "pwd") && intent === "read-only") {
+        if (platform() === "win32" && args.sandbox === undefined && (bin === "pwd") && intent === "read-only") {
           return { stdout: cwd + "\n", stderr: "" };
         }
-        if (platform() === "win32" && (bin === "ls" || bin === "dir") && intent === "read-only") {
+        if (platform() === "win32" && args.sandbox === undefined && (bin === "ls" || bin === "dir") && intent === "read-only") {
           const paths = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           const dirPath = paths.length > 0 ? resolve(cwd, paths[0]!) : cwd;
           ensureUnderProfile(dirPath);
@@ -1093,7 +1092,7 @@ export function createExecTool(args: {
           }
           return { stdout: names.join("\n") + (names.length ? "\n" : ""), stderr: "" };
         }
-        if (platform() === "win32" && bin === "head" && intent === "read-only" && binArgs.length > 0) {
+        if (platform() === "win32" && args.sandbox === undefined && bin === "head" && intent === "read-only" && binArgs.length > 0) {
           let n = 10;
           const nonFlags = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           const idxN = binArgs.findIndex((a) => a === "-n");
@@ -1117,7 +1116,7 @@ export function createExecTool(args: {
             }
           }
         }
-        if (platform() === "win32" && bin === "tail" && intent === "read-only" && binArgs.length > 0) {
+        if (platform() === "win32" && args.sandbox === undefined && bin === "tail" && intent === "read-only" && binArgs.length > 0) {
           let n = 10;
           const nonFlags = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           const idxN = binArgs.findIndex((a) => a === "-n");
@@ -1141,7 +1140,7 @@ export function createExecTool(args: {
             }
           }
         }
-        if (platform() === "win32" && bin === "grep" && intent === "read-only" && binArgs.length >= 2) {
+        if (platform() === "win32" && args.sandbox === undefined && bin === "grep" && intent === "read-only" && binArgs.length >= 2) {
           const withNum = binArgs.includes("-n");
           const ignoreCase = binArgs.includes("-i");
           const nonFlags = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
@@ -1162,7 +1161,7 @@ export function createExecTool(args: {
             return { stdout: out.join("\n") + (out.length ? "\n" : ""), stderr: "" };
           }
         }
-        if (platform() === "win32" && bin === "wc" && intent === "read-only" && binArgs.length > 0) {
+        if (platform() === "win32" && args.sandbox === undefined && bin === "wc" && intent === "read-only" && binArgs.length > 0) {
           const flags = { lines: binArgs.includes("-l"), words: binArgs.includes("-w"), bytes: binArgs.includes("-c") };
           const files = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           if (files.length > 0) {
@@ -1187,7 +1186,7 @@ export function createExecTool(args: {
             return { stdout: out.join("\n") + "\n", stderr: "" };
           }
         }
-        if (platform() === "win32" && bin === "tee" && intent === "mutating" && binArgs.length > 0) {
+        if (platform() === "win32" && args.sandbox === undefined && bin === "tee" && intent === "mutating" && binArgs.length > 0) {
           const append = binArgs.includes("-a");
           const paths = binArgs.filter((a) => a !== "-a" && !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           if (paths.length > 0) {
@@ -1200,7 +1199,7 @@ export function createExecTool(args: {
             return { stdout: "", stderr: "" };
           }
         }
-        if (platform() === "win32" && bin === "mv" && intent === "mutating" && binArgs.length >= 2) {
+        if (platform() === "win32" && args.sandbox === undefined && bin === "mv" && intent === "mutating" && binArgs.length >= 2) {
           const paths = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           if (paths.length >= 2) {
             const src = resolve(cwd, paths[0]!);
@@ -1211,7 +1210,7 @@ export function createExecTool(args: {
             return { stdout: "", stderr: "" };
           }
         }
-        if (platform() === "win32" && bin === "cp" && intent === "mutating" && binArgs.length >= 2) {
+        if (platform() === "win32" && args.sandbox === undefined && bin === "cp" && intent === "mutating" && binArgs.length >= 2) {
           const paths = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           if (paths.length >= 2) {
             const src = resolve(cwd, paths[0]!);
@@ -1224,7 +1223,7 @@ export function createExecTool(args: {
             return { stdout: "", stderr: "" };
           }
         }
-        if (platform() === "win32" && bin === "mkdir" && intent === "mutating" && binArgs.length > 0) {
+        if (platform() === "win32" && args.sandbox === undefined && bin === "mkdir" && intent === "mutating" && binArgs.length > 0) {
           const paths = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           if (paths.length > 0) {
             for (const p of paths) {
@@ -1235,7 +1234,7 @@ export function createExecTool(args: {
             return { stdout: "", stderr: "" };
           }
         }
-        if (platform() === "win32" && bin === "touch" && intent === "mutating" && binArgs.length > 0) {
+        if (platform() === "win32" && args.sandbox === undefined && bin === "touch" && intent === "mutating" && binArgs.length > 0) {
           const paths = binArgs.filter((a) => !a.startsWith("-") && !SHELL_META.has(a) && a !== "");
           if (paths.length > 0) {
             for (const p of paths) {
@@ -1260,8 +1259,7 @@ export function createExecTool(args: {
               flag === "-d" ? (s?.isDirectory() ?? false) :
               flag === "-e" ? (s != null) :
               flag === "-s" ? (s != null && (s.size ?? 0) > 0) : false;
-            if (!ok) throw new Error("test: condition false");
-            return { stdout: "", stderr: "" };
+            return ok ? { stdout: "", stderr: "" } : { stdout: "", stderr: "test: condition false\n" };
           }
         }
         if (profileRoot) {
