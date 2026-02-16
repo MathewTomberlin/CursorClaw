@@ -36,6 +36,37 @@ export default function Dashboard() {
     load();
   }, [load]);
 
+  // When page becomes visible or browser goes online (e.g. phone unlock), retry so gateway recovery works without manual Retry.
+  useEffect(() => {
+    const RECONNECT_DELAY_MS = 500;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const scheduleRetry = () => {
+      if (document.visibilityState !== "visible") return;
+      timeoutId = setTimeout(() => void load(), RECONNECT_DELAY_MS);
+    };
+    const onVisibleOrOnline = () => {
+      if (timeoutId != null) clearTimeout(timeoutId);
+      timeoutId = null;
+      scheduleRetry();
+    };
+    document.addEventListener("visibilitychange", onVisibleOrOnline);
+    window.addEventListener("online", onVisibleOrOnline);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibleOrOnline);
+      window.removeEventListener("online", onVisibleOrOnline);
+      if (timeoutId != null) clearTimeout(timeoutId);
+    };
+  }, [load]);
+
+  // If initial load failed (e.g. gateway unreachable on refresh), keep retrying in background so UI recovers.
+  useEffect(() => {
+    if (error == null && (health != null || status != null)) return; // already loaded successfully
+    if (error != null && !error.startsWith("Cannot reach the gateway")) return; // different error, don't poll
+    const intervalMs = 3000;
+    const t = setInterval(() => void load(), intervalMs);
+    return () => clearInterval(t);
+  }, [error, health, status, load]);
+
   if (loading) return <p>Loading…</p>;
   if (error) {
     return (

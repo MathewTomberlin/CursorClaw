@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode
 } from "react";
-import { rpc, mapRpcError, openStream, getThread, setThread } from "../api";
+import { rpc, mapRpcError, openStream, getThread, setThread, isGatewayUnreachableError } from "../api";
 import { useProfile } from "./ProfileContext";
 
 export type ChannelKind = "dm" | "group" | "web" | "mobile";
@@ -134,6 +134,10 @@ interface ChatContextValue {
   loadingStartedAt: number | null;
   error: string | null;
   setError: (e: string | null) => void;
+  /** True while automatically retrying after reconnect (e.g. phone unlock); show "Reconnecting…" in UI. */
+  reconnecting: boolean;
+  /** Manually retry reaching the gateway and refetch thread (e.g. after "Cannot reach the gateway"). Preserves messages from sessionStorage. */
+  retryConnection: () => void;
   runTurn: (inputText: string) => Promise<void>;
   clearThread: () => void;
   /** Store a proactive message for a profile that is not currently selected; injected when user switches to that profile. */
@@ -165,6 +169,9 @@ export function ChatProvider({ children }: ChatProviderProps) {
   const [loading, setLoading] = useState(false);
   const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reconnecting, setReconnecting] = useState(false);
+  /** Increment to force the lifecycle stream to reopen (e.g. after phone unlock so dead SSE is replaced). */
+  const [streamReconnectKey, setStreamReconnectKey] = useState(0);
   const streamRef = useRef<EventSource | null>(null);
   /** Only sync to server after we've loaded from server for this session/profile (avoids overwriting server with sessionStorage on first paint). */
   const serverLoadDoneRef = useRef(false);
@@ -182,6 +189,8 @@ export function ChatProvider({ children }: ChatProviderProps) {
   pendingProactiveRef.current = pendingProactiveByProfile;
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
+  const errorRef = useRef<string | null>(null);
+  errorRef.current = error;
 
   const addPendingProactive = useCallback((profileId: string, text: string) => {
     setPendingProactiveByProfile((prev) => ({
@@ -223,14 +232,17 @@ export function ChatProvider({ children }: ChatProviderProps) {
             currentRunIdRef.current === null &&
             runTurnInProgressRef.current
           ) {
-            // Preserve optimistic user message when runTurn sent but agent.run not returned yet
-            setMessages((local) => {
-              if (local.length <= toSet.length) return toSet;
-              const tail = local.slice(toSet.length);
-              const hasUser = tail.some((m) => m.role === "user");
-              if (hasUser) return [...toSet, ...tail];
-              return toSet;
-            });
+            // Preserve optimistic user message when runTurn sent but agent.run not returned yet.
+            // Never overwrite with empty server state here—React may not have applied the optimistic update yet.
+            if (toSet.length > 0) {
+              setMessages((local) => {
+                if (local.length <= toSet.length) return toSet;
+                const tail = local.slice(toSet.length);
+                const hasUser = tail.some((m) => m.role === "user");
+                if (hasUser) return [...toSet, ...tail];
+                return toSet;
+              });
+            }
           } else {
             setMessages(toSet);
           }
@@ -265,6 +277,73 @@ export function ChatProvider({ children }: ChatProviderProps) {
     }
   }, [messages, sessionId, selectedProfileId]);
 
+  // Shared retry logic: refetch thread and reopen stream after reconnect. Preserve messages from sessionStorage.
+  const RECONNECT_ATTEMPTS = 5;
+  const RECONNECT_DELAYS_MS = [800, 1600, 3200, 5000, 8000]; // exponential backoff
+  const runReconnectRetry = useCallback(() => {
+    const sid = sessionIdRef.current?.trim();
+    const pid = selectedProfileIdRef.current;
+    if (!sid || !pid) return;
+    setReconnecting(true);
+    setStreamReconnectKey((k) => k + 1); // reopen EventSource so dead SSE after lock is replaced
+    const timeoutIds: ReturnType<typeof setTimeout>[] = [];
+    const tryGetThread = (attempt: number) => {
+      getThread(sid, pid)
+        .then(({ messages: serverMessages }) => {
+          if (!Array.isArray(serverMessages)) return;
+          const deduped = dedupeConsecutiveAssistantReplies(serverMessages);
+          setMessages((prev) => {
+            if (deduped.length === 0 && prev.length > 0) return prev;
+            if (prev.length > deduped.length) return prev;
+            return deduped;
+          });
+          const currentError = errorRef.current;
+          if (currentError && isGatewayUnreachableError(new Error(currentError))) {
+            setError(null);
+          }
+          setReconnecting(false);
+        })
+        .catch(() => {
+          if (attempt < RECONNECT_ATTEMPTS) {
+            const delay = RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)] ?? 3000;
+            const id = setTimeout(() => tryGetThread(attempt + 1), delay);
+            timeoutIds.push(id);
+          } else {
+            setReconnecting(false);
+          }
+        });
+    };
+    tryGetThread(0);
+    return () => timeoutIds.forEach((id) => clearTimeout(id));
+  }, []);
+
+  const reconnectCleanupRef = useRef<(() => void) | null>(null);
+
+  // When page becomes visible again (e.g. phone unlock) or browser goes online, retry so we recover
+  // from "Cannot reach the gateway" and messages are refetched without manual refresh.
+  useEffect(() => {
+    let scheduleTimeoutId: ReturnType<typeof setTimeout> | null = null;
+    const onVisibleOrOnline = () => {
+      if (document.visibilityState !== "visible") return;
+      const sid = sessionIdRef.current?.trim();
+      const pid = selectedProfileIdRef.current;
+      if (!sid || !pid) return;
+      reconnectCleanupRef.current?.();
+      scheduleTimeoutId = setTimeout(() => {
+        scheduleTimeoutId = null;
+        reconnectCleanupRef.current = runReconnectRetry();
+      }, 400);
+    };
+    document.addEventListener("visibilitychange", onVisibleOrOnline);
+    window.addEventListener("online", onVisibleOrOnline);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibleOrOnline);
+      window.removeEventListener("online", onVisibleOrOnline);
+      if (scheduleTimeoutId != null) clearTimeout(scheduleTimeoutId);
+      reconnectCleanupRef.current?.();
+    };
+  }, [runReconnectRetry]);
+
   // Safety net: clear loading if it has been stuck for too long (e.g. server hung without closing connection)
   const LOADING_MAX_MS = 11 * 60 * 1000; // 11 min
   useEffect(() => {
@@ -282,7 +361,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
     return () => clearInterval(interval);
   }, [loading, loadingStartedAt]);
 
-  // Keep lifecycle stream open for current session (survives tab switch)
+  // Keep lifecycle stream open for current session. Reopens when streamReconnectKey changes (e.g. after phone unlock).
   useEffect(() => {
     const sid = sessionId.trim();
     if (!sid) return;
@@ -296,11 +375,23 @@ export function ChatProvider({ children }: ChatProviderProps) {
       try {
         const data = JSON.parse(ev.data) as StreamEvent;
         setStreamEvents((prev) => [...prev, data]);
-        if (data.runId && data.runId !== currentRunIdRef.current) return;
+        // Only skip content for a different run when event has a non-empty runId (so we still process thinking/assistant if runId is missing)
+        const runIdMismatch =
+          currentRunIdRef.current != null &&
+          data.runId != null &&
+          data.runId !== "" &&
+          data.runId !== currentRunIdRef.current;
+        if (runIdMismatch) return;
         if (data.type === "assistant") {
           const payload = data.payload as { content?: string; replace?: boolean } | undefined;
           setStreamedContent((prev) => {
-            if (payload?.replace) return payload.content ?? "";
+            if (payload?.replace) {
+              const next = payload.content ?? "";
+              // Only replace when the new content is the full message: empty so far, or new content extends prev (avoids final/status segments overwriting a growing message).
+              if (prev.length === 0) return next;
+              if (next.length >= prev.length && next.startsWith(prev)) return next;
+              return prev;
+            }
             return prev + (payload?.content ?? "");
           });
         } else if (data.type === "thinking") {
@@ -322,7 +413,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
       es.close();
       if (streamRef.current === es) streamRef.current = null;
     };
-  }, [sessionId]);
+  }, [sessionId, streamReconnectKey]);
 
   useEffect(() => {
     return () => {
@@ -387,14 +478,20 @@ export function ChatProvider({ children }: ChatProviderProps) {
         currentRunIdRef.current = runId;
         setCurrentRunId(runId);
 
-        // Sync from server so thread is source of truth (avoids lost messages when switching profile/view)
+        // Sync from server so thread is source of truth (avoids lost messages when switching profile/view).
+        // Only replace when server has at least as many messages; otherwise we'd wipe the optimistic user message.
         const sid = sessionId.trim();
         const pid = selectedProfileId;
         getThread(sid, pid)
           .then(({ messages: serverMessages }) => {
-            if (sessionIdRef.current === sid && selectedProfileIdRef.current === pid && Array.isArray(serverMessages)) {
-              setMessages(dedupeConsecutiveAssistantReplies(serverMessages));
-            }
+            if (sessionIdRef.current !== sid || selectedProfileIdRef.current !== pid || !Array.isArray(serverMessages)) return;
+            setMessages((prev) => {
+              const deduped = dedupeConsecutiveAssistantReplies(serverMessages);
+              // Never replace with empty when we have local messages (optimistic user message may not be on server yet).
+              if (deduped.length === 0 && prev.length > 0) return prev;
+              if (prev.length > deduped.length) return prev;
+              return deduped;
+            });
           })
           .catch(() => {});
 
@@ -431,7 +528,8 @@ export function ChatProvider({ children }: ChatProviderProps) {
           const last = prev[prev.length - 1];
           const isStreamingBubble =
             last?.role === "assistant" &&
-            last.id === `streaming-${runId}`;
+            typeof last.id === "string" &&
+            last.id.startsWith("streaming-");
           const base = isStreamingBubble ? prev.slice(0, prev.length - 1) : prev;
           const effectiveLast = base[base.length - 1];
           if (effectiveLast?.role !== "assistant")
@@ -505,6 +603,8 @@ export function ChatProvider({ children }: ChatProviderProps) {
     loadingStartedAt,
     error,
     setError,
+    reconnecting,
+    retryConnection: runReconnectRetry,
     runTurn,
     clearThread,
     addPendingProactive

@@ -194,6 +194,12 @@ a:hover {
   margin-top: 0.5rem;
 }
 
+.reconnecting-msg {
+  color: var(--focus, #0078d4);
+  font-size: 0.875rem;
+  margin-top: 0.5rem;
+}
+
 .muted {
   color: var(--text-muted);
   font-size: 0.875rem;
@@ -477,6 +483,22 @@ a:hover {
   opacity: 0.9;
 }
 
+/* Blinking cursor at end of streaming reply – visible so it’s clear the message is still growing */
+.chat-streaming-cursor {
+  display: inline-block;
+  width: 3px;
+  height: 1.1em;
+  margin-left: 3px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  border-radius: 1px;
+  box-shadow: 0 0 0 1px var(--accent);
+  animation: chat-cursor-blink 0.6s step-end infinite;
+}
+@keyframes chat-cursor-blink {
+  50% { opacity: 0; }
+}
+
 .chat-bubble-role {
   font-size: 0.75rem;
   font-weight: 600;
@@ -530,6 +552,13 @@ a:hover {
   flex-wrap: wrap;
   gap: 0.35rem 0.5rem;
   align-items: center;
+}
+
+.chat-stream-debug {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  opacity: 0.8;
+  margin-top: 0.35rem;
 }
 
 .chat-status-trail-label {
@@ -592,6 +621,23 @@ a:hover {
   word-break: break-word;
   color: var(--text);
   font-family: inherit;
+}
+
+/* Animated "Thinking" when no content yet: cycling dots */
+.chat-thinking-dots {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.chat-thinking-dots .chat-thinking-dot {
+  animation: chat-thinking-dot 1.4s ease-in-out infinite both;
+  opacity: 0.3;
+}
+.chat-thinking-dots .chat-thinking-dot:nth-child(1) { animation-delay: 0s; }
+.chat-thinking-dots .chat-thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+.chat-thinking-dots .chat-thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes chat-thinking-dot {
+  0%, 80%, 100% { opacity: 0.3; }
+  40% { opacity: 1; }
 }
 
 .chat-status-event--tool[data-current="true"] {

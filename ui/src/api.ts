@@ -102,6 +102,17 @@ function normalizeFetchError(base: string, err: unknown): Error {
   return err instanceof Error ? err : new Error(msg);
 }
 
+/** True when the error is a transient gateway/network unreachable (e.g. after phone lock/reconnect). Used to clear error on successful retry. */
+export function isGatewayUnreachableError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg.startsWith("Cannot reach the gateway.") ||
+    msg === "Failed to fetch" ||
+    msg === "Load failed" ||
+    msg === "NetworkError when attempting to fetch resource."
+  );
+}
+
 export interface RpcOptions {
   /** When aborted, fetch is cancelled and rpc throws. Use for timeouts and user cancel. */
   signal?: AbortSignal;
@@ -426,10 +437,12 @@ export async function providerModelsList(
   return { models: Array.isArray(out.models) ? out.models : [] };
 }
 
-/** Opens SSE to /stream. Note: EventSource cannot send Authorization header; use same-origin or future stream-ticket flow for auth. */
+/** Opens SSE to /stream. EventSource cannot send Authorization header; token is passed in query when set so cross-origin UI (e.g. custom base URL) can receive stream events. */
 export function openStream(sessionId?: string): EventSource {
   const base = getBaseUrl();
   const url = new URL(`${base}/stream`);
   if (sessionId) url.searchParams.set("sessionId", sessionId);
+  const token = getToken();
+  if (token) url.searchParams.set("token", token);
   return new EventSource(url.toString());
 }

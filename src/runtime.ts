@@ -675,7 +675,7 @@ export class AgentRuntime {
             let thisRoundContent = "";
             /** Tool calls this round with outputs (for agent loop: assistant message + tool result messages). */
             const thisRoundToolCalls: Array<{ name: string; args: unknown; output: unknown; id?: string }> = [];
-            /** Emit "streaming" once when first adapter event is received (so UI can show progress instead of "Waiting for stream"). */
+            /** Emit "streaming" once when we start consuming the adapter (so UI shows progress even if CLI buffers events). */
             let streamStartedEmitted = false;
             const maybeEmitStreaming = (): void => {
               if (!streamStartedEmitted) {
@@ -683,6 +683,8 @@ export class AgentRuntime {
                 emit("streaming");
               }
             };
+            // Emit "streaming" immediately so status updates appear before first adapter event (e.g. Cursor-Agent CLI).
+            maybeEmitStreaming();
 
             for await (const event of adapterStream) {
               if (event.type === "thinking_delta") {
@@ -701,11 +703,20 @@ export class AgentRuntime {
                 let content = this.scrubText(rawContent, scrubScopeId);
                 const isFullMessage = Boolean(data?.isFullMessage);
                 if (isFullMessage) {
-                  // Adapter sent full message (e.g. CLI "assistant" event); replace so we never append and duplicate.
                   content = stripThinkingTags(content);
-                  assistantText = content;
-                  thisRoundContent = content;
-                  emit("assistant", { content, replace: true });
+                  // Only replace when content is the full message so far (extends or equals assistantText). If adapter sends multiple "full" segments, append so we don't overwrite.
+                  if (
+                    assistantText.length === 0 ||
+                    (content.length >= assistantText.length && content.startsWith(assistantText))
+                  ) {
+                    assistantText = content;
+                    thisRoundContent = content;
+                    emit("assistant", { content, replace: true });
+                  } else {
+                    assistantText += content;
+                    thisRoundContent += content;
+                    emit("assistant", { content });
+                  }
                 } else if (content === assistantText) {
                   // Exact duplicate (e.g. CLI sent deltas then full message); skip emit and accumulation
                 } else if (content.length >= assistantText.length && content.startsWith(assistantText)) {

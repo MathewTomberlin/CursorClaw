@@ -277,13 +277,19 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
   const MAX_STREAM_CONNECTIONS_PER_SUBJECT = 2;
 
   app.get("/stream", async (request, reply) => {
+    // EventSource cannot send Authorization header; allow token in query for cross-origin UI (e.g. custom base URL).
+    const query = request.query as { sessionId?: string; token?: string };
+    const headers = { ...mapHeaders(request.headers) };
+    if (query.token && !headers.authorization) {
+      headers.authorization = `Bearer ${query.token}`;
+    }
     const auth = deps.auth.authorize({
       isLocal:
         request.ip === "127.0.0.1" ||
         request.ip === "::1" ||
         (request.ip != null && isPrivateIp(request.ip)),
       remoteIp: request.ip,
-      headers: mapHeaders(request.headers)
+      headers
     });
     if (!auth.ok) {
       return reply.code(401).send({ error: "Unauthorized" });
@@ -291,7 +297,7 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
     if (!deps.lifecycleStream) {
       return reply.code(503).send({ error: "Lifecycle stream not configured" });
     }
-    const sessionId = (request.query as { sessionId?: string }).sessionId;
+    const sessionId = query.sessionId;
     const subject = sessionId ?? request.ip ?? "unknown";
     const count = streamConnectionsBySubject.get(subject) ?? 0;
     if (count >= MAX_STREAM_CONNECTIONS_PER_SUBJECT) {
@@ -494,6 +500,9 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
               if (deps.runStore) {
                 await deps.runStore.markCompleted(started.runId, resolved);
               }
+              // Persist assistant reply to thread as soon as run completes so the message log
+              // is correct even if the client disconnects (e.g. phone lock) before calling agent.wait.
+              await appendAssistantToThread(deps, started.runId, resolved, appendedRunIds);
               pendingRuns.set(started.runId, {
                 promise: started.promise,
                 result: resolved

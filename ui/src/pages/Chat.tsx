@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { rpc, mapRpcError, heartbeatPoll } from "../api";
+import { rpc, mapRpcError, heartbeatPoll, isGatewayUnreachableError } from "../api";
 import { useChat } from "../contexts/ChatContext";
 import { useProfile } from "../contexts/ProfileContext";
 import type { StreamEvent } from "../contexts/ChatContext";
@@ -19,20 +19,36 @@ function useMediaQuery(query: string): boolean {
   return matches;
 }
 
+/** Friendly label for a single stream event (last status only; overwrites as status changes). */
 function formatStreamEventLabel(ev: StreamEvent): string {
+  const toolName = ev.payload?.call?.name;
   switch (ev.type) {
     case "connecting":
       return "Connecting…";
     case "queued":
-      return "Queued";
+      return "In queue…";
     case "started":
-      return "Started";
+      return "Starting…";
     case "streaming":
-      return "Streaming…";
+      return "Receiving reply…";
     case "thinking":
       return "Thinking…";
     case "tool":
-      return ev.payload?.call?.name ? `Tool: ${ev.payload.call.name}` : "Tool call";
+      if (!toolName) return "Running tool…";
+      // Prefer short, readable labels for common tools
+      const friendly: Record<string, string> = {
+        web_search: "Searching the web…",
+        web_fetch: "Fetching page…",
+        read_file: "Reading file…",
+        write: "Writing file…",
+        edit_notebook: "Editing notebook…",
+        grep: "Searching codebase…",
+        list_dir: "Listing files…",
+        run_terminal_cmd: "Running command…",
+        recall_memory: "Recalling memory…",
+        remember_this: "Saving note…",
+      };
+      return friendly[toolName] ?? `Running ${toolName}…`;
     case "assistant":
       return "Writing reply…";
     case "compaction":
@@ -110,18 +126,20 @@ export default function Chat() {
     currentRunId,
     loadingStartedAt,
     error,
+    reconnecting,
+    retryConnection,
     runTurn: runTurnFromContext,
     clearThread,
     addPendingProactive
   } = useChat();
 
-  /** Messages to render: when loading and we have streamed content, append a live assistant bubble so output updates as it streams. */
+  /** Messages to render: when loading and we have streamed content, append a live assistant bubble so the message grows token-by-token (shown as soon as first token arrives, even before agent.run returns). */
   const displayMessages =
-    loading && currentRunId && streamedContent
+    loading && streamedContent
       ? [
           ...messages,
           {
-            id: `streaming-${currentRunId}`,
+            id: `streaming-${currentRunId ?? "pending"}`,
             role: "assistant" as const,
             content: stripThinkingTags(streamedContent),
             at: undefined
@@ -148,7 +166,7 @@ export default function Chat() {
   // Auto-scroll to bottom when new messages arrive (instant so tab switch doesn’t animate the whole log)
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "auto" });
-  }, [messages, streamEvents, streamedContent]);
+  }, [messages, streamEvents, streamedContent, streamedThinkingContent]);
 
   /** Normalize for dedupe: trim and collapse runs of whitespace so minor differences don't create duplicates. */
   function normalizeForDedupe(s: string): string {
@@ -233,21 +251,25 @@ export default function Chat() {
     void runTurnFromContext(text);
   };
 
-  // Events for the current run: filter by runId once we have it, else show recent events so "Queued" can appear before runId
+  // Events for the current run: filter by runId once we have it, else show recent events so "Queued" can appear before runId.
+  // When we have currentRunId but no matching events yet (e.g. stream delay), use recent stream events so "Connecting…" / "Queued" still show.
+  const eventsForRunId = currentRunId ? streamEvents.filter((e) => e.runId === currentRunId) : [];
+  const recentStreamEvents = streamEvents.slice(-20);
   const runEvents = loading
     ? currentRunId
-      ? streamEvents.filter((e) => e.runId === currentRunId)
-      : streamEvents.slice(-20)
+      ? eventsForRunId.length > 0
+        ? eventsForRunId
+        : recentStreamEvents
+      : recentStreamEvents
     : [];
   const lastStreamEvent = runEvents.length > 0 ? runEvents[runEvents.length - 1] : null;
-  const statusTrail = runEvents.map(formatStreamEventLabel);
   const hasRealProgress = runEvents.some(
     (e) =>
-      e.type !== "connecting" && e.type !== "queued" && e.type !== "started"
+      e.type !== "connecting" && e.type !== "queued"
   );
   const loadingDurationMs = loadingStartedAt != null ? Date.now() - loadingStartedAt : 0;
   const showWorkingFallback =
-    loading && loadingDurationMs > 1500 && !hasRealProgress && statusTrail.length <= 2;
+    loading && loadingDurationMs > 1500 && !hasRealProgress && runEvents.length <= 2;
 
   const statusLabel = lastStreamEvent
     ? formatStreamEventLabel(lastStreamEvent)
@@ -365,63 +387,56 @@ export default function Chat() {
                 <p>No messages yet. Send a message to start a conversation with the agent.</p>
               </div>
             )}
-            {displayMessages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`chat-bubble chat-bubble--${msg.role}`}
-                data-role={msg.role}
-                aria-label={msg.role === "user" ? "You" : "Agent"}
-              >
-                <span className="chat-bubble-role">{msg.role === "user" ? "You" : "Agent"}</span>
-                {msg.role === "assistant" ? (
-                  <div className="chat-bubble-content markdown-body agent-reply">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{stripThinkingTags(msg.content ?? "") || "—"}</ReactMarkdown>
-                  </div>
-                ) : (
-                  <div className="chat-bubble-content chat-bubble-content--text">{msg.content}</div>
-                )}
-                {msg.at && (
-                  <span className="chat-bubble-time" aria-hidden>
-                    {new Date(msg.at).toLocaleTimeString()}
-                  </span>
-                )}
-              </div>
-            ))}
-            {loading && (
+            {displayMessages.map((msg) => {
+              const isStreamingBubble = msg.role === "assistant" && msg.id.startsWith("streaming-");
+              return (
+                <div
+                  key={msg.id}
+                  className={`chat-bubble chat-bubble--${msg.role}${isStreamingBubble ? " chat-bubble--streaming" : ""}`}
+                  data-role={msg.role}
+                  aria-label={msg.role === "user" ? "You" : "Agent"}
+                >
+                  <span className="chat-bubble-role">{msg.role === "user" ? "You" : "Agent"}</span>
+                  {msg.role === "assistant" ? (
+                    <div className="chat-bubble-content markdown-body agent-reply">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{stripThinkingTags(msg.content ?? "") || "—"}</ReactMarkdown>
+                      {isStreamingBubble && <span className="chat-streaming-cursor" aria-hidden />}
+                    </div>
+                  ) : (
+                    <div className="chat-bubble-content chat-bubble-content--text">{msg.content}</div>
+                  )}
+                  {msg.at && (
+                    <span className="chat-bubble-time" aria-hidden>
+                      {new Date(msg.at).toLocaleTimeString()}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+            {loading && !streamedContent && (
               <div className="chat-bubble chat-bubble--assistant chat-bubble--loading" data-role="assistant">
                 <span className="chat-bubble-role">Agent</span>
                 <div className="chat-bubble-content">
-                  <span className="chat-typing" aria-live="polite">
+                  <span className="chat-typing" role="status" aria-live="polite" aria-label={statusLabel}>
                     {statusLabel}
                   </span>
-                  {streamedThinkingContent.length > 0 && (
+                  {(lastStreamEvent?.type === "thinking" || streamedThinkingContent.length > 0) && (
                     <div className="chat-thinking-block" role="status" aria-label="Agent thinking">
                       <span className="chat-thinking-label">Thinking:</span>
-                      <pre className="chat-thinking-text">{streamedThinkingContent}</pre>
+                      {streamedThinkingContent.length > 0 ? (
+                        <pre className="chat-thinking-text">{streamedThinkingContent}</pre>
+                      ) : (
+                        <span className="chat-thinking-dots" aria-hidden>Thinking<span className="chat-thinking-dot">.</span><span className="chat-thinking-dot">.</span><span className="chat-thinking-dot">.</span></span>
+                      )}
                     </div>
                   )}
-                  {statusTrail.length > 0 && (
-                    <div
-                      className="chat-status-trail"
-                      aria-label={`Agent status: ${statusTrail.join(" → ")}`}
-                      role="status"
-                    >
-                      <span className="chat-status-trail-label">Status:</span>
-                      {statusTrail.map((label, i) => (
-                        <span
-                          key={i}
-                          className={
-                            runEvents[i]?.type === "tool"
-                              ? "chat-status-event chat-status-event--tool"
-                              : runEvents[i]?.type === "thinking"
-                                ? "chat-status-event chat-status-event--thinking"
-                                : "chat-status-event"
-                          }
-                          data-current={i === statusTrail.length - 1 ? "true" : undefined}
-                        >
-                          {label}
-                        </span>
-                      ))}
+                  {/* Debug: confirm stream events are received (total count + last type) */}
+                  {(loading || streamEvents.length > 0) && (
+                    <div className="chat-stream-debug" role="status" aria-label={`Stream events: ${streamEvents.length}`}>
+                      Stream: {streamEvents.length} event{streamEvents.length !== 1 ? "s" : ""}
+                      {streamEvents.length > 0 && (
+                        <> (last: <span data-event-type={streamEvents[streamEvents.length - 1]?.type}>{streamEvents[streamEvents.length - 1]?.type ?? "—"}</span>)</>
+                      )}
                     </div>
                   )}
                 </div>
@@ -429,7 +444,27 @@ export default function Chat() {
             )}
           </div>
 
-          {error && <p className="error-msg" style={{ marginTop: "0.5rem" }}>{error}</p>}
+          {reconnecting && (
+            <p className="reconnecting-msg" style={{ marginTop: "0.5rem" }}>
+              Reconnecting…
+            </p>
+          )}
+          {error && (
+            <p className="error-msg" style={{ marginTop: "0.5rem" }}>
+              {error}
+              {isGatewayUnreachableError(new Error(error)) && (
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ marginLeft: "0.75rem" }}
+                  onClick={() => retryConnection()}
+                  disabled={reconnecting}
+                >
+                  Retry
+                </button>
+              )}
+            </p>
+          )}
 
           <ChatInput submitDisabled={loading} onSubmit={runTurn} />
         </section>
