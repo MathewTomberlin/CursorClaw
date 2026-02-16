@@ -151,7 +151,8 @@ export class SessionQueue {
       turn.resolve = resolve;
       turn.reject = reject;
     });
-    const key = turn.request.session.sessionId;
+    const profileId = turn.request.session.profileId ?? "default";
+    const key = `${profileId}:${turn.request.session.sessionId}`;
     void this.enqueueAsync(key, turn).catch(() => {});
     return resultPromise;
   }
@@ -1109,9 +1110,11 @@ export class AgentRuntime {
       }
     }
 
-    const isFirstTurnThisSession = !this.sessionsWithTurn.has(request.session.sessionId);
+    const profileIdForFirstTurn = request.session.profileId ?? getDefaultProfileId(this.options.config);
+    const sessionKey = `${profileIdForFirstTurn}:${request.session.sessionId}`;
+    const isFirstTurnThisSession = !this.sessionsWithTurn.has(sessionKey);
     if (isFirstTurnThisSession) {
-      this.sessionsWithTurn.add(request.session.sessionId);
+      this.sessionsWithTurn.add(sessionKey);
     }
     if (substrate.birth?.trim() && isFirstTurnThisSession) {
       systemMessages.push({
