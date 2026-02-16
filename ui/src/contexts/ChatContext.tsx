@@ -68,6 +68,29 @@ function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+/** Max size for the messages array in the request body so we stay under gateway body limit and avoid 413. */
+const MAX_MESSAGES_PAYLOAD_BYTES = 1.2 * 1024 * 1024; // 1.2 MiB (leaves room for session + JSON-RPC wrapper)
+
+/**
+ * Trim messages to fit within the request body limit. Keeps the most recent messages and, if any were dropped,
+ * prepends a single user message so the model knows context was omitted.
+ */
+function trimMessagesToFit(
+  messages: Array<{ role: string; content: string }>
+): Array<{ role: string; content: string }> {
+  if (JSON.stringify(messages).length <= MAX_MESSAGES_PAYLOAD_BYTES) return messages;
+  const omittedNotice: { role: string; content: string } = {
+    role: "user",
+    content: "[Previous messages omitted for length. Conversation continues with recent context below.]"
+  };
+  for (let n = messages.length; n > 0; n--) {
+    const slice = messages.slice(-n);
+    const withNotice = [omittedNotice, ...slice];
+    if (JSON.stringify(withNotice).length <= MAX_MESSAGES_PAYLOAD_BYTES) return withNotice;
+  }
+  return [omittedNotice, ...messages.slice(-1)];
+}
+
 interface ChatContextValue {
   sessionId: string;
   setSessionId: (s: string) => void;
@@ -215,10 +238,11 @@ export function ChatProvider({ children }: ChatProviderProps) {
         const apiMessages = messageHistory
           .filter((m) => m.role === "user" || m.role === "assistant")
           .map((m) => ({ role: m.role, content: m.content }));
+        const trimmedMessages = trimMessagesToFit(apiMessages);
 
         const runRes = await rpc<{ runId: string }>("agent.run", {
           session: { sessionId: sessionId.trim(), channelId: channelId.trim(), channelKind, profileId: selectedProfileId },
-          messages: apiMessages
+          messages: trimmedMessages
         });
         const runId = runRes.result?.runId;
         if (!runId) throw new Error("No runId returned");
