@@ -42,6 +42,15 @@ function normalizeForDedupe(s: string): string {
   return (s ?? "").trim().replace(/\s+/g, " ");
 }
 
+/** Remove <think>/</think> and <thinking>...</thinking> from assistant text so they are never shown. */
+function stripThinkingTags(text: string): string {
+  if (!text || text.length < 2) return text;
+  let out = text;
+  out = out.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  out = out.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "");
+  return out;
+}
+
 /** Collapse consecutive assistant messages with identical trimmed content so the reply is only shown once. */
 function dedupeConsecutiveAssistantReplies(messages: ChatMessage[]): ChatMessage[] {
   const out: ChatMessage[] = [];
@@ -219,7 +228,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
                   ...pending.map((content) => ({
                     id: generateId(),
                     role: "assistant" as const,
-                    content,
+                    content: stripThinkingTags(content),
                     at: new Date().toISOString()
                   }))
                 ]
@@ -547,13 +556,14 @@ export function ChatProvider({ children }: ChatProviderProps) {
           break;
         }
         const assistantText = out?.assistantText ?? "";
+        const finalContent = stripThinkingTags(assistantText);
 
         setStreamedContent("");
         setStreamedThinkingContent("");
         const assistantMsg: ChatMessage = {
           id: generateId(),
           role: "assistant",
-          content: assistantText,
+          content: finalContent,
           at: new Date().toISOString()
         };
         setMessages((prev) => {
@@ -567,12 +577,12 @@ export function ChatProvider({ children }: ChatProviderProps) {
           if (effectiveLast?.role !== "assistant")
             return [...base, assistantMsg];
           const lastNorm = normalizeForDedupe(effectiveLast.content ?? "");
-          const newNorm = normalizeForDedupe(assistantText);
+          const newNorm = normalizeForDedupe(finalContent);
           if (lastNorm === newNorm) return base.length < prev.length ? base : prev;
           if (newNorm.length > lastNorm.length && newNorm.startsWith(lastNorm)) {
             return [
               ...base.slice(0, base.length - 1),
-              { ...effectiveLast, content: assistantText, at: assistantMsg.at }
+              { ...effectiveLast, content: finalContent, at: assistantMsg.at }
             ];
           }
           if (lastNorm.length > newNorm.length && lastNorm.startsWith(newNorm))

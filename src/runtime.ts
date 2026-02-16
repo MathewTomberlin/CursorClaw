@@ -698,12 +698,12 @@ export class AgentRuntime {
                 const rawContent = String(data?.content ?? "");
                 const content = this.scrubText(rawContent, scrubScopeId);
                 if (content.length > 0) {
-                  // Emit only the new part (delta) so UI replaces with this chunk only; if adapter sent full buffer, slice; else treat as single chunk.
-                  const delta =
-                    content.startsWith(previousThinkingContent)
-                      ? content.slice(previousThinkingContent.length)
-                      : content;
-                  previousThinkingContent = content;
+                  // Emit only the new part (delta) so UI replaces with this chunk only. If adapter sends full buffer each time, slice; if adapter sends deltas, treat content as chunk and accumulate.
+                  const isFullBuffer = content.startsWith(previousThinkingContent);
+                  const delta = isFullBuffer
+                    ? content.slice(previousThinkingContent.length)
+                    : content;
+                  previousThinkingContent = isFullBuffer ? content : previousThinkingContent + content;
                   if (delta.length > 0) {
                     emit("thinking", { content: delta });
                     emittedCount += 1;
@@ -726,6 +726,14 @@ export class AgentRuntime {
                 replyContent = stripThinkingTags(replyContent);
                 const isFullMessage = Boolean(data?.isFullMessage);
                 if (replyContent.length === 0) {
+                  emittedCount += 1;
+                  continue;
+                }
+                // Thinking-only assistant_delta: content is exactly or a prefix of what we have as thinking; do not emit as assistant.
+                if (
+                  content.length <= previousThinkingContent.length &&
+                  previousThinkingContent.startsWith(content)
+                ) {
                   emittedCount += 1;
                   continue;
                 }
