@@ -75,7 +75,7 @@ function ChatInput({
 }
 
 export default function Chat() {
-  const { selectedProfileId } = useProfile();
+  const { selectedProfileId, profiles } = useProfile();
   const {
     sessionId,
     setSessionId,
@@ -91,7 +91,8 @@ export default function Chat() {
     loadingStartedAt,
     error,
     runTurn: runTurnFromContext,
-    clearThread
+    clearThread,
+    addPendingProactive
   } = useChat();
 
   const [channelConfigOpen, setChannelConfigOpen] = useState(false);
@@ -120,53 +121,51 @@ export default function Chat() {
     return (s ?? "").trim().replace(/\s+/g, " ");
   }
 
-  // Proactive message is delivered only via heartbeat.poll (status returns hasPendingProactiveMessage flag only, not the body), so we show it once here.
-  // Dedupe: avoid duplicate display when the same message is received twice (e.g. polling race) or when we get both a truncated/streamed and final version.
+  // Poll all profiles for proactive messages so both Cursor and Ollama (or other) agents' heartbeats are visible.
+  // Selected profile: show in current thread. Other profiles: store and inject when user switches to that profile.
   useEffect(() => {
+    const profileIds = profiles?.length ? profiles.map((p) => p.id) : ["default"];
     const poll = async () => {
       if (heartbeatPollInFlightRef.current) return;
       heartbeatPollInFlightRef.current = true;
       try {
-        const { proactiveMessage } = await heartbeatPoll(selectedProfileId);
-        if (proactiveMessage?.trim()) {
+        for (const profileId of profileIds) {
+          const { proactiveMessage } = await heartbeatPoll(profileId);
+          if (!proactiveMessage?.trim()) continue;
           const text = proactiveMessage.trim();
-          const normalized = normalizeForDedupe(text);
-          setMessages((prev) => {
-            const recent = prev.slice(-20);
-            const lastAssistant = recent.length > 0 && recent[recent.length - 1]?.role === "assistant" ? recent[recent.length - 1] : null;
-            const lastContent = (lastAssistant?.content ?? "").trim();
-            const lastNormalized = normalizeForDedupe(lastContent);
+          if (profileId === selectedProfileId) {
+            const normalized = normalizeForDedupe(text);
+            setMessages((prev) => {
+              const recent = prev.slice(-20);
+              const lastAssistant = recent.length > 0 && recent[recent.length - 1]?.role === "assistant" ? recent[recent.length - 1] : null;
+              const lastContent = (lastAssistant?.content ?? "").trim();
+              const lastNormalized = normalizeForDedupe(lastContent);
 
-            // Exact duplicate (or normalized-equal): do not add again
-            if (lastNormalized === normalized) return prev;
-            if (recent.some((m) => m.role === "assistant" && normalizeForDedupe(m.content ?? "") === normalized)) return prev;
+              if (lastNormalized === normalized) return prev;
+              if (recent.some((m) => m.role === "assistant" && normalizeForDedupe(m.content ?? "") === normalized)) return prev;
 
-            // New text is a superset of the last assistant (e.g. final replaced truncated): replace last message to avoid two bubbles
-            if (lastAssistant && normalized.length > lastNormalized.length && normalized.startsWith(lastNormalized)) {
-              const before = prev.slice(0, prev.length - 1);
+              if (lastAssistant && normalized.length > lastNormalized.length && normalized.startsWith(lastNormalized)) {
+                const before = prev.slice(0, prev.length - 1);
+                return [
+                  ...before,
+                  { ...lastAssistant, id: lastAssistant.id, content: text, at: new Date().toISOString() }
+                ];
+              }
+              if (lastNormalized.length > normalized.length && lastNormalized.startsWith(normalized)) return prev;
+
               return [
-                ...before,
+                ...prev,
                 {
-                  ...lastAssistant,
-                  id: lastAssistant.id,
+                  id: `proactive-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+                  role: "assistant",
                   content: text,
                   at: new Date().toISOString()
                 }
               ];
-            }
-            // We already have a longer assistant message that starts with this text: skip (avoid truncated duplicate)
-            if (lastNormalized.length > normalized.length && lastNormalized.startsWith(normalized)) return prev;
-
-            return [
-              ...prev,
-              {
-                id: `proactive-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-                role: "assistant",
-                content: text,
-                at: new Date().toISOString()
-              }
-            ];
-          });
+            });
+          } else {
+            addPendingProactive(profileId, text);
+          }
         }
       } catch {
         // ignore poll errors (e.g. offline, auth)
@@ -185,7 +184,7 @@ export default function Chat() {
       clearInterval(t);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [selectedProfileId, setMessages]);
+  }, [selectedProfileId, profiles, setMessages, addPendingProactive]);
 
   const runTurn = (text: string) => {
     void runTurnFromContext(text);

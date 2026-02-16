@@ -219,6 +219,8 @@ export interface StatusPayload {
   queueWarnings: string[];
   /** If true, a proactive message is pending; open Chat and poll heartbeat.poll to receive it once (avoids duplicate display and placeholder text in status). */
   hasPendingProactiveMessage?: boolean;
+  /** Per-profile: true when that profile has a pending proactive message (for multi-agent heartbeat visibility). */
+  pendingProactiveByProfile?: Record<string, boolean>;
   runtimeMetrics: {
     turnsStarted: number;
     turnsCompleted: number;

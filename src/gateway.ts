@@ -358,9 +358,18 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
       }
     };
     // Expose only a flag so the message body is delivered once via heartbeat.poll; avoids duplicate display and leaking scrubbed placeholder text (e.g. HIGH_ENTROPY_TOKEN) in status/summary views.
-    const hasPendingProactiveMessage =
-      (defaultCtx.getPendingProactiveMessage?.() ?? null) !== null;
-    return hasPendingProactiveMessage ? { ...base, hasPendingProactiveMessage: true } : base;
+    // Multi-profile: expose per-profile pending so UI can show badges and poll all profiles for proactive messages.
+    const pendingProactiveByProfile: Record<string, boolean> = {};
+    for (const p of profiles) {
+      const ctx = getEffectiveProfileContext(deps, p.id);
+      pendingProactiveByProfile[p.id] = (ctx.getPendingProactiveMessage?.() ?? null) !== null;
+    }
+    const hasPendingProactiveMessage = Object.values(pendingProactiveByProfile).some(Boolean);
+    return {
+      ...base,
+      ...(hasPendingProactiveMessage ? { hasPendingProactiveMessage: true } : {}),
+      pendingProactiveByProfile
+    };
   });
 
   app.post("/rpc", async (request, reply) => {

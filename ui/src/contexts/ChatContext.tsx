@@ -125,6 +125,8 @@ interface ChatContextValue {
   setError: (e: string | null) => void;
   runTurn: (inputText: string) => Promise<void>;
   clearThread: () => void;
+  /** Store a proactive message for a profile that is not currently selected; injected when user switches to that profile. */
+  addPendingProactive: (profileId: string, text: string) => void;
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null);
@@ -155,6 +157,19 @@ export function ChatProvider({ children }: ChatProviderProps) {
   const serverLoadDoneRef = useRef(false);
   /** Prevents duplicate assistant messages from double-submit or racing agent.wait responses. */
   const runTurnInProgressRef = useRef(false);
+  /** Proactive messages received while that profile was not selected; injected when user switches to that profile. */
+  const [pendingProactiveByProfile, setPendingProactiveByProfile] = useState<Record<string, string[]>>({});
+  const pendingProactiveRef = useRef<Record<string, string[]>>({});
+  const selectedProfileIdRef = useRef(selectedProfileId);
+  selectedProfileIdRef.current = selectedProfileId;
+  pendingProactiveRef.current = pendingProactiveByProfile;
+
+  const addPendingProactive = useCallback((profileId: string, text: string) => {
+    setPendingProactiveByProfile((prev) => ({
+      ...prev,
+      [profileId]: [...(prev[profileId] ?? []), text]
+    }));
+  }, []);
 
   // Load thread from server when session or profile changes (shared message list for desktop and mobile)
   useEffect(() => {
@@ -162,11 +177,32 @@ export function ChatProvider({ children }: ChatProviderProps) {
     if (!sid || !selectedProfileId) return;
     serverLoadDoneRef.current = false;
     let cancelled = false;
+    const profileIdForLoad = selectedProfileId;
     getThread(sid, selectedProfileId)
       .then(({ messages: serverMessages }) => {
         if (!cancelled && Array.isArray(serverMessages)) {
           const deduped = dedupeConsecutiveAssistantReplies(serverMessages);
-          setMessages(deduped);
+          const pending = pendingProactiveRef.current[profileIdForLoad] ?? [];
+          const toSet =
+            pending.length > 0 && selectedProfileIdRef.current === profileIdForLoad
+              ? [
+                  ...deduped,
+                  ...pending.map((content) => ({
+                    id: generateId(),
+                    role: "assistant" as const,
+                    content,
+                    at: new Date().toISOString()
+                  }))
+                ]
+              : deduped;
+          setMessages(toSet);
+          if (pending.length > 0 && selectedProfileIdRef.current === profileIdForLoad) {
+            setPendingProactiveByProfile((prev) => {
+              const next = { ...prev };
+              delete next[profileIdForLoad];
+              return next;
+            });
+          }
         }
         if (!cancelled) serverLoadDoneRef.current = true;
       })
@@ -355,7 +391,8 @@ export function ChatProvider({ children }: ChatProviderProps) {
     error,
     setError,
     runTurn,
-    clearThread
+    clearThread,
+    addPendingProactive
   };
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
