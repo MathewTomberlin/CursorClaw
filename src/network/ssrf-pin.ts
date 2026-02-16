@@ -11,7 +11,7 @@ import type { SafeFetchTarget } from "../security.js";
 export function fetchWithPinnedDns(
   target: SafeFetchTarget,
   pathWithQuery: string,
-  options: { signal?: AbortSignal; timeoutMs?: number } = {}
+  options: { signal?: AbortSignal; timeoutMs?: number; headers?: Record<string, string> } = {}
 ): Promise<{
   status: number;
   headers: { get(name: string): string | null };
@@ -26,6 +26,7 @@ export function fetchWithPinnedDns(
   const protocol = url.protocol === "https:" ? https : http;
   const port = url.port || (url.protocol === "https:" ? 443 : 80);
   const path = pathWithQuery || "/";
+  const headers: Record<string, string> = { Host: url.hostname, ...options.headers };
 
   return new Promise((resolve, reject) => {
     const req = protocol.request(
@@ -34,9 +35,7 @@ export function fetchWithPinnedDns(
         port: Number(port),
         path,
         method: "GET",
-        headers: {
-          Host: url.hostname
-        },
+        headers,
         rejectUnauthorized: true
       },
       (res) => {

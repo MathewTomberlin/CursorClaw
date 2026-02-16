@@ -1830,8 +1830,46 @@ export interface WebSearchArgs {
 }
 
 const WEB_SEARCH_DUCKDUCKGO_HOST = "api.duckduckgo.com";
+const WEB_SEARCH_DUCKDUCKGO_HTML_HOST = "html.duckduckgo.com";
 const WEB_SEARCH_TIMEOUT_MS = 10_000;
 const WEB_SEARCH_MAX_ABSTRACT_LEN = 2_000;
+const WEB_SEARCH_HTML_MAX_RESULTS = 12;
+const WEB_SEARCH_HTML_SNIPPET_MAX = 400;
+const WEB_SEARCH_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0 (CursorClaw web_search)";
+
+/**
+ * Parse DuckDuckGo HTML search page into result snippets (no API key).
+ * Extracts result__a (title), result__url (href), result__snippet.
+ */
+function parseDuckDuckGoHtmlResults(html: string): string[] {
+  const results: string[] = [];
+  const titles = [...html.matchAll(/result__a[^>]*>([^<]+)<\/a>/gi)].map((m) => m[1]!.trim());
+  const urlHrefs = [...html.matchAll(/result__url[^>]*href="([^"]+)"/gi)].map((m) => m[1]!);
+  const snippetRaw = [...html.matchAll(/result__snippet[^>]*>([\s\S]*?)<\//gi)].map((m) =>
+    (m[1] ?? "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, WEB_SEARCH_HTML_SNIPPET_MAX)
+  );
+  const n = Math.min(titles.length, urlHrefs.length, snippetRaw.length, WEB_SEARCH_HTML_MAX_RESULTS);
+  for (let i = 0; i < n; i++) {
+    let url = urlHrefs[i] ?? "";
+    try {
+      if (url.includes("uddg=")) {
+        const match = url.match(/uddg=([^&]+)/);
+        if (match?.[1]) url = decodeURIComponent(match[1].replace(/\+/g, " "));
+      }
+    } catch {
+      /* leave url as redirect */
+    }
+    const title = (titles[i] ?? "").slice(0, 120);
+    const snippet = (snippetRaw[i] ?? "").slice(0, WEB_SEARCH_HTML_SNIPPET_MAX);
+    results.push(url ? `${title} (${url}): ${snippet}` : `${title}: ${snippet}`);
+  }
+  if (results.length === 0 && titles.length > 0) {
+    for (let i = 0; i < Math.min(titles.length, WEB_SEARCH_HTML_MAX_RESULTS); i++) {
+      results.push((titles[i] ?? "").slice(0, 500));
+    }
+  }
+  return results;
+}
 
 export function createWebSearchTool(args: {
   approvalGate: ApprovalGate;
@@ -1842,7 +1880,7 @@ export function createWebSearchTool(args: {
   const toolName = args.toolName ?? "web_search";
   return {
     name: toolName,
-    description: "Search the web and return snippets/abstracts (DuckDuckGo Instant Answer API). Use for factual lookups, not full page content.",
+    description: "Search the web and return snippets/abstracts. Uses DuckDuckGo (Instant Answer API first, then HTML search fallback when no results). No API key required. Use for factual lookups, not full page content.",
     schema: {
       type: "object",
       properties: {
@@ -1926,15 +1964,43 @@ export function createWebSearchTool(args: {
       const answer = (data.Answer ?? "").trim();
       const definition = (data.Definition ?? "").trim();
       const definitionSource = (data.DefinitionSource ?? "").trim();
-      const combinedResults = [
+      let combinedResults = [
         ...relatedTexts,
         ...resultsFromResults,
         ...(answer ? [answer] : []),
         ...(definition ? [definition + (definitionSource ? ` — ${definitionSource}` : "")] : [])
       ];
-      const hasAny = abstract.length > 0 || combinedResults.length > 0;
+      let hasAny = abstract.length > 0 || combinedResults.length > 0;
+
+      // Fallback: DuckDuckGo HTML search (no API key) when Instant Answer returns little or nothing
+      if (!hasAny || combinedResults.length < 2) {
+        try {
+          const htmlUrl = `https://${WEB_SEARCH_DUCKDUCKGO_HTML_HOST}/html/?q=${encodeURIComponent(parsed.query)}`;
+          const htmlTarget = await resolveSafeFetchTarget(htmlUrl);
+          if (htmlTarget.url.hostname.toLowerCase() === WEB_SEARCH_DUCKDUCKGO_HTML_HOST) {
+            const htmlSignal = AbortSignal.timeout(WEB_SEARCH_TIMEOUT_MS);
+            const htmlResponse = await fetchWithPinnedDns(htmlTarget, htmlTarget.url.pathname + htmlTarget.url.search, {
+              signal: htmlSignal,
+              timeoutMs: WEB_SEARCH_TIMEOUT_MS,
+              headers: { "User-Agent": WEB_SEARCH_USER_AGENT }
+            });
+            if (htmlResponse.status === 200) {
+              const htmlBytes = new Uint8Array(await htmlResponse.arrayBuffer());
+              const htmlText = new TextDecoder().decode(htmlBytes);
+              const htmlResults = parseDuckDuckGoHtmlResults(htmlText);
+              if (htmlResults.length > 0) {
+                combinedResults = [...combinedResults, ...htmlResults];
+                hasAny = true;
+              }
+            }
+          }
+        } catch {
+          /* ignore HTML fallback errors; return whatever Instant Answer gave */
+        }
+      }
+
       const hint = !hasAny
-        ? "The DuckDuckGo Instant Answer API returned no data for this query. It often returns empty for general or conversational queries; it works best for specific topic names (e.g. 'NASA', 'Python programming') and factual lookups. Try a more specific or noun-focused search."
+        ? "No results from DuckDuckGo (Instant Answer or HTML). Try a more specific or noun-focused search."
         : undefined;
       return {
         abstract: wrapUntrustedContent(abstract),
