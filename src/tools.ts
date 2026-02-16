@@ -678,10 +678,15 @@ export function createExecTool(args: {
                   const pathResolved = resolve(cwd, p);
                   ensureUnderProfile(pathResolved);
                   const s = await stat(pathResolved).catch(() => null);
-                  if (s?.isDirectory()) {
-                    await rm(pathResolved, { recursive: true });
-                  } else {
-                    await unlink(pathResolved);
+                  if (s == null) continue; // already missing, skip (rm -f style)
+                  try {
+                    if (s.isDirectory()) {
+                      await rm(pathResolved, { recursive: true });
+                    } else {
+                      await unlink(pathResolved);
+                    }
+                  } catch (e) {
+                    if (!isENOENT(e)) throw e;
                   }
                 }
                 lastResult = { stdout: "", stderr: "" };
@@ -1040,10 +1045,15 @@ export function createExecTool(args: {
               const pathResolved = resolve(cwd, p);
               ensureUnderProfile(pathResolved);
               const s = await stat(pathResolved).catch(() => null);
-              if (s?.isDirectory()) {
-                await rm(pathResolved, { recursive: true });
-              } else {
-                await unlink(pathResolved);
+              if (s == null) continue; // already missing, skip (rm -f style)
+              try {
+                if (s.isDirectory()) {
+                  await rm(pathResolved, { recursive: true });
+                } else {
+                  await unlink(pathResolved);
+                }
+              } catch (e) {
+                if (!isENOENT(e)) throw e;
               }
             }
             return { stdout: "", stderr: "" };

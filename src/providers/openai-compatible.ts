@@ -16,6 +16,37 @@ function isOpenAICompatibleConfig(
   return c.provider === "openai-compatible";
 }
 
+/** Normalize tool parameters schema (required + properties) for OpenAI-style APIs. */
+function normalizeParameters(schema: object | undefined): {
+  type: "object";
+  required: string[];
+  properties: Record<string, { type: string; description?: string }>;
+} {
+  const s = schema && typeof schema === "object" ? (schema as Record<string, unknown>) : {};
+  return {
+    type: "object",
+    required: Array.isArray(s.required) ? (s.required as string[]) : [],
+    properties: (typeof s.properties === "object" && s.properties !== null
+      ? (s.properties as Record<string, { type?: string; description?: string }>)
+      : {}) as Record<string, { type: string; description?: string }>
+  };
+}
+
+/** Map adapter ToolDefinition to OpenAI API tools format. */
+function mapToolsToOpenAI(
+  tools: ToolDefinition[]
+): Array<{ type: "function"; function: { name: string; description: string; parameters: ReturnType<typeof normalizeParameters> } }> {
+  if (tools.length === 0) return [];
+  return tools.map((t) => ({
+    type: "function" as const,
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: normalizeParameters(t.schema)
+    }
+  }));
+}
+
 /**
  * OpenAI-compatible provider: talks to any API that implements OpenAI chat completions (OpenAI, Anthropic via gateway, etc.).
  * Uses apiKeyRef to resolve Bearer token from credential store (e.g. env:OPENAI_API_KEY); key is never logged or sent to the model.
@@ -27,7 +58,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     _session: ModelSessionHandle,
     modelConfig: ModelProviderConfig,
     messages: ChatMessage[],
-    _tools: ToolDefinition[],
+    tools: ToolDefinition[],
     options: SendTurnOptions
   ): AsyncIterable<AdapterEvent> {
     if (!isOpenAICompatibleConfig(modelConfig)) {
@@ -49,10 +80,41 @@ export class OpenAICompatibleProvider implements ModelProvider {
       );
     }
 
-    const openAIMessages = messages.map((m) => ({
-      role: m.role === "assistant" ? "assistant" : m.role === "system" ? "system" : "user",
-      content: m.content
-    }));
+    const openAIMessages = messages.map((m): Record<string, unknown> => {
+      const role = m.role === "assistant" ? "assistant" : m.role === "system" ? "system" : m.role === "tool" ? "tool" : "user";
+      const out: Record<string, unknown> = { role, content: m.content ?? "" };
+      if (role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+        out.tool_calls = m.tool_calls.map((tc) => ({
+          id: tc.id ?? `call_${Math.random().toString(36).slice(2, 12)}`,
+          type: "function",
+          function: {
+            name: tc.function.name,
+            arguments: typeof tc.function.arguments === "string"
+              ? tc.function.arguments
+              : JSON.stringify(tc.function.arguments ?? {})
+          }
+        }));
+      }
+      if (role === "tool") {
+        if (typeof m.tool_call_id === "string") out.tool_call_id = m.tool_call_id;
+        else if (typeof m.tool_name === "string") out.tool_call_id = m.tool_name;
+      }
+      return out;
+    });
+
+    const body: {
+      model: string;
+      messages: typeof openAIMessages;
+      stream: boolean;
+      tools?: ReturnType<typeof mapToolsToOpenAI>;
+    } = {
+      model,
+      messages: openAIMessages,
+      stream: true
+    };
+    if (tools.length > 0) {
+      body.tools = mapToolsToOpenAI(tools);
+    }
 
     const controller = new AbortController();
     this.turnAbortControllers.set(options.turnId, controller);
@@ -65,11 +127,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
           "Content-Type": "application/json",
           Authorization: `Bearer ${apiKey}`
         },
-        body: JSON.stringify({
-          model,
-          messages: openAIMessages,
-          stream: true
-        }),
+        body: JSON.stringify(body),
         signal: controller.signal
       });
 
@@ -87,6 +145,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
       let promptTokens = 0;
       let completionTokens = 0;
+      /** Accumulate tool_calls by index (OpenAI streams delta.tool_calls with index, id, function.name/arguments). */
+      const toolCallsByIndex = new Map<
+        number,
+        { id: string; name: string; argsRaw: string }
+      >();
+      const emittedToolCallIndices = new Set<number>();
 
       for await (const chunk of streamReadSSELines(reader)) {
         const line = chunk.trim();
@@ -94,7 +158,10 @@ export class OpenAICompatibleProvider implements ModelProvider {
         if (!line.startsWith("data: ")) continue;
         const jsonStr = line.slice(6);
         let parsed: {
-          choices?: Array<{ delta?: { content?: string }; finish_reason?: string }>;
+          choices?: Array<{
+            delta?: { content?: string; tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> };
+            finish_reason?: string;
+          }>;
           usage?: { prompt_tokens?: number; completion_tokens?: number };
         };
         try {
@@ -111,8 +178,66 @@ export class OpenAICompatibleProvider implements ModelProvider {
           completionTokens += (choice.delta.content as string).length;
           yield { type: "assistant_delta", data: { content: choice.delta.content } };
         }
+        const deltaToolCalls = choice?.delta?.tool_calls;
+        if (Array.isArray(deltaToolCalls)) {
+          for (let i = 0; i < deltaToolCalls.length; i++) {
+            const dtc = deltaToolCalls[i];
+            const idx = typeof dtc?.index === "number" ? dtc.index : i;
+            const id = typeof dtc?.id === "string" ? dtc.id : "";
+            const name = typeof dtc?.function?.name === "string" ? dtc.function.name : "";
+            const argsChunk = typeof dtc?.function?.arguments === "string" ? dtc.function.arguments : "";
+            const existing = toolCallsByIndex.get(idx);
+            if (existing) {
+              const mergedArgs = existing.argsRaw + argsChunk;
+              toolCallsByIndex.set(idx, {
+                id: id || existing.id,
+                name: name || existing.name,
+                argsRaw: mergedArgs
+              });
+            } else {
+              toolCallsByIndex.set(idx, { id, name, argsRaw: argsChunk });
+            }
+          }
+        }
         if (choice?.finish_reason != null) {
+          for (const [idx, acc] of toolCallsByIndex) {
+            if (emittedToolCallIndices.has(idx) || !acc.name) continue;
+            emittedToolCallIndices.add(idx);
+            let args: unknown = acc.argsRaw;
+            const trimmed = (acc.argsRaw || "").trim();
+            if (trimmed.length > 0) {
+              try {
+                args = JSON.parse(trimmed) as object;
+              } catch {
+                args = trimmed.length > 0 ? { raw: acc.argsRaw } : {};
+              }
+            } else {
+              args = {};
+            }
+            yield { type: "tool_call", data: { name: acc.name, args, id: acc.id || undefined } };
+          }
           break;
+        }
+        for (const [idx, acc] of toolCallsByIndex) {
+          if (emittedToolCallIndices.has(idx) || !acc.name) continue;
+          const trimmed = (acc.argsRaw || "").trim();
+          if (trimmed.length > 0 && (trimmed.startsWith("{") || trimmed.startsWith("["))) {
+            try {
+              const parsedArgs = JSON.parse(trimmed) as object;
+              if (typeof parsedArgs === "object" && parsedArgs !== null && Object.keys(parsedArgs).length > 0) {
+                emittedToolCallIndices.add(idx);
+                let args: unknown = acc.argsRaw;
+                try {
+                  args = JSON.parse(acc.argsRaw);
+                } catch {
+                  args = {};
+                }
+                yield { type: "tool_call", data: { name: acc.name, args, id: acc.id || undefined } };
+              }
+            } catch {
+              // incomplete JSON; keep accumulating
+            }
+          }
         }
       }
 

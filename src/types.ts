@@ -77,6 +77,8 @@ export interface LifecycleEvent {
 export interface ToolCall {
   name: string;
   args: unknown;
+  /** OpenAI-style tool call id; required for openai-compatible agent loop (tool result messages). */
+  id?: string;
 }
 
 export type AdapterEventType =
@@ -104,10 +106,12 @@ export interface SendTurnOptions {
   profileRoot?: string;
 }
 
-/** One assistant tool call for Ollama-style follow-up (index, name, arguments). */
+/** One assistant tool call for follow-up (Ollama: index; OpenAI: id + function name/arguments). */
 export interface ChatMessageToolCall {
   type: "function";
-  function: { index: number; name: string; arguments: object };
+  /** OpenAI format; optional for Ollama (uses index). */
+  id?: string;
+  function: { index?: number; name: string; arguments: object };
 }
 
 /**
@@ -119,8 +123,10 @@ export interface ChatMessage {
   content: string;
   /** Assistant message: tool calls from the model (Ollama format). */
   tool_calls?: ChatMessageToolCall[];
-  /** Tool result message: which tool this result is for. */
+  /** Tool result message: which tool this result is for (Ollama: tool_name; OpenAI: tool_call_id). */
   tool_name?: string;
+  /** OpenAI format: tool result message must include tool_call_id from the request's tool_calls[].id. */
+  tool_call_id?: string;
 }
 
 export interface CreateSessionOptions {

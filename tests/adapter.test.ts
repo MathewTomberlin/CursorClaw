@@ -694,7 +694,17 @@ describe("CursorAgentModelAdapter", () => {
           body: JSON.stringify({
             model: "gpt-4o-mini",
             messages: [{ role: "user", content: "hi" }],
-            stream: true
+            stream: true,
+            tools: [
+              {
+                type: "function",
+                function: {
+                  name: "echo_tool",
+                  description: "echo",
+                  parameters: { type: "object", required: ["value"], properties: { value: { type: "string" } } }
+                }
+              }
+            ]
           })
         })
       );
@@ -704,6 +714,79 @@ describe("CursorAgentModelAdapter", () => {
       } else {
         delete process.env[envKey];
       }
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("openai-compatible provider emits tool_call events when SSE includes delta.tool_calls", async () => {
+    const sseChunks = [
+      "data: " +
+        JSON.stringify({
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  { index: 0, id: "call_abc123", function: { name: "echo_tool", arguments: '{"value":"hi"}' } }
+                ]
+              }
+            }
+          ]
+        }) +
+        "\n",
+      "data: " + JSON.stringify({ choices: [{ finish_reason: "tool_calls" }] }) + "\n",
+      "data: [DONE]\n"
+    ];
+    const stream = new ReadableStream({
+      start(controller) {
+        for (const chunk of sseChunks) {
+          controller.enqueue(new TextEncoder().encode(chunk));
+        }
+        controller.close();
+      }
+    });
+    const fetchStub = vi.fn().mockResolvedValue({ ok: true, status: 200, body: stream, text: () => Promise.resolve("") });
+    vi.stubGlobal("fetch", fetchStub);
+    const envKey = "TEST_OPENAI_TOOL_" + Date.now();
+    process.env[envKey] = "sk-test";
+    try {
+      const adapter = new CursorAgentModelAdapter({
+        defaultModel: "api",
+        models: {
+          api: {
+            provider: "openai-compatible",
+            apiKeyRef: "env:" + envKey,
+            openaiModelId: "gpt-4o-mini",
+            baseURL: "https://api.openai.com/v1",
+            timeoutMs: 10_000,
+            authProfiles: ["default"],
+            fallbackModels: [],
+            enabled: true
+          }
+        }
+      });
+      const session = await adapter.createSession({
+        sessionId: "s1",
+        channelId: "c1",
+        channelKind: "dm"
+      });
+      const events: Array<{ type: string; data?: unknown }> = [];
+      for await (const event of adapter.sendTurn(
+        session,
+        [{ role: "user", content: "hi" }],
+        [simpleTool],
+        { turnId: "openai-tool-1" }
+      )) {
+        events.push({ type: event.type, data: event.data });
+      }
+      const toolCallEvent = events.find((e) => e.type === "tool_call");
+      expect(toolCallEvent).toBeDefined();
+      const data = toolCallEvent!.data as { name?: string; args?: unknown; id?: string };
+      expect(data.name).toBe("echo_tool");
+      expect(data.args).toEqual({ value: "hi" });
+      expect(data.id).toBe("call_abc123");
+      expect(events.map((e) => e.type)).toContain("done");
+    } finally {
+      delete process.env[envKey];
       vi.unstubAllGlobals();
     }
   });

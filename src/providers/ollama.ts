@@ -85,9 +85,9 @@ export class OllamaProvider implements ModelProvider {
       const role = m.role === "assistant" ? "assistant" : m.role === "system" ? "system" : m.role === "tool" ? "tool" : "user";
       const out: Record<string, unknown> = { role, content: m.content ?? "" };
       if (role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
-        out.tool_calls = m.tool_calls.map((tc) => ({
+        out.tool_calls = m.tool_calls.map((tc, i) => ({
           type: "function",
-          function: { index: tc.function.index, name: tc.function.name, arguments: tc.function.arguments }
+          function: { index: tc.function.index ?? i, name: tc.function.name, arguments: tc.function.arguments }
         }));
       }
       if (role === "tool" && typeof m.tool_name === "string") {

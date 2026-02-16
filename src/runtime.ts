@@ -471,9 +471,11 @@ export class AgentRuntime {
             timeoutMs: this.options.config.session.turnTimeoutMs,
             ...(profileRoot !== undefined && profileRoot !== "" ? { profileRoot } : {})
           };
-          /** For Ollama agent loop: messages to send (initial = promptMessages; then + assistant + tool results). */
+          /** For agent loop (Ollama / openai-compatible): messages to send (initial = promptMessages; then + assistant + tool results). */
           let currentMessages: ChatMessage[] = promptMessages.map((m) => ({ role: m.role, content: m.content }));
           const isOllama = modelConfig?.provider === "ollama";
+          const isOpenAICompatible = modelConfig?.provider === "openai-compatible";
+          const providerSupportsToolFollowUp = isOllama || isOpenAICompatible;
 
           while (true) {
             const adapterStream = this.options.adapter.sendTurn(
@@ -485,8 +487,8 @@ export class AgentRuntime {
             let emittedCount = 2;
             /** This round's assistant text (for building assistant message when following up with tool results). */
             let thisRoundContent = "";
-            /** Tool calls this round with outputs (for Ollama follow-up: assistant message + tool result messages). */
-            const thisRoundToolCalls: Array<{ name: string; args: unknown; output: unknown }> = [];
+            /** Tool calls this round with outputs (for agent loop: assistant message + tool result messages). */
+            const thisRoundToolCalls: Array<{ name: string; args: unknown; output: unknown; id?: string }> = [];
 
             for await (const event of adapterStream) {
               if (event.type === "assistant_delta") {
@@ -528,7 +530,7 @@ export class AgentRuntime {
                   ...(request.session.sessionId !== undefined ? { sessionId: request.session.sessionId } : {})
                 };
                 const output = await this.options.toolRouter.execute(call, toolContext);
-                thisRoundToolCalls.push({ name: call.name, args: call.args, output });
+                thisRoundToolCalls.push({ name: call.name, args: call.args, output, ...(call.id !== undefined ? { id: call.id } : {}) });
                 const safeCall = this.scrubUnknown(call, scrubScopeId) as ToolCall;
                 const safeOutput = this.scrubUnknown(output, scrubScopeId);
                 this.metrics.toolCalls += 1;
@@ -551,23 +553,32 @@ export class AgentRuntime {
               }
             }
 
-            if (thisRoundToolCalls.length === 0 || !isOllama) {
+            if (thisRoundToolCalls.length === 0 || !providerSupportsToolFollowUp) {
               break;
             }
-            // Ollama agent loop: send assistant message with tool_calls + tool result messages, then get final response (per docs).
+            // Agent loop: send assistant message with tool_calls + tool result messages, then get final response (Ollama / openai-compatible).
+            const toolCallIds = thisRoundToolCalls.map((tc) => tc.id ?? (isOpenAICompatible ? `call_${Math.random().toString(36).slice(2, 12)}` : undefined));
             const assistantMsg: ChatMessage = {
               role: "assistant",
               content: thisRoundContent,
               tool_calls: thisRoundToolCalls.map((tc, i) => ({
                 type: "function" as const,
-                function: { index: i, name: tc.name, arguments: (typeof tc.args === "object" && tc.args !== null ? tc.args : {}) as object }
+                ...(isOpenAICompatible && toolCallIds[i] ? { id: toolCallIds[i] } : {}),
+                function: {
+                  ...(isOllama ? { index: i } : {}),
+                  name: tc.name,
+                  arguments: (typeof tc.args === "object" && tc.args !== null ? tc.args : {}) as object
+                }
               }))
             };
-            const toolMsgs: ChatMessage[] = thisRoundToolCalls.map((tc) => ({
-              role: "tool",
-              content: typeof tc.output === "string" ? tc.output : JSON.stringify(tc.output),
-              tool_name: tc.name
-            }));
+            const toolMsgs: ChatMessage[] = thisRoundToolCalls.map((tc, i) => {
+              const base = {
+                role: "tool" as const,
+                content: typeof tc.output === "string" ? tc.output : JSON.stringify(tc.output)
+              };
+              if (isOpenAICompatible && toolCallIds[i]) return { ...base, tool_call_id: toolCallIds[i] };
+              return { ...base, tool_name: tc.name };
+            });
             currentMessages = [...currentMessages, assistantMsg, ...toolMsgs];
           }
 
