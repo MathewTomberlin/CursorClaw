@@ -134,7 +134,7 @@ describe("max-context-tokens (TU.2)", () => {
       expect(summaryMessage.role).toBe("system");
       expect(summaryMessage.content).toMatch(/^Summary of earlier turns:\n/);
       expect(summaryMessage.content).toContain("User: What is X?");
-      expect(summaryMessage.content).toContain("Assistant: X is a thing.");
+      expect(summaryMessage.content).toContain("Agent: X is a thing.");
       expect(remainingMessages).toHaveLength(1);
       expect(remainingMessages[0]!.content).toBe("last");
     });

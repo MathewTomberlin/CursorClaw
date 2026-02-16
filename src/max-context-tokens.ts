@@ -18,7 +18,7 @@ export interface SummarizePrefixResult {
 
 /**
  * Replaces a contiguous prefix of messages (all but the last) with a single system summary message.
- * Rule-based: concatenates "User: … Assistant: …" per turn, then truncates to maxSummaryTokens.
+ * Rule-based: concatenates "User: … Agent: …" per turn, then truncates to maxSummaryTokens.
  * Use when over cap and summarizeOldTurns is enabled (TU.4).
  */
 export function summarizePrefix(
@@ -35,7 +35,7 @@ export function summarizePrefix(
   const lastMessage = messages[messages.length - 1]!;
   const parts: string[] = [];
   for (const m of prefix) {
-    const label = m.role === "user" ? "User" : m.role === "assistant" ? "Assistant" : "System";
+    const label = m.role === "user" ? "User" : m.role === "assistant" ? "Agent" : "System";
     parts.push(`${label}: ${m.content}`);
   }
   let text = parts.join("\n\n");

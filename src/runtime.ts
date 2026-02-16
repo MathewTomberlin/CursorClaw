@@ -931,6 +931,14 @@ export class AgentRuntime {
           scopeId
         )
       });
+      // Conversational frame: in the UI the human sees their messages as \"You\" and yours as \"Agent\". In context we refer to the human as User and you as the agent. When the User says \"you\" or \"You\", they mean you (the agent).
+      systemMessages.push({
+        role: "system",
+        content: this.scrubText(
+          "In this chat, the other party is the User (the human). You are the agent. When the User says \"you\" or \"You\", they mean you (the agent), not themselves.",
+          scopeId
+        )
+      });
     }
     if (substrate.user?.trim() && isMainSession) {
       systemMessages.push({
