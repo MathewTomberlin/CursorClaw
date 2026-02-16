@@ -10,7 +10,7 @@ describe("recall_memory tool", () => {
     });
     const ctx: ToolExecuteContext = { auditId: "a", decisionLogs: [], channelKind: "web" };
     const result = await tool.execute({ query: "test", top_k: 5 }, ctx);
-    expect(result).toEqual({ error: "recall_memory is only available in the main session." });
+    expect(result).toEqual({ error: "recall_memory is only available in the main or heartbeat session." });
   });
 
   it("returns error when not in main session (channelKind not web)", async () => {
@@ -24,7 +24,7 @@ describe("recall_memory tool", () => {
       channelKind: "slack"
     };
     const result = await tool.execute({ query: "test" }, ctx);
-    expect(result).toEqual({ error: "recall_memory is only available in the main session." });
+    expect(result).toEqual({ error: "recall_memory is only available in the main or heartbeat session." });
   });
 
   it("calls getRecallResults and returns results when in main session", async () => {

@@ -206,6 +206,8 @@ export interface CapabilityApprovalGateOptions {
   allowReadOnlyWithoutGrant?: boolean;
   /** When true, mutating exec (sed, tee, etc.) is approved without requiring a capability grant. Set from config for trusted/local setups. */
   allowMutatingWithoutGrant?: boolean;
+  /** When true, web_search and web_fetch (net.fetch) are approved without requiring a capability grant. Set from config for trusted/local setups. */
+  allowNetFetchWithoutGrant?: boolean;
 }
 
 export class CapabilityApprovalGate implements ApprovalGate {
@@ -237,6 +239,14 @@ export class CapabilityApprovalGate implements ApprovalGate {
       return true;
     }
     const requiredCapabilities = requiredCapabilitiesForApproval(args);
+    if (
+      this.options.allowNetFetchWithoutGrant === true &&
+      requiredCapabilities.length === 1 &&
+      requiredCapabilities[0] === "net.fetch"
+    ) {
+      this.lastDenial = null;
+      return true;
+    }
     if (requiredCapabilities.length === 0) {
       this.lastDenial = null;
       return true;

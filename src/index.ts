@@ -478,7 +478,8 @@ async function main(): Promise<void> {
     approvalWorkflow: defaultCtx.approvalWorkflow!,
     capabilityStore: defaultCtx.capabilityStore!,
     allowReadOnlyWithoutGrant: config.tools.exec.ask !== "always",
-    allowMutatingWithoutGrant: config.tools.exec.allowMutatingWithoutApproval === true
+    allowMutatingWithoutGrant: config.tools.exec.allowMutatingWithoutApproval === true,
+    allowNetFetchWithoutGrant: config.tools.allowNetFetchWithoutApproval === true
   });
   const allowedExecBins = resolveAllowedExecBins({
     bins: config.tools.exec.allowBins,

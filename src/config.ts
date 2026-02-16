@@ -92,6 +92,8 @@ export interface ToolsGhConfig {
 }
 
 export interface ToolsConfig {
+  /** When true, web_search and web_fetch (and MCP equivalents) are allowed without capability approval. Use in trusted/local setups. */
+  allowNetFetchWithoutApproval?: boolean;
   exec: {
     host: "sandbox" | "host";
     security: "deny" | "allowlist";
