@@ -129,6 +129,8 @@ If the model or Ollama does not support tools, the agent still runs for text-onl
 
 **Context mode (minimal vs richer):** Use **`toolTurnContext: "minimal"`** and **`ollamaMinimalSystem: true`** when you want the model to always use minimal, tool-focused context (best for reliable tool calls). To let the runtime **choose per turn**—minimal when the user asks for file/substrate/workspace actions and richer when the user asks for explanations, summaries, or chat—set **`ollamaContextMode: "auto"`** on the model instead. Manual override: `ollamaContextMode: "minimal"` or `"full"` to force one behavior. See [context-aware-system-behavior.md](context-aware-system-behavior.md).
 
+**Operator E2E checklist for `ollamaContextMode: "auto"`:** When ready to validate auto context mode end-to-end: (1) Set the Ollama model with `ollamaContextMode: "auto"` in config. (2) Send a turn that should trigger **minimal** context (e.g. "list files in the project root" or "read docs/README.md") and confirm the model uses tools. (3) Send a turn that should trigger **richer** context (e.g. "explain what this project does" or "summarize the last message") and confirm the model responds with generated text. (4) Optionally run `validate-model --fullSuite` for the model first to ensure tool-call and reasoning checks pass.
+
 ---
 
 ## 9. Troubleshooting

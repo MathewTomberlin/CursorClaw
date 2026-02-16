@@ -36,7 +36,7 @@ function isENOENT(e: unknown): boolean {
 /** True when execFile/spawn failed because the binary was not found (e.g. on Windows when invoking Unix utils). */
 function isSpawnENOENT(e: unknown): boolean {
   const err = e as { code?: string; syscall?: string };
-  return err?.code === "ENOENT" && err?.syscall === "spawn";
+  return err?.code === "ENOENT" && (err?.syscall === "spawn" || err?.syscall?.startsWith("spawn "));
 }
 
 /** Return true if resolvedPath is under profileRoot (so agent can only touch its own profile files). */
