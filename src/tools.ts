@@ -1800,15 +1800,10 @@ export function createWebFetchTool(args: {
           if (contentType && !ALLOWED_CONTENT_TYPE_PATTERN.test(contentType)) {
             throw new Error(`web_fetch content type not allowed: ${contentType}`);
           }
-          const contentLength = Number.parseInt(response.headers.get("content-length") ?? "0", 10);
-          if (!Number.isNaN(contentLength) && contentLength > WEB_FETCH_MAX_BODY_BYTES) {
-            throw new Error(`web_fetch response exceeds byte limit (${WEB_FETCH_MAX_BODY_BYTES})`);
-          }
           const bytes = new Uint8Array(await response.arrayBuffer());
-          if (bytes.byteLength > WEB_FETCH_MAX_BODY_BYTES) {
-            throw new Error(`web_fetch response exceeds byte limit (${WEB_FETCH_MAX_BODY_BYTES})`);
-          }
-          const text = new TextDecoder().decode(bytes);
+          const truncated = bytes.byteLength > WEB_FETCH_MAX_BODY_BYTES;
+          const slice = truncated ? bytes.slice(0, WEB_FETCH_MAX_BODY_BYTES) : bytes;
+          const text = new TextDecoder().decode(slice);
           const out: { status: number; contentType: string; body: string; hint?: string } = {
             status: response.status,
             contentType: contentType || "unknown",
@@ -1816,6 +1811,8 @@ export function createWebFetchTool(args: {
           };
           if (response.status === 403) {
             out.hint = "Server returned 403 Forbidden. Some sites block automated requests; the body may be an access-denied or bot-detection page.";
+          } else if (truncated) {
+            out.hint = `Response truncated to ${WEB_FETCH_MAX_BODY_BYTES} bytes (total was ${bytes.byteLength}).`;
           }
           return out;
         }
