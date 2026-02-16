@@ -1,4 +1,4 @@
 # Birth / Bootstrap (example)
-# Copy to workspace root as BIRTH.md. Injected only on the first turn per session.
+# BIRTH.md is created automatically when an agent profile is first created (with other substrate templates). Injected only on the first turn per session.
 
 While this file exists, the agent must run the BIRTH process proactively: engage the user to identify the specific use of the agent and identity, gather or co-create USER.md and IDENTITY.md, then remove this file when complete. The agent will periodically try to complete BIRTH until the file is gone (e.g. once per session, without nagging).
