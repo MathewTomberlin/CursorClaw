@@ -31,7 +31,7 @@ How the framework behaves across code updates, process crashes, host restarts, a
 
 When you use `npm run start:watch` and the build fails after a restart request:
 
-1. The wrapper writes the build output to **`tmp/last-build-failure.log`** and a summary to **`tmp/last-build-failure.json`** (timestamp, exit code).
+1. The wrapper writes the build output to **`tmp/last-build-failure.log`** and a summary to **`tmp/last-build-failure.json`** (timestamp, exit code). It also writes **`tmp/server-down`** with a short message so that scripts or operators can tell the gateway is **not reachable** (e.g. via Tailscale) until the build succeeds and the app restarts. The server removes `tmp/server-down` when it successfully binds (so the file is only present while the server is not listening).
 2. The wrapper then runs **`node scripts/build-recovery-wait.js`**, which:
    - Waits for **`tmp/recovery-done`** to appear (or a timeout, e.g. 10 minutes).
    - When the file appears, the script deletes it, runs `npm run build` again, and exits with the build exit code (0 = success).

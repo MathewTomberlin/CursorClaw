@@ -464,8 +464,12 @@ export class AgentRuntime {
               if (content === assistantText) {
                 // Exact duplicate (e.g. CLI sent deltas then full message); skip emit
               } else if (content.length >= assistantText.length && content.startsWith(assistantText)) {
+                // Full-message replacement (e.g. CLI sent deltas then full message): emit only the new suffix so the client does not append the full content again and show duplication (e.g. with HIGH_ENTROPY_TOKEN placeholders).
+                const delta = content.slice(assistantText.length);
                 assistantText = content;
-                emit("assistant", { content });
+                if (delta.length > 0) {
+                  emit("assistant", { content: delta });
+                }
               } else if (content.length >= 15 && assistantText.includes(content)) {
                 // Skip duplicate segment (e.g. Cursor CLI re-sending same chunk)
               } else {

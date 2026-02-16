@@ -1,5 +1,5 @@
-import { existsSync, watch } from "node:fs";
-import { join } from "node:path";
+import { existsSync, unlinkSync, watch } from "node:fs";
+import { join, resolve } from "node:path";
 import { safeReadUtf8 } from "./fs-utils.js";
 
 import {
@@ -77,7 +77,7 @@ import {
 } from "./tools.js";
 import type { CursorClawConfig } from "./config.js";
 import { getDefaultProfileId, isDevMode, loadConfigFromDisk, validateStartupConfig, resolveConfigPath, resolveProfileRoot } from "./config.js";
-import { AutonomyOrchestrator } from "./orchestrator.js";
+import { AutonomyOrchestrator, type HeartbeatTarget } from "./orchestrator.js";
 import { loadSubstrate, SubstrateStore } from "./substrate/index.js";
 import type { SubstrateContent } from "./substrate/index.js";
 import { WorkspaceCatalog } from "./workspaces/catalog.js";
@@ -115,6 +115,7 @@ async function buildProfileContext(
   const substrateStore = new SubstrateStore();
   try {
     await substrateStore.reload(profileRoot, config.substrate);
+    await substrateStore.ensureDefaults(profileRoot, config.substrate);
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn("[CursorClaw] substrate load failed for profile root, continuing with empty:", (err as Error).message);
@@ -141,7 +142,7 @@ async function buildProfileContext(
     capabilityStore,
     cronService
   };
-  if (options.isDefault && options.pendingProactiveRef) {
+  if (options.pendingProactiveRef) {
     const ref = options.pendingProactiveRef;
     ctx.getPendingProactiveMessage = () => ref.current;
     ctx.takePendingProactiveMessage = () => {
@@ -168,22 +169,34 @@ async function main(): Promise<void> {
     allowInsecureDefaults: devMode
   });
 
+  /** Per-profile pending proactive message (for heartbeat.poll). Single-profile uses a single ref; multi-profile uses one ref per profile. */
   const pendingProactiveRef = { current: null as string | null };
-  /** Set when a user message cancels in-flight heartbeat; next heartbeat turn gets a resume notice. */
-  const heartbeatInterruptedByUserRef = { current: false };
+  /** Per-profile: set when a user message cancels that profile's in-flight heartbeat; next heartbeat turn gets a resume notice. Single-profile uses key "default". */
+  const heartbeatInterruptedByProfile = new Map<string, boolean>();
+  const defaultProfileKey = "default";
   const defaultProfileId = getDefaultProfileId(config);
   const profileList = config.profiles;
+  /** When multiple profiles exist, include workspace-root "default" so both default and e.g. Ollama get heartbeats. */
+  const effectiveProfileList =
+    profileList?.length && !profileList.some((p) => p.id === "default")
+      ? [{ id: "default" as const, root: "." }, ...profileList]
+      : profileList;
   let profileContextMap: Map<string, ProfileContext>;
   let defaultCtx: ProfileContext;
-  if (profileList?.length) {
+  let pendingByProfile: Map<string, { current: string | null }> | undefined;
+  if (effectiveProfileList?.length) {
     profileContextMap = new Map();
-    for (const p of profileList) {
-      const root = resolveProfileRoot(workspaceDir, config, p.id);
+    pendingByProfile = new Map<string, { current: string | null }>();
+    for (const p of effectiveProfileList) {
+      const root = resolve(workspaceDir, p.root);
       const isDefault = p.id === defaultProfileId;
-      profileContextMap.set(p.id, await buildProfileContext(root, config, { isDefault, pendingProactiveRef }));
+      const ref = { current: null as string | null };
+      pendingByProfile.set(p.id, ref);
+      profileContextMap.set(p.id, await buildProfileContext(root, config, { isDefault, pendingProactiveRef: ref }));
     }
     defaultCtx = profileContextMap.get(defaultProfileId)!;
   } else {
+    pendingByProfile = undefined;
     const singleProfileRoot = resolveProfileRoot(workspaceDir, config);
     defaultCtx = await buildProfileContext(singleProfileRoot, config, { isDefault: true, pendingProactiveRef });
     profileContextMap = new Map([["default", defaultCtx]]);
@@ -601,8 +614,6 @@ async function main(): Promise<void> {
   });
   let orchestratorRef: AutonomyOrchestrator | null = null;
   let ensureReflectionJobQueued: (() => void) | null = null;
-  /** When a heartbeat produces a proactive message, it is stored here so clients can retrieve it via heartbeat.poll or /status. */
-  let pendingProactiveMessage: string | null = null;
   if (config.reflection.enabled) {
     const speculativeTestRunner = new SpeculativeTestRunner({
       workspaceDir: profileRoot,
@@ -693,9 +704,12 @@ async function main(): Promise<void> {
     workspaceDir: profileRoot,
     workspaceRoot: workspaceDir,
     ...(defaultCtx.substrateStore !== undefined ? { substrateStore: defaultCtx.substrateStore } : {}),
-    markHeartbeatInterrupted: () => {
-      heartbeatInterruptedByUserRef.current = true;
+    markHeartbeatInterrupted: (profileId?: string) => {
+      const key = profileId != null && profileList?.length ? profileId : defaultProfileKey;
+      heartbeatInterruptedByProfile.set(key, true);
     },
+    getHeartbeatSessionIdToCancel: (id: string) =>
+      profileList?.length ? `heartbeat:${id}` : "heartbeat:main",
     ...(existsSync(uiDist) ? { uiDistPath: uiDist } : {}),
     onRestart: async () => {
       // Exit with RESTART_EXIT_CODE so run-with-restart wrapper runs build then start in the same terminal.
@@ -850,6 +864,15 @@ async function main(): Promise<void> {
     port
   });
 
+  const serverDownPath = join(workspaceDir, "tmp", "server-down");
+  try {
+    if (existsSync(serverDownPath)) {
+      unlinkSync(serverDownPath);
+    }
+  } catch {
+    /* ignore */
+  }
+
   // Config file watcher: reload when openclaw.json (or CURSORCLAW_CONFIG_PATH) changes so edits from another device apply without clicking Reload.
   // Skip reload if we just wrote the file (config.patch / profile.create / profile.delete) to avoid racing and overwriting in-memory with a stale read.
   if (existsSync(configPath)) {
@@ -928,45 +951,25 @@ async function main(): Promise<void> {
   }
   const useShortFirstHeartbeat =
     existsSync(birthPath) || heartbeatHasSubstantiveContent;
-  const orchestrator = new AutonomyOrchestrator({
-    cronService: defaultCtx.cronService,
-    heartbeat,
-    budget,
-    workflow,
-    memory,
-    autonomyStateStore: new AutonomyStateStore({
-      stateFile: join(profileRoot, "tmp", "autonomy-state.json")
-    }),
-    heartbeatChannelId: "heartbeat:main",
-    cronTickMs: 1_000,
-    integrityScanEveryMs: config.memory.integrityScanEveryMs,
-    intentTickMs: 1_000,
-    ...(useShortFirstHeartbeat ? { firstHeartbeatDelayMs: 10_000 } : {}),
-    onCronRun: async (job) => {
-      const sessionId = job.isolated ? `cron:${job.id}` : "main";
-      await runtime.runTurn({
-        session: {
-          sessionId,
-          channelId: sessionId,
-          channelKind: "web"
-        },
-        messages: [
-          {
-            role: "user",
-            content: `[cron:${job.id}] run scheduled task`
-          }
-        ]
-      });
-    },
-    onHeartbeatTurn: async (channelId) => {
-      const heartbeatPath = join(profileRoot, "HEARTBEAT.md");
-      const birthPending = existsSync(birthPath);
-      const fallbackMessage =
-        "Hi — BIRTH is pending for this workspace. I'm here to help you set up: who you are (USER.md), who I am here (IDENTITY.md), and how you want to use this agent. What's your main use case, and what would you like to call me?";
-      try {
+
+  /** Run one heartbeat turn for a given profile (shared by single-profile and per-profile heartbeats). */
+  async function runOneHeartbeatTurn(opts: {
+    profileId: string;
+    profileRoot: string;
+    channelId: string;
+    pendingRef: { current: string | null };
+    getInterrupted: () => boolean;
+    clearInterrupted: () => void;
+  }): Promise<string> {
+    const { profileId, profileRoot, channelId, pendingRef, getInterrupted, clearInterrupted } = opts;
+    const heartbeatPath = join(profileRoot, "HEARTBEAT.md");
+    const birthPathForProfile = join(profileRoot, config.substrate?.birthPath ?? "BIRTH.md");
+    const birthPending = existsSync(birthPathForProfile);
+    const fallbackMessage =
+      "Hi — BIRTH is pending for this workspace. I'm here to help you set up: who you are (USER.md), who I am here (IDENTITY.md), and how you want to use this agent. What's your main use case, and what would you like to call me?";
+    try {
       const heartbeatConfig = configRef.current.heartbeat;
       const skipWhenEmpty = heartbeatConfig.skipWhenEmpty === true;
-      // Do not skip heartbeat when BIRTH.md exists — agent must get a chance to send a proactive BIRTH message.
       if (skipWhenEmpty && !birthPending) {
         if (!existsSync(heartbeatPath)) {
           return "HEARTBEAT_OK";
@@ -995,8 +998,8 @@ async function main(): Promise<void> {
       } else {
         content = `Read HEARTBEAT.md if present. ${baseInstruction}`;
       }
-      if (heartbeatInterruptedByUserRef.current) {
-        heartbeatInterruptedByUserRef.current = false;
+      if (getInterrupted()) {
+        clearInterrupted();
         content =
           "The previous heartbeat was interrupted by a user message. Continue with ROADMAP.md and HEARTBEAT.md as appropriate.\n\n" +
           content;
@@ -1007,10 +1010,10 @@ async function main(): Promise<void> {
       }
       const result = await runtime.runTurn({
         session: {
-          sessionId: "heartbeat:main",
+          sessionId: channelId,
           channelId,
           channelKind: "web",
-          profileId: getDefaultProfileId(configRef.current)
+          profileId
         },
         messages: [{ role: "user", content }]
       });
@@ -1026,6 +1029,8 @@ async function main(): Promise<void> {
         console.warn(
           "[CursorClaw] heartbeat reply length:",
           reply.length,
+          "profileId:",
+          profileId,
           "hasProactiveContent:",
           hasProactiveContent
         );
@@ -1037,19 +1042,18 @@ async function main(): Promise<void> {
           text: textToDeliver,
           proactive: true
         });
-        pendingProactiveMessage = textToDeliver;
-        pendingProactiveRef.current = textToDeliver;
+        if (pendingRef.current !== textToDeliver) {
+          pendingRef.current = textToDeliver;
+        }
       } else if (birthPending) {
-        // Fallback: model returned HEARTBEAT_OK or empty; still deliver a BIRTH prompt so the user sees a proactive message
-        const fallbackMessage =
-          "Hi — BIRTH is pending for this workspace. I’m here to help you set up: who you are (USER.md), who I am here (IDENTITY.md), and how you want to use this agent. What’s your main use case, and what would you like to call me?";
         await channelHub.send({
           channelId,
           text: fallbackMessage,
           proactive: true
         });
-        pendingProactiveMessage = fallbackMessage;
-        pendingProactiveRef.current = fallbackMessage;
+        if (pendingRef.current !== fallbackMessage) {
+          pendingRef.current = fallbackMessage;
+        }
       } else if (heartbeatHadContent) {
         const heartbeatFallback =
           "Heartbeat ran. No update from the agent this time.";
@@ -1058,19 +1062,79 @@ async function main(): Promise<void> {
           text: heartbeatFallback,
           proactive: true
         });
-        pendingProactiveMessage = heartbeatFallback;
-        pendingProactiveRef.current = heartbeatFallback;
+        if (pendingRef.current !== heartbeatFallback) {
+          pendingRef.current = heartbeatFallback;
+        }
       }
       return reply === "" ? "HEARTBEAT_OK" : result.assistantText;
-      } catch (err) {
-        console.error("[CursorClaw] heartbeat turn error:", err);
-        if (birthPending) {
-          pendingProactiveMessage = fallbackMessage;
-          pendingProactiveRef.current = fallbackMessage;
-        }
-        return "HEARTBEAT_OK";
+    } catch (err) {
+      console.error("[CursorClaw] heartbeat turn error:", err);
+      if (birthPending && pendingRef.current !== fallbackMessage) {
+        pendingRef.current = fallbackMessage;
       }
+      return "HEARTBEAT_OK";
+    }
+  }
+
+  const heartbeatTargets: HeartbeatTarget[] | undefined =
+    pendingByProfile && effectiveProfileList && effectiveProfileList.length > 0
+      ? effectiveProfileList.map((p) => ({
+          channelId: `heartbeat:${p.id}`,
+          onTurn: (channelId: string) =>
+            runOneHeartbeatTurn({
+              profileId: p.id,
+              profileRoot: getProfileRootForId(p.id),
+              channelId,
+              pendingRef: pendingByProfile!.get(p.id)!,
+              getInterrupted: () => heartbeatInterruptedByProfile.get(p.id) ?? false,
+              clearInterrupted: () => heartbeatInterruptedByProfile.set(p.id, false)
+            })
+        }))
+      : undefined;
+
+  const orchestrator = new AutonomyOrchestrator({
+    cronService: defaultCtx.cronService,
+    heartbeat,
+    budget,
+    workflow,
+    memory,
+    autonomyStateStore: new AutonomyStateStore({
+      stateFile: join(profileRoot, "tmp", "autonomy-state.json")
+    }),
+    heartbeatChannelId: "heartbeat:main",
+    ...(heartbeatTargets ? { heartbeatTargets } : {}),
+    cronTickMs: 1_000,
+    integrityScanEveryMs: config.memory.integrityScanEveryMs,
+    intentTickMs: 1_000,
+    ...(useShortFirstHeartbeat ? { firstHeartbeatDelayMs: 10_000 } : {}),
+    onCronRun: async (job) => {
+      const sessionId = job.isolated ? `cron:${job.id}` : "main";
+      await runtime.runTurn({
+        session: {
+          sessionId,
+          channelId: sessionId,
+          channelKind: "web"
+        },
+        messages: [
+          {
+            role: "user",
+            content: `[cron:${job.id}] run scheduled task`
+          }
+        ]
+      });
     },
+    onHeartbeatTurn:
+      heartbeatTargets == null || heartbeatTargets.length === 0
+        ? async (channelId: string) =>
+            runOneHeartbeatTurn({
+              profileId: getDefaultProfileId(configRef.current),
+              profileRoot,
+              channelId,
+              pendingRef: pendingProactiveRef,
+              getInterrupted: () => heartbeatInterruptedByProfile.get(defaultProfileKey) ?? false,
+              clearInterrupted: () => heartbeatInterruptedByProfile.set(defaultProfileKey, false)
+            })
+        : async () => "HEARTBEAT_OK",
     onProactiveIntent: async (intent) => {
       const delivered = await channelHub.send({
         channelId: intent.channelId,

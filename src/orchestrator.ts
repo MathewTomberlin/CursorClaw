@@ -9,6 +9,12 @@ import {
 } from "./scheduler.js";
 import type { CronJobDefinition, WorkflowDefinition } from "./types.js";
 
+/** One heartbeat target (e.g. per profile). When multiple targets are set, all run each tick in parallel and do not block each other. */
+export interface HeartbeatTarget {
+  channelId: string;
+  onTurn: (channelId: string) => Promise<string>;
+}
+
 export interface AutonomyOrchestratorOptions {
   cronService: CronService;
   heartbeat: HeartbeatRunner;
@@ -17,6 +23,8 @@ export interface AutonomyOrchestratorOptions {
   memory: MemoryStore;
   autonomyStateStore?: AutonomyStateStore;
   heartbeatChannelId: string;
+  /** When set, run a heartbeat turn for each target in parallel each tick instead of a single onHeartbeatTurn. Enables multiple profiles to have independent heartbeats. */
+  heartbeatTargets?: HeartbeatTarget[];
   cronTickMs: number;
   integrityScanEveryMs: number;
   intentTickMs?: number;
@@ -150,17 +158,30 @@ export class AutonomyOrchestrator {
     if (!this.running) {
       return;
     }
-    // Scheduled heartbeats always bypass the autonomy budget so they run on the configured
-    // interval (e.g. every 30s). The budget limits other proactive flows (e.g. queued
-    // intents from file-change suggestions), not the heartbeat tick. Do not "fix" by
-    // removing bypassBudget or heartbeats will stop after maxPerHourPerChannel (e.g. 4).
-    const result = await this.options.heartbeat.runOnce({
-      channelId: this.options.heartbeatChannelId,
-      budget: this.options.budget,
-      turn: () => this.options.onHeartbeatTurn(this.options.heartbeatChannelId),
-      bypassBudget: true
-    });
-    this.lastHeartbeatResult = result;
+    const targets = this.options.heartbeatTargets;
+    if (targets != null && targets.length > 0) {
+      // Run all profile heartbeats in parallel so they do not block each other.
+      await Promise.all(
+        targets.map((t) =>
+          this.options.heartbeat.runOnce({
+            channelId: t.channelId,
+            budget: this.options.budget,
+            turn: () => t.onTurn(t.channelId),
+            bypassBudget: true
+          })
+        )
+      );
+      this.lastHeartbeatResult = "HEARTBEAT_OK";
+    } else {
+      // Single heartbeat (legacy).
+      const result = await this.options.heartbeat.runOnce({
+        channelId: this.options.heartbeatChannelId,
+        budget: this.options.budget,
+        turn: () => this.options.onHeartbeatTurn(this.options.heartbeatChannelId),
+        bypassBudget: true
+      });
+      this.lastHeartbeatResult = result;
+    }
     await this.persistBudgetState();
   }
 

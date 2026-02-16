@@ -139,8 +139,10 @@ export interface GatewayDependencies {
   getPendingProactiveMessage?: () => string | null;
   /** If set, heartbeat.poll calls this to return and clear the pending proactive message. */
   takePendingProactiveMessage?: () => string | null;
-  /** When set, called when a user message triggers cancellation of in-flight heartbeat so the next heartbeat can show a resume notice. */
-  markHeartbeatInterrupted?: () => void;
+  /** When set, called when a user message triggers cancellation of in-flight heartbeat so the next heartbeat can show a resume notice. Pass profileId when using per-profile heartbeats. */
+  markHeartbeatInterrupted?: (profileId?: string) => void;
+  /** When set, returns the session id to cancel for that profile (e.g. "heartbeat:main" for single-profile, "heartbeat:<profileId>" for multi-profile). */
+  getHeartbeatSessionIdToCancel?: (profileId: string) => string;
 }
 
 /** Resolve profile context for profile-scoped RPCs. Uses getProfileContext when present, otherwise builds a one-off context from deps (single-profile). When getProfileRoot is set, uses it for profileRoot so profiles added via config.patch get correct thread/store paths. */
@@ -454,10 +456,11 @@ export function buildGateway(deps: GatewayDependencies): FastifyInstance {
         if (deps.threadStore) {
           await deps.threadStore.setThread(profileCtx.profileRoot, session.sessionId, messages);
         }
-        // Interrupt in-flight heartbeat so user turn can run immediately; heartbeat will reschedule.
-        if (session.sessionId !== "heartbeat:main") {
-          deps.runtime.cancelTurnForSession("heartbeat:main");
-          deps.markHeartbeatInterrupted?.();
+        // Interrupt in-flight heartbeat for this profile so user turn can run immediately; heartbeat will reschedule.
+        const heartbeatSessionId = deps.getHeartbeatSessionIdToCancel?.(resolvedProfileId) ?? "heartbeat:main";
+        if (session.sessionId !== heartbeatSessionId) {
+          deps.runtime.cancelTurnForSession(heartbeatSessionId);
+          deps.markHeartbeatInterrupted?.(resolvedProfileId);
         }
         // Runtime compacts via applyUserMessageFreshness; no user-facing message limit.
         const started = deps.runtime.startTurn({ session, messages });

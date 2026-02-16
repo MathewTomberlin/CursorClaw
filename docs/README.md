@@ -20,6 +20,7 @@ This folder contains implementation-grounded documentation for the current Curso
 
 ### Provider and integration guides
 
+- **Provider support** — [Provider and model support](./provider-model-support.md) — at-a-glance matrix: which providers exist, capabilities (tool-call, validation, local vs hosted), and links to setup/resilience docs. Full config: [Configuration Reference §4.15](./configuration-reference.md#415-models-and-defaultmodel). Setup: [Local Ollama](./local-ollama-agent-setup.md), [Ollama tool-call](./Ollama-tool-call-support.md); resilience: [PMR](./PMR-provider-model-resilience.md) §8.
 - **Provider Model Resilience (PMR):** [PMR Provider Model Resilience](./PMR-provider-model-resilience.md) — validation store, probe, capability suite, `useOnlyValidatedFallbacks`; [PMR allow-one-unvalidated](./PMR-allow-one-unvalidated.md).
 - **Local Ollama:** [Local Ollama agent setup](./local-ollama-agent-setup.md) — end-to-end setup; [Ollama tool-call support](./Ollama-tool-call-support.md) — tool-call format and validation.
 - **GitHub:** [Read-only GitHub integration](./GH.1-read-only-github-integration.md); [GitHub PR write](./GH.2-github-pr-write.md).
