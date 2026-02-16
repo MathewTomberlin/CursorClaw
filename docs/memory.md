@@ -57,6 +57,14 @@ The agent learns about the user only via manual USER.md edits and whatever gets 
 
 When **continuity.memoryMaxRecords** or **continuity.memoryMaxChars** is set, MEMORY.md is kept bounded: after each append, if the primary file exceeds the limit, the oldest records are removed (only MEMORY.md is rewritten; daily files are left unchanged). Optionally set **continuity.memoryArchivePath** (e.g. `memory/MEMORY-archive.md`) to append trimmed lines to an archive file. See the configuration reference for defaults and details.
 
-## 8. Possible future improvements
+## 8. Fast memory patterns (in-memory vs persisted)
+
+*Context: STUDY_GOALS — Fast Memory. This section documents patterns for fast lookup caches vs durable storage.*
+
+- **In-memory fast lookup**: LRU/TTL/eviction; low latency; lost on process restart. Use when: hot-path reads, session-scoped or ephemeral data, acceptable to refill from persisted source on startup. Implementation options: bounded Map with LRU eviction, or TTL-based expiry; keep size/cardinality bounded to avoid OOM.
+- **Persisted fast lookup**: Durable (file or DB); higher latency; survives restarts. Use when: cross-session continuity, must survive restarts, or as source of truth. Can layer an in-memory cache on top for hot reads (e.g. load subset into memory, write-through or write-back to file).
+- **Hybrid**: Persist for durability; maintain a small in-memory cache (e.g. recent N entries or TTL) for hot path; sync on startup and on write. Current MEMORY.md + session-memory injection is persisted; optional `tmp/memory-embeddings.json` is a persisted index with no in-memory cache today — adding an in-memory layer would be a possible future improvement for recall latency.
+
+## 9. Possible future improvements
 
 - **Summarization**: Optional agent-triggered summarization of middle-aged content (e.g. compact many turn-summary lines into one compaction record) in addition to or instead of a simple rolling window.
