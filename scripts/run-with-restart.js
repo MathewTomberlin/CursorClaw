@@ -76,8 +76,15 @@ function run(command, args, options = {}) {
     let stdout = "";
     let stderr = "";
     if (options.capture) {
-      child.stdout?.on("data", (chunk) => { stdout += chunk; });
-      child.stderr?.on("data", (chunk) => { stderr += chunk; });
+      const forward = options.forward !== false;
+      child.stdout?.on("data", (chunk) => {
+        stdout += chunk;
+        if (forward) process.stdout.write(chunk);
+      });
+      child.stderr?.on("data", (chunk) => {
+        stderr += chunk;
+        if (forward) process.stderr.write(chunk);
+      });
     }
     child.on("close", (code, signal) => {
       if (options.capture) {
@@ -170,7 +177,7 @@ process.on("unhandledRejection", (reason, promise) => {
   for (;;) {
     try {
       if (fs.existsSync(serverDownPath)) {
-        console.log("\n[CursorClaw] tmp/server-down present (previous build failed). Waiting for recovery, then retrying build...\n");
+        console.log("\n[CursorClaw] tmp/server-down present (build failed or server crashed). Waiting for recovery, then retrying build...\n");
         const { code: recoveryCode } = await run("node", [recoveryScript]);
         if (recoveryCode !== 0) {
           console.error("[CursorClaw] Build recovery failed or timed out. Exiting so supervisor can restart.\n");
@@ -185,7 +192,8 @@ process.on("unhandledRejection", (reason, promise) => {
         } catch (_) {}
         console.log("\n[CursorClaw] Build succeeded; starting server.\n");
       }
-      const { code, signal } = await run("npm", ["start"]);
+      const serverResult = await run("npm", ["start"], { capture: true, forward: true });
+      const { code, signal, stdout: serverOut, stderr: serverErr } = serverResult;
       if (code === RESTART_EXIT_CODE) {
         const ok = await buildAndRestart("Building and restarting in same terminal...");
         if (!ok) break;
@@ -197,12 +205,32 @@ process.on("unhandledRejection", (reason, promise) => {
         stopResilienceDaemon();
         break;
       }
-      // Crash or unexpected exit: build and restart (resilience daemon can run Cursor-Agent to fix if build fails)
+      // Crash or unexpected exit: write crash log so resilience daemon can run Cursor-Agent to fix, then build and restart
+      const crashOutput = [serverOut, serverErr].filter(Boolean).join("\n") || "Server exited with no captured output.";
+      const crashLogHeader = `[CursorClaw] Server exited unexpectedly (code=${code}, signal=${signal ?? "none"}). Runtime crash output below — fix the reported errors in the codebase.\n\n`;
+      if (!fs.existsSync(tmpDir)) {
+        fs.mkdirSync(tmpDir, { recursive: true });
+      }
+      fs.writeFileSync(buildFailureLogPath, crashLogHeader + crashOutput, "utf8");
+      fs.writeFileSync(
+        buildFailureJsonPath,
+        JSON.stringify(
+          { timestamp: new Date().toISOString(), exitCode: code, signal: signal ?? null, runtimeCrash: true },
+          null,
+          2
+        ),
+        "utf8"
+      );
+      fs.writeFileSync(
+        serverDownPath,
+        "Server crashed; not running. Recovery can run Cursor-Agent to fix. Fix errors, then create tmp/recovery-done to retry.\n",
+        "utf8"
+      );
       if (crashRestartDelayMs > 0) {
-        console.error("\n[CursorClaw] Server exited unexpectedly (code=%s, signal=%s). Restarting in %d ms...\n", code, signal ?? "none", crashRestartDelayMs);
+        console.error("\n[CursorClaw] Server exited unexpectedly (code=%s, signal=%s). Crash written to tmp/last-build-failure.log. Restarting in %d ms...\n", code, signal ?? "none", crashRestartDelayMs);
         await new Promise((r) => setTimeout(r, crashRestartDelayMs));
       } else {
-        console.error("\n[CursorClaw] Server exited unexpectedly (code=%s, signal=%s). Building and restarting...\n", code, signal ?? "none");
+        console.error("\n[CursorClaw] Server exited unexpectedly (code=%s, signal=%s). Crash written to tmp/last-build-failure.log. Building and restarting...\n", code, signal ?? "none");
       }
       const ok = await buildAndRestart("Building and restarting after crash...");
       if (!ok) break;

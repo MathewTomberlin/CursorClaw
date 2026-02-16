@@ -45,8 +45,8 @@ function run(command, args, options = {}) {
 }
 
 const prompt =
-  "Fix the CursorClaw build. The build output and errors are in tmp/last-build-failure.log — read that file and fix the reported errors in the codebase. " +
-  "When you are done, the recovery script will run `npm run build` and `npm test` to verify; only then will the server be restarted.";
+  "Fix the CursorClaw build or runtime error. The output and errors are in tmp/last-build-failure.log — read that file and fix the reported errors in the codebase. " +
+  "The log may be from a build failure or a server runtime crash (e.g. unhandled exception). When you are done, the recovery script will run `npm run build` and `npm test` to verify; only then will the server be restarted.";
 
 async function main() {
   if (!fs.existsSync(failureLogPath)) {

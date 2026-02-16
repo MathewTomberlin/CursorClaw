@@ -422,12 +422,13 @@ export function ChatProvider({ children }: ChatProviderProps) {
           } else if (data.type === "thinking") {
             const payload = data.payload as { content?: string } | undefined;
             const content = payload?.content ?? "";
-            if (content.length > 0) {
-              // Replace with this chunk only (backend sends delta) so we show only the latest thinking chunk.
-              setStreamedThinkingContent(content);
-            }
+            // Replace only: each chunk clears the previous thinking display (no accumulation).
+            setStreamedThinkingContent(content);
           } else if (data.type === "final_message_start") {
             setStreamedThinkingContent("");
+          } else if (data.type === "completed" || data.type === "failed") {
+            setStreamedThinkingContent("");
+            setStreamedContent("");
           }
         }
       } catch {

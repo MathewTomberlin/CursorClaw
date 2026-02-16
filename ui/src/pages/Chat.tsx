@@ -284,21 +284,27 @@ export default function Chat() {
   const showWorkingFallback =
     loading && loadingDurationMs > 1500 && !hasRealProgress && runEvents.length <= 2;
 
-  // When we already have streamed content, show "Writing reply…" so the status line matches the streaming bubble; otherwise show the latest status event so "Queued" → "Starting" → "Streaming" → "Thinking" → "Running tool…" overwrite in place.
+  // When we already have streamed content, show "Writing reply…". When we're past connecting (started/streaming) but no reply yet, show thinking phase so user sees "Thinking…" and the thinking block instead of only "Connecting…".
+  const isPreReplyStreaming =
+    loading &&
+    !streamedContent &&
+    (lastStreamEvent?.type === "streaming" || lastStreamEvent?.type === "started");
   const statusLabel =
     loading && streamedContent
       ? "Writing reply…"
-      : lastStreamEvent
-        ? formatStreamEventLabel(lastStreamEvent)
-        : showWorkingFallback
-          ? currentRunId
-            ? "Connecting…"
-            : "Starting run…"
-          : loading
+      : isPreReplyStreaming
+        ? "Thinking…"
+        : lastStreamEvent
+          ? formatStreamEventLabel(lastStreamEvent)
+          : showWorkingFallback
             ? currentRunId
               ? "Connecting…"
               : "Starting run…"
-            : "Starting…";
+            : loading
+              ? currentRunId
+                ? "Connecting…"
+                : "Starting run…"
+              : "Starting…";
 
 
   const sendToChannel = async () => {
@@ -434,8 +440,10 @@ export default function Chat() {
               <div className="chat-bubble chat-bubble--assistant chat-bubble--loading" data-role="assistant">
                 <span className="chat-bubble-role">Agent</span>
                 <div className="chat-bubble-content">
-                  {/* Single status area: show either the thinking block (when thinking) or the one-line status label, so only the last status is visible. */}
-                  {(lastStreamEvent?.type === "thinking" || streamedThinkingContent.length > 0) ? (
+                  {/* Show thinking block when: we have thinking content, we're in "thinking" status, or we're in "streaming" but no reply yet (so user sees thinking phase instead of only "Connecting…"). */}
+                  {(lastStreamEvent?.type === "thinking" ||
+                    streamedThinkingContent.length > 0 ||
+                    isPreReplyStreaming) ? (
                     <div className="chat-thinking-block" role="status" aria-live="polite" aria-label="Agent thinking">
                       <span className="chat-thinking-label">Thinking:</span>
                       {streamedThinkingContent.length > 0 ? (

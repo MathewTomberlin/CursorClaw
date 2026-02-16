@@ -686,7 +686,7 @@ export class AgentRuntime {
             };
             // Emit "streaming" immediately so status updates appear before first adapter event (e.g. Cursor-Agent CLI).
             maybeEmitStreaming();
-            /** For thinking: emit only the latest chunk (delta) so UI shows replace-only, not accumulated. */
+            /** For thinking: emit only the chunk that should replace the display (never accumulated). Each emit clears previous in UI. */
             let previousThinkingContent = "";
             /** Emit final_message_start once when first assistant content arrives so UI clears thinking and shows append. */
             let finalMessageStartEmitted = false;
@@ -698,6 +698,7 @@ export class AgentRuntime {
                 const rawContent = String(data?.content ?? "");
                 const content = this.scrubText(rawContent, scrubScopeId);
                 if (content.length > 0) {
+                  // Emit only the new part (delta) so UI replaces with this chunk only; if adapter sent full buffer, slice; else treat as single chunk.
                   const delta =
                     content.startsWith(previousThinkingContent)
                       ? content.slice(previousThinkingContent.length)
@@ -716,55 +717,62 @@ export class AgentRuntime {
                 }
                 const data = event.data as { content?: string; isFullMessage?: boolean };
                 const rawContent = String(data?.content ?? "");
-                let content = this.scrubText(rawContent, scrubScopeId);
+                const content = this.scrubText(rawContent, scrubScopeId);
+                // Strip any leading thinking we've already streamed so assistantText and client never see thinking in the reply (final message and stream are reply-only).
+                let replyContent =
+                  content.startsWith(previousThinkingContent)
+                    ? content.slice(previousThinkingContent.length)
+                    : content;
+                replyContent = stripThinkingTags(replyContent);
                 const isFullMessage = Boolean(data?.isFullMessage);
+                if (replyContent.length === 0) {
+                  emittedCount += 1;
+                  continue;
+                }
                 if (isFullMessage) {
-                  content = stripThinkingTags(content);
                   // Only replace when content is the full message so far (extends or equals assistantText). If adapter sends multiple "full" segments, append so we don't overwrite.
                   if (
                     assistantText.length === 0 ||
-                    (content.length >= assistantText.length && content.startsWith(assistantText))
+                    (replyContent.length >= assistantText.length && replyContent.startsWith(assistantText))
                   ) {
-                    assistantText = content;
-                    thisRoundContent = content;
-                    emit("assistant", { content, replace: true });
+                    assistantText = replyContent;
+                    thisRoundContent = replyContent;
+                    emit("assistant", { content: replyContent, replace: true });
                   } else {
-                    assistantText += content;
-                    thisRoundContent += content;
+                    assistantText += replyContent;
+                    thisRoundContent += replyContent;
                     emit("assistant", { content: assistantText });
                   }
-                } else if (content === assistantText) {
+                } else if (replyContent === assistantText) {
                   // Exact duplicate (e.g. CLI sent deltas then full message); skip emit and accumulation
-                } else if (content.length >= assistantText.length && content.startsWith(assistantText)) {
-                  // Full-message replacement (e.g. CLI sent deltas then full message): use stripped content and replace so client does not show thinking tags or duplicate.
-                  content = stripThinkingTags(content);
-                  assistantText = content;
-                  thisRoundContent = content;
-                  emit("assistant", { content, replace: true });
+                } else if (replyContent.length >= assistantText.length && replyContent.startsWith(assistantText)) {
+                  // Full-message replacement (e.g. CLI sent deltas then full message); replyContent is reply-only.
+                  assistantText = replyContent;
+                  thisRoundContent = replyContent;
+                  emit("assistant", { content: replyContent, replace: true });
                 } else if (
-                  content.length >= assistantText.length &&
+                  replyContent.length >= assistantText.length &&
                   assistantText.length >= 10 &&
                   (() => {
                     let overlap = 0;
-                    const maxOverlap = Math.min(assistantText.length, content.length);
-                    for (let i = 0; i < maxOverlap && assistantText[i] === content[i]; i++) overlap += 1;
+                    const maxOverlap = Math.min(assistantText.length, replyContent.length);
+                    for (let i = 0; i < maxOverlap && assistantText[i] === replyContent[i]; i++) overlap += 1;
                     return overlap >= assistantText.length * 0.8;
                   })()
                 ) {
-                  // Fuzzy replacement: placeholder was replaced (e.g. stream had HIGH_ENTROPY_TOKEN, final has real text). Use stripped content and replace so client does not show thinking tags.
-                  content = stripThinkingTags(content);
-                  assistantText = content;
-                  thisRoundContent = content;
-                  emit("assistant", { content, replace: true });
+                  // Fuzzy replacement: placeholder was replaced (e.g. stream had HIGH_ENTROPY_TOKEN, final has real text); replyContent is reply-only.
+                  assistantText = replyContent;
+                  thisRoundContent = replyContent;
+                  emit("assistant", { content: replyContent, replace: true });
                 } else if (
-                  assistantText.startsWith(content) ||
-                  (content.length >= 15 && assistantText.includes(content)) ||
-                  (assistantText.endsWith(content) && content.length >= 1)
+                  assistantText.startsWith(replyContent) ||
+                  (replyContent.length >= 15 && assistantText.includes(replyContent)) ||
+                  (assistantText.endsWith(replyContent) && replyContent.length >= 1)
                 ) {
                   // Skip: content is a prefix (e.g. CLI sent full message first then streamed same text); or duplicate segment; or duplicate trailing suffix (avoids duplicated final message). Do not add to thisRoundContent.
                 } else {
-                  assistantText += content;
-                  thisRoundContent += content;
+                  assistantText += replyContent;
+                  thisRoundContent += replyContent;
                   emit("assistant", { content: assistantText });
                 }
                 emittedCount += 1;

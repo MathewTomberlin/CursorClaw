@@ -367,7 +367,9 @@ export class ToolRouter {
     const tool = this.tools.get(call.name);
     if (!tool) {
       this.logDecision(context, "deny", "TOOL_UNKNOWN", `unknown tool: ${call.name}`);
-      throw new Error(`unknown tool: ${call.name}`);
+      return {
+        error: `Unknown tool: ${call.name}. Use the exec or run_terminal_cmd tool to run shell commands (e.g. sed, cat, grep).`
+      };
     }
     if (this.options.isToolIsolationEnabled?.() && tool.riskLevel === "high") {
       this.logDecision(context, "deny", "TOOL_POLICY_BLOCKED", "incident tool isolation mode is active");
