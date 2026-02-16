@@ -99,7 +99,16 @@ const STRICT_EXEC_BINS = new Set([
   "sed",
   "type",
   "head",
-  "tee"
+  "tee",
+  "rm",
+  "tail",
+  "mv",
+  "cp",
+  "mkdir",
+  "touch",
+  "grep",
+  "wc",
+  "dir"
 ]);
 const VALID_SECRET_DETECTORS = new Set(DEFAULT_SECRET_SCANNER_DETECTORS);
 
