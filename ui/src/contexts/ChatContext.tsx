@@ -30,6 +30,11 @@ export interface StreamEvent {
 
 const STORAGE_KEY_PREFIX = "cursorclaw_chat_";
 
+/** Normalize for dedupe: trim and collapse runs of whitespace so minor differences don't create duplicate bubbles. */
+function normalizeForDedupe(s: string): string {
+  return (s ?? "").trim().replace(/\s+/g, " ");
+}
+
 /** Collapse consecutive assistant messages with identical trimmed content so the reply is only shown once. */
 function dedupeConsecutiveAssistantReplies(messages: ChatMessage[]): ChatMessage[] {
   const out: ChatMessage[] = [];
@@ -39,7 +44,8 @@ function dedupeConsecutiveAssistantReplies(messages: ChatMessage[]): ChatMessage
       continue;
     }
     const prev = out[out.length - 1];
-    if (prev?.role === "assistant" && (prev.content ?? "").trim() === (m.content ?? "").trim()) continue;
+    if (prev?.role === "assistant" && normalizeForDedupe(prev.content ?? "") === normalizeForDedupe(m.content ?? ""))
+      continue;
     out.push(m);
   }
   return out;
@@ -293,9 +299,14 @@ export function ChatProvider({ children }: ChatProviderProps) {
         };
         setMessages((prev) => {
           const last = prev[prev.length - 1];
-          if (last?.role === "assistant" && (last.content ?? "").trim() === (assistantText ?? "").trim()) {
-            return prev;
+          if (last?.role !== "assistant") return [...prev, assistantMsg];
+          const lastNorm = normalizeForDedupe(last.content ?? "");
+          const newNorm = normalizeForDedupe(assistantText);
+          if (lastNorm === newNorm) return prev;
+          if (newNorm.length > lastNorm.length && newNorm.startsWith(lastNorm)) {
+            return [...prev.slice(0, prev.length - 1), { ...last, content: assistantText, at: assistantMsg.at }];
           }
+          if (lastNorm.length > newNorm.length && lastNorm.startsWith(newNorm)) return prev;
           return [...prev, assistantMsg];
         });
       } catch (e) {

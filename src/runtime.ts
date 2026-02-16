@@ -78,6 +78,21 @@ interface PendingTurn {
   reject: (error: unknown) => void;
 }
 
+/** Remove duplicate consecutive lines so repeated blocks in adapter/model output don't appear twice. */
+function collapseDuplicateConsecutiveLines(text: string): string {
+  if (!text || text.length < 2) return text;
+  const lines = text.split(/\r?\n/);
+  const out: string[] = [];
+  let prev = "";
+  for (const line of lines) {
+    if (line !== prev) {
+      out.push(line);
+      prev = line;
+    }
+  }
+  return out.join("\n");
+}
+
 interface SessionQueueState {
   running: boolean;
 }
@@ -543,6 +558,8 @@ export class AgentRuntime {
             }
             emit("compaction", { reason: "assistant text exceeded 3000 chars" });
           }
+
+          assistantText = collapseDuplicateConsecutiveLines(assistantText);
 
           await this.options.memory.append({
             sessionId: request.session.sessionId,
