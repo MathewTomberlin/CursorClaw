@@ -833,7 +833,7 @@ export class AgentRuntime {
       systemMessages.push({
         role: "system",
         content: this.scrubText(
-          "Use the provided tools. To read a file call exec with command: cat FILENAME or type FILENAME. To edit call exec with sed or echo. Do not answer without calling a tool when the user asks about files or workspace. Workspace context is in AGENTS.md, IDENTITY.md, ROADMAP.md—read them with exec when needed.",
+          "Use the provided tools. To read a file call exec with command: cat FILENAME or type FILENAME. To edit a file: read it first, then use sed to change only the part that needs updating (e.g. sed -i 's/old/new/' FILE); do not overwrite the whole file with echo ... > FILE unless the user asked to replace the entire file. Workspace context is in AGENTS.md, IDENTITY.md, ROADMAP.md—read them with exec when needed.",
           scopeId
         )
       });
@@ -864,7 +864,7 @@ export class AgentRuntime {
         systemMessages.push({
           role: "system",
           content: this.scrubText(
-            "You have access to tools. You must use them: to read or edit substrate files (AGENTS.md, IDENTITY.md, ROADMAP.md, MEMORY.md, memory/YYYY-MM-DD.md) or any file, call the exec tool (e.g. cat, type, head, or sed/echo for edits). When advancing work or on heartbeats, read and update ROADMAP.md or memory files via exec as appropriate—do not skip tool use. To run scripts or tests, use exec. Do not guess file contents—call a tool to read or verify.",
+            "You have access to tools. You must use them: to read or edit substrate files (AGENTS.md, IDENTITY.md, ROADMAP.md, MEMORY.md, memory/YYYY-MM-DD.md) or any file, call the exec tool (e.g. cat, type, head, or sed for edits). When editing an existing file: read it first, then use sed to change only the part that needs updating; do not overwrite the whole file with echo ... > FILE unless the user asked to replace the entire file. When advancing work or on heartbeats, read and update ROADMAP.md or memory files via exec as appropriate—do not skip tool use. To run scripts or tests, use exec. Do not guess file contents—call a tool to read or verify.",
             scopeId
           )
         });
@@ -874,7 +874,7 @@ export class AgentRuntime {
           systemMessages.push({
             role: "system",
             content: this.scrubText(
-              "You are using the Ollama provider. You must use the provided tools—do not answer from memory or guess. To read substrate or any file: call the exec tool with a shell command (e.g. \"cat AGENTS.md\", \"type USER.md\", \"head -n 50 ROADMAP.md\"). To update a file: use exec with sed, echo, or another shell command. When the user asks about the workspace, rules, roadmap, or files, your first response must include one or more tool calls to read the relevant files; then answer from the tool results. On heartbeats, use exec to read ROADMAP.md and HEARTBEAT.md and to update substrate or memory as needed.",
+              "You are using the Ollama provider. You must use the provided tools—do not answer from memory or guess. To read substrate or any file: call the exec tool (e.g. cat AGENTS.md, type USER.md, head -n 50 ROADMAP.md). To update a file: always read it first, then use sed to change only the specific line or section (e.g. sed -i 's/old text/new text/' FILE); do not write the entire file with echo ... > FILE unless the user explicitly asked to replace the whole file. When the user asks about the workspace, rules, roadmap, or files, your first response must include one or more tool calls to read the relevant files; then answer from the tool results. On heartbeats, use exec to read ROADMAP.md and HEARTBEAT.md and to update substrate or memory as needed.",
               scopeId
             )
           });

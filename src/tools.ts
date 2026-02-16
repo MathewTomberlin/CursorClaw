@@ -398,7 +398,7 @@ export function createExecTool(args: {
   return {
     name: "exec",
     description:
-      "Run a shell command. Use this to read files (e.g. cat, type, head), edit files (sed, echo, tee), run scripts, run tests, and execute any allowed binary. This is the primary way to read or modify substrate files (AGENTS.md, IDENTITY.md, ROADMAP.md, TOOLS.md) and the codebase. Policy controls apply (e.g. read-only vs mutating).",
+      "Run a shell command. Use this to read files (e.g. cat, type, head), edit files (sed, echo, tee), run scripts, run tests, and execute any allowed binary. This is the primary way to read or modify substrate files (AGENTS.md, IDENTITY.md, ROADMAP.md, TOOLS.md) and the codebase. When editing an existing file (e.g. IDENTITY.md, SOUL.md): always read the file first with cat/type, then use sed to change only the specific line or section (e.g. sed -i 's/old exact text/new text/' FILE or sed -i '/pattern/c\\replacement' FILE). Do not overwrite the entire file with echo ... > FILE unless the user explicitly asked to replace the whole file. Policy controls apply (e.g. read-only vs mutating).",
     schema: {
       type: "object",
       properties: {
