@@ -99,6 +99,8 @@ export default function Chat() {
   const [channelSendText, setChannelSendText] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [, setLoadingTick] = useState(0);
+  /** Prevents overlapping heartbeat polls so we never process the same proactive message twice (e.g. from two in-flight requests). */
+  const heartbeatPollInFlightRef = useRef(false);
 
   // While loading, tick every 500ms so "Working…" fallback can appear after delay
   useEffect(() => {
@@ -112,19 +114,48 @@ export default function Chat() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "auto" });
   }, [messages, streamEvents]);
 
+  /** Normalize for dedupe: trim and collapse runs of whitespace so minor differences don't create duplicates. */
+  function normalizeForDedupe(s: string): string {
+    return (s ?? "").trim().replace(/\s+/g, " ");
+  }
+
   // Proactive message is delivered only via heartbeat.poll (status returns hasPendingProactiveMessage flag only, not the body), so we show it once here.
+  // Dedupe: avoid duplicate display when the same message is received twice (e.g. polling race) or when we get both a truncated/streamed and final version.
   useEffect(() => {
     const poll = async () => {
+      if (heartbeatPollInFlightRef.current) return;
+      heartbeatPollInFlightRef.current = true;
       try {
         const { proactiveMessage } = await heartbeatPoll(selectedProfileId);
         if (proactiveMessage?.trim()) {
           const text = proactiveMessage.trim();
+          const normalized = normalizeForDedupe(text);
           setMessages((prev) => {
             const recent = prev.slice(-20);
-            const alreadyShown = recent.some(
-              (m) => m.role === "assistant" && (m.content ?? "").trim() === text
-            );
-            if (alreadyShown) return prev;
+            const lastAssistant = recent.length > 0 && recent[recent.length - 1]?.role === "assistant" ? recent[recent.length - 1] : null;
+            const lastContent = (lastAssistant?.content ?? "").trim();
+            const lastNormalized = normalizeForDedupe(lastContent);
+
+            // Exact duplicate (or normalized-equal): do not add again
+            if (lastNormalized === normalized) return prev;
+            if (recent.some((m) => m.role === "assistant" && normalizeForDedupe(m.content ?? "") === normalized)) return prev;
+
+            // New text is a superset of the last assistant (e.g. final replaced truncated): replace last message to avoid two bubbles
+            if (lastAssistant && normalized.length > lastNormalized.length && normalized.startsWith(lastNormalized)) {
+              const before = prev.slice(0, prev.length - 1);
+              return [
+                ...before,
+                {
+                  ...lastAssistant,
+                  id: lastAssistant.id,
+                  content: text,
+                  at: new Date().toISOString()
+                }
+              ];
+            }
+            // We already have a longer assistant message that starts with this text: skip (avoid truncated duplicate)
+            if (lastNormalized.length > normalized.length && lastNormalized.startsWith(normalized)) return prev;
+
             return [
               ...prev,
               {
@@ -138,6 +169,8 @@ export default function Chat() {
         }
       } catch {
         // ignore poll errors (e.g. offline, auth)
+      } finally {
+        heartbeatPollInFlightRef.current = false;
       }
     };
     void poll();
