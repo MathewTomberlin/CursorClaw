@@ -1552,19 +1552,59 @@ export function createWebSearchTool(args: {
       }
       const bytes = new Uint8Array(await response.arrayBuffer());
       const text = new TextDecoder().decode(bytes);
-      let data: { Abstract?: string; RelatedTopics?: Array<{ Text?: string }>; AbstractText?: string };
+      type DDGResult = { Text?: string; FirstURL?: string };
+      let data: {
+        Abstract?: string;
+        AbstractText?: string;
+        RelatedTopics?: Array<{ Text?: string } | { Topics?: DDGResult[] }>;
+        Results?: DDGResult[];
+        Answer?: string;
+        Definition?: string;
+        DefinitionSource?: string;
+      };
       try {
         data = JSON.parse(text) as typeof data;
       } catch {
         return { error: "search API returned invalid JSON", results: [], abstract: "" };
       }
       const abstract = (data.AbstractText ?? data.Abstract ?? "").slice(0, WEB_SEARCH_MAX_ABSTRACT_LEN);
-      const results = (data.RelatedTopics ?? [])
-        .filter((t): t is { Text: string } => typeof t?.Text === "string")
-        .map((t) => t.Text.slice(0, 500));
+      const relatedTopicsRaw = data.RelatedTopics ?? [];
+      const relatedTexts: string[] = [];
+      for (const t of relatedTopicsRaw) {
+        const item = t as { Text?: string; Topics?: Array<{ Text?: string; FirstURL?: string }> };
+        if (typeof item?.Text === "string") {
+          relatedTexts.push(item.Text.slice(0, 500));
+        } else if (Array.isArray(item?.Topics)) {
+          for (const sub of item.Topics) {
+            if (typeof sub?.Text === "string") {
+              relatedTexts.push((sub.FirstURL ? `${sub.Text} (${sub.FirstURL})` : sub.Text).slice(0, 500));
+            }
+          }
+        }
+      }
+      const resultsArray = (data.Results ?? []).filter(
+        (r): r is { Text: string; FirstURL?: string } => typeof (r as DDGResult)?.Text === "string"
+      );
+      const resultsFromResults = resultsArray.map((r) =>
+        (r.FirstURL ? `${r.Text} (${r.FirstURL})` : r.Text).slice(0, 500)
+      );
+      const answer = (data.Answer ?? "").trim();
+      const definition = (data.Definition ?? "").trim();
+      const definitionSource = (data.DefinitionSource ?? "").trim();
+      const combinedResults = [
+        ...relatedTexts,
+        ...resultsFromResults,
+        ...(answer ? [answer] : []),
+        ...(definition ? [definition + (definitionSource ? ` — ${definitionSource}` : "")] : [])
+      ];
+      const hasAny = abstract.length > 0 || combinedResults.length > 0;
+      const hint = !hasAny
+        ? "The DuckDuckGo Instant Answer API returned no data for this query. It often returns empty for general or conversational queries; it works best for specific topic names (e.g. 'NASA', 'Python programming') and factual lookups. Try a more specific or noun-focused search."
+        : undefined;
       return {
         abstract: wrapUntrustedContent(abstract),
-        results: results.map((r) => wrapUntrustedContent(r))
+        results: combinedResults.map((r) => wrapUntrustedContent(r)),
+        ...(hint !== undefined && { hint })
       };
     }
   };
