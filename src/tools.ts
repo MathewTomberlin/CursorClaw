@@ -42,7 +42,7 @@ export type ExecIntent = "read-only" | "mutating" | "network-impacting" | "privi
  */
 function parseSedInPlace(command: string): { pattern: string; replacement: string; global: boolean; filePath: string } | null {
   const m = command.match(/sed\s+-i\s+['"]s\/([^/]*)\/([^/]*)\/(g?)['"]\s+(\S+)/);
-  if (!m) return null;
+  if (!m || m[1] === undefined || m[2] === undefined || m[4] === undefined) return null;
   return { pattern: m[1], replacement: m[2], global: m[3] === "g", filePath: m[4] };
 }
 
