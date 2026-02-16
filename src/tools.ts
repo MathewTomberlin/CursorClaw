@@ -513,7 +513,7 @@ export function createExecTool(args: {
           if (!approved) {
             const denial = args.approvalGate.getLastDenial?.();
             const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
-            return { stdout: "", stderr: `exec: command intent "${intent}" requires approval${suffix}\n` };
+            throw new Error(`exec: command intent "${intent}" requires approval${suffix}`);
           }
         }
         // Use current agent profile root so substrate/memory/heartbeat are profile-isolated. When profileRoot is set, cwd must stay under it.
