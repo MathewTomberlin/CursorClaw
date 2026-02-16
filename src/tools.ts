@@ -46,6 +46,20 @@ function parseSedInPlace(command: string): { pattern: string; replacement: strin
   return { pattern: m[1], replacement: m[2], global: m[3] === "g", filePath: m[4] };
 }
 
+/**
+ * Parse echo ... > file from (bin, binArgs). Returns { content, filePath } or null.
+ * Content is joined from args before ">"; optional surrounding quotes are stripped.
+ */
+function parseEchoRedirect(bin: string, binArgs: string[]): { content: string; filePath: string } | null {
+  if (bin !== "echo" || binArgs.length < 2) return null;
+  const idx = binArgs.indexOf(">");
+  if (idx === -1 || idx === binArgs.length - 1) return null;
+  const content = binArgs.slice(0, idx).join(" ").replace(/^\s*['"]|['"]\s*$/g, "").trim();
+  const filePath = binArgs[idx + 1];
+  if (!filePath) return null;
+  return { content, filePath };
+}
+
 export function classifyCommandIntent(command: string): ExecIntent {
   const normalized = command.trim().toLowerCase();
   if (/\b(sudo|chmod|chown|mount|passwd|useradd)\b/.test(normalized)) {
@@ -55,6 +69,9 @@ export function classifyCommandIntent(command: string): ExecIntent {
     return "network-impacting";
   }
   if (/\b(rm|mv|cp|sed\s+-i|truncate|tee)\b/.test(normalized)) {
+    return "mutating";
+  }
+  if (/>/.test(normalized)) {
     return "mutating";
   }
   return "read-only";
@@ -453,6 +470,14 @@ export function createExecTool(args: {
             const regex = new RegExp(sed.pattern, sed.global ? "g" : "");
             const newContent = content.replace(regex, sed.replacement);
             await writeFile(pathResolved, newContent);
+            return { stdout: "", stderr: "" };
+          }
+        }
+        if (platform() === "win32" && bin === "echo" && intent === "mutating") {
+          const echo = parseEchoRedirect(bin, binArgs);
+          if (echo) {
+            const pathResolved = resolve(cwd, echo.filePath);
+            await writeFile(pathResolved, echo.content);
             return { stdout: "", stderr: "" };
           }
         }
