@@ -37,11 +37,11 @@ const ALLOWED_CONTENT_TYPE_PATTERN =
 export type ExecIntent = "read-only" | "mutating" | "network-impacting" | "privilege-impacting";
 
 /**
- * Parse sed -i 's/pattern/replacement/[g]' file from a command string. Returns null if not matched.
+ * Parse sed -i 's/pattern/replacement/[g]' file (or double-quoted) from a command string. Returns null if not matched.
  * Handles the common in-place substitute form; delimiter must be / and pattern/replacement must not contain /.
  */
 function parseSedInPlace(command: string): { pattern: string; replacement: string; global: boolean; filePath: string } | null {
-  const m = command.match(/sed\s+-i\s+'s\/([^/]*)\/([^/]*)\/(g?)'\s+(\S+)/);
+  const m = command.match(/sed\s+-i\s+['"]s\/([^/]*)\/([^/]*)\/(g?)['"]\s+(\S+)/);
   if (!m) return null;
   return { pattern: m[1], replacement: m[2], global: m[3] === "g", filePath: m[4] };
 }
@@ -444,6 +444,17 @@ export function createExecTool(args: {
           }
           const result = { stdout: chunks.join(""), stderr: "", code: 0 as const };
           return { stdout: result.stdout, stderr: result.stderr };
+        }
+        if (platform() === "win32" && bin === "sed" && intent === "mutating") {
+          const sed = parseSedInPlace(parsed.command);
+          if (sed) {
+            const pathResolved = resolve(cwd, sed.filePath);
+            const content = await readFile(pathResolved, "utf8");
+            const regex = new RegExp(sed.pattern, sed.global ? "g" : "");
+            const newContent = content.replace(regex, sed.replacement);
+            await writeFile(pathResolved, newContent);
+            return { stdout: "", stderr: "" };
+          }
         }
         const result = await sandbox.run(bin, binArgs, {
           maxBufferBytes: maxBuffer,
