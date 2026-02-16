@@ -1,3 +1,7 @@
+import { readFile, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { platform } from "node:os";
+
 import { Ajv, type ValidateFunction } from "ajv";
 
 import type { ExecSandbox } from "./exec/types.js";
@@ -31,6 +35,16 @@ const ALLOWED_CONTENT_TYPE_PATTERN =
   /^(text\/|application\/(json|xml|xhtml\+xml|javascript|ld\+json|rss\+xml))/i;
 
 export type ExecIntent = "read-only" | "mutating" | "network-impacting" | "privilege-impacting";
+
+/**
+ * Parse sed -i 's/pattern/replacement/[g]' file from a command string. Returns null if not matched.
+ * Handles the common in-place substitute form; delimiter must be / and pattern/replacement must not contain /.
+ */
+function parseSedInPlace(command: string): { pattern: string; replacement: string; global: boolean; filePath: string } | null {
+  const m = command.match(/sed\s+-i\s+'s\/([^/]*)\/([^/]*)\/(g?)'\s+(\S+)/);
+  if (!m) return null;
+  return { pattern: m[1], replacement: m[2], global: m[3] === "g", filePath: m[4] };
+}
 
 export function classifyCommandIntent(command: string): ExecIntent {
   const normalized = command.trim().toLowerCase();
@@ -144,6 +158,8 @@ export interface CapabilityApprovalGateOptions {
   approvalWorkflow: ApprovalWorkflow;
   capabilityStore: CapabilityStore;
   allowReadOnlyWithoutGrant?: boolean;
+  /** When true, mutating exec (sed, tee, etc.) is approved without requiring a capability grant. Set from config for trusted/local setups. */
+  allowMutatingWithoutGrant?: boolean;
 }
 
 export class CapabilityApprovalGate implements ApprovalGate {
@@ -167,6 +183,10 @@ export class CapabilityApprovalGate implements ApprovalGate {
       return true;
     }
     if ((this.options.allowReadOnlyWithoutGrant ?? true) && args.intent === "read-only") {
+      this.lastDenial = null;
+      return true;
+    }
+    if (this.options.allowMutatingWithoutGrant === true && args.intent === "mutating" && args.tool === "exec") {
       this.lastDenial = null;
       return true;
     }
@@ -413,6 +433,17 @@ export function createExecTool(args: {
             const suffix = denial?.requestId ? ` (requestId=${denial.requestId})` : "";
             throw new Error(`command intent "${intent}" requires approval${suffix}`);
           }
+        }
+        const cwd = parsed.cwd !== undefined && parsed.cwd !== "" ? parsed.cwd : process.cwd();
+        if (platform() === "win32" && (bin === "cat" || bin === "type") && binArgs.length > 0 && intent === "read-only") {
+          const chunks: string[] = [];
+          for (const fileArg of binArgs) {
+            const pathResolved = resolve(cwd, fileArg);
+            const content = await readFile(pathResolved, "utf8");
+            chunks.push(content);
+          }
+          const result = { stdout: chunks.join(""), stderr: "", code: 0 as const };
+          return { stdout: result.stdout, stderr: result.stderr };
         }
         const result = await sandbox.run(bin, binArgs, {
           maxBufferBytes: maxBuffer,

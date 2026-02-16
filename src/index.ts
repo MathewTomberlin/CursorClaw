@@ -88,7 +88,17 @@ import { loadSessionMemoryContext } from "./continuity/session-memory.js";
 /** Exit code used when restart is requested; run-with-restart wrapper will re-run the process in the same terminal. */
 export const RESTART_EXIT_CODE = 42;
 
-const STRICT_EXEC_BINS = new Set(["echo", "pwd", "ls", "cat", "node"]);
+const STRICT_EXEC_BINS = new Set([
+  "echo",
+  "pwd",
+  "ls",
+  "cat",
+  "node",
+  "sed",
+  "type",
+  "head",
+  "tee"
+]);
 const VALID_SECRET_DETECTORS = new Set(DEFAULT_SECRET_SCANNER_DETECTORS);
 
 function resolveAllowedExecBins(args: {
@@ -393,7 +403,8 @@ async function main(): Promise<void> {
     devMode,
     approvalWorkflow: defaultCtx.approvalWorkflow!,
     capabilityStore: defaultCtx.capabilityStore!,
-    allowReadOnlyWithoutGrant: config.tools.exec.ask !== "always"
+    allowReadOnlyWithoutGrant: config.tools.exec.ask !== "always",
+    allowMutatingWithoutGrant: config.tools.exec.allowMutatingWithoutApproval === true
   });
   const allowedExecBins = resolveAllowedExecBins({
     bins: config.tools.exec.allowBins,

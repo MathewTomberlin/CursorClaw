@@ -55,7 +55,7 @@ Example (Ollama as default, with a fallback):
 }
 ```
 
-Omit `baseURL` to use `http://localhost:11434`. For more examples, see [RUNBOOK.md](../RUNBOOK.md) Step 7.
+Omit `baseURL` to use `http://localhost:11434`. For more examples, see [RUNBOOK.md](../RUNBOOK.md) Step 7. If you see connection or model-not-found errors, see [§9 Troubleshooting](#9-troubleshooting).
 
 ---
 

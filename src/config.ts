@@ -96,6 +96,8 @@ export interface ToolsConfig {
     ask: "always" | "on-miss" | "never";
     profile: "strict" | "developer";
     allowBins: string[];
+    /** When true, mutating exec (sed, tee, etc.) is allowed without capability approval. Use only in trusted/local setups (e.g. local Ollama). */
+    allowMutatingWithoutApproval?: boolean;
     /** Reserved for future use: run exec as this OS user. Not enforced today. */
     runAsUser?: string;
     /** Max stdout/stderr buffer per exec (bytes). Default 64 KiB. */
@@ -396,7 +398,7 @@ export const DEFAULT_CONFIG: CursorClawConfig = {
       security: "allowlist",
       ask: "on-miss",
       profile: "strict",
-      allowBins: ["echo", "pwd", "ls", "cat", "node"],
+      allowBins: ["echo", "pwd", "ls", "cat", "node", "sed", "type", "head", "tee"],
       maxBufferBytes: 64 * 1024,
       maxChildProcessesPerTurn: 100
     }
