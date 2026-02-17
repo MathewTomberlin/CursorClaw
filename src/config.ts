@@ -259,6 +259,34 @@ export interface ContinuityConfig {
   memoryMaxChars?: number;
   /** When rolling window is enabled, trimmed lines can be appended here (e.g. "memory/MEMORY-archive.md"). Omit to drop without archiving. */
   memoryArchivePath?: string;
+  /** When true, run scheduled memory compaction/summarization (background, non-blocking). Default false. */
+  memoryCompactionEnabled?: boolean;
+  /** Cron expression for compaction schedule (e.g. "0 3 * * *" for 3am daily). When set, overrides memoryCompactionIntervalMs. */
+  memoryCompactionScheduleCron?: string;
+  /** Fallback interval in ms for compaction when no cron (e.g. 86400000 = daily). Only used when memoryCompactionEnabled and no memoryCompactionScheduleCron. */
+  memoryCompactionIntervalMs?: number;
+  /** Target max records in MEMORY.md after compaction. Compaction runs when over this. */
+  memoryCompactionMaxRecords?: number;
+  /** Target max chars for MEMORY.md after compaction. Compaction runs when over this. */
+  memoryCompactionMaxChars?: number;
+  /** Only compact records older than this many days. Default 7. */
+  memoryCompactionMinAgeDays?: number;
+  /** Path to long-term summary file under profile (e.g. "LONGMEMORY.md"). Default "LONGMEMORY.md". */
+  longMemoryPath?: string;
+  /** When true, include LONGMEMORY.md in session memory injection (before MEMORY.md). Default true when longMemoryPath is set. */
+  includeLongMemoryInSession?: boolean;
+  /** Max chars for LONGMEMORY.md; oldest summary blocks trimmed when over. Default 16000. */
+  longMemoryMaxChars?: number;
+  /** When true, enable Chroma-backed experience store and query_experiences tool. Default false. */
+  experienceStoreEnabled?: boolean;
+  /** Path under profile for Chroma persistence (e.g. "tmp/chroma"). Default "tmp/chroma". */
+  experienceStorePath?: string;
+  /** Max similarity (0–1) to consider an experience "unique" when extracting; above this, skip. Default 0.85. */
+  experienceUniquenessThreshold?: number;
+  /** Max experiences to keep per profile in Chroma. Default 5000. */
+  experienceMaxCount?: number;
+  /** When true and experienceStoreEnabled, inject relevant past experiences into main-session prompt. Default true. */
+  injectExperienceContext?: boolean;
   /** Number of recent decision journal entries to replay into the system prompt (default 5, clamped 1–100). Used when decisionJournalReplayMode is "count". */
   decisionJournalReplayCount?: number;
   /**
@@ -459,6 +487,17 @@ export const DEFAULT_CONFIG: CursorClawConfig = {
     memoryEmbeddingsMaxRecords: 3_000,
     memorySizeWarnChars: 28_800,
     substrateSizeWarnChars: 60_000,
+    memoryCompactionEnabled: false,
+    memoryCompactionIntervalMs: 86400_000,
+    memoryCompactionMinAgeDays: 7,
+    longMemoryPath: "LONGMEMORY.md",
+    includeLongMemoryInSession: true,
+    longMemoryMaxChars: 16_000,
+    experienceStoreEnabled: false,
+    experienceStorePath: "tmp/chroma",
+    experienceUniquenessThreshold: 0.85,
+    experienceMaxCount: 5_000,
+    injectExperienceContext: true,
     decisionJournalReplayCount: 5,
     decisionJournalReplayMode: "count",
     decisionJournalReplaySinceHours: 24

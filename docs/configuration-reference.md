@@ -96,7 +96,7 @@ Defaults:
 }
 ```
 
-Fields control queueing, turn timeout, snapshot cadence, and message bounds. The runtime compacts long threads (retains a recent window and injects a summary); `maxMessagesPerTurn` is a per-request acceptance limit only—users are not blocked from sending more messages.
+Fields control queueing, turn timeout, snapshot cadence, and message bounds. The runtime compacts long threads (retains a recent window and injects a summary); `maxMessagesPerTurn` is a per-request acceptance limit only—users are not blocked from sending more messages. If you see "message truncated" in logs, increase `maxMessageChars` or reduce MEMORY.md/thread size (see § Token and context limits).
 
 ## 4.3 `heartbeat`
 
@@ -544,6 +544,19 @@ Defaults:
 - **memoryMaxRecords:** Optional. When set, MEMORY.md is trimmed after each append to at most this many records (oldest dropped). Primary file only; daily files unchanged. Default off.
 - **memoryMaxChars:** Optional. When set, MEMORY.md is trimmed after each append so total size does not exceed this (oldest records dropped). Default off.
 - **memoryArchivePath:** Optional. When rolling window is enabled (memoryMaxRecords or memoryMaxChars set), trimmed lines are appended to this path under the profile (e.g. `memory/MEMORY-archive.md`). Omit to drop without archiving.
+- **memoryCompactionEnabled:** When true, a background scheduler runs memory compaction on a schedule (non-blocking). Compaction merges old turn-summary/note records into compaction records and writes summaries to LONGMEMORY.md. Default false.
+- **memoryCompactionScheduleCron:** Optional cron expression (e.g. `"0 3 * * *"` for 3am daily). When set, overrides memoryCompactionIntervalMs.
+- **memoryCompactionIntervalMs:** Fallback interval in ms for compaction when no cron (default 86400000 = daily). Used when memoryCompactionEnabled or experienceStoreEnabled.
+- **memoryCompactionMaxRecords**, **memoryCompactionMaxChars:** When MEMORY.md exceeds these, compaction runs. Optional.
+- **memoryCompactionMinAgeDays:** Only compact records older than this many days (default 7).
+- **longMemoryPath:** Path to long-term summary file under profile (default `LONGMEMORY.md`).
+- **includeLongMemoryInSession:** When true (default), LONGMEMORY.md is included in session memory injection (before MEMORY.md). Only when the file exists.
+- **longMemoryMaxChars:** Max size for LONGMEMORY.md; oldest summary blocks trimmed when over (default 16000).
+- **experienceStoreEnabled:** When true, enables the experience store (vector store for key experiences) and the **query_experiences** tool. Default false.
+- **experienceStorePath:** Path under profile for store persistence (default `tmp/chroma`; experiences are stored in `tmp/experience-store.json`).
+- **experienceUniquenessThreshold:** Max similarity (0–1) to consider an experience "unique" when extracting; above this, skip adding (default 0.85).
+- **experienceMaxCount:** Max experiences per profile (default 5000).
+- **injectExperienceContext:** When true and experienceStoreEnabled, inject "Relevant past experiences" into the main-session system prompt (default true).
 - **decisionJournalReplayCount:** Number of recent decision journal entries to replay into the system prompt (default 5, clamped 1–100). Used when **decisionJournalReplayMode** is `"count"`. See docs/continuity.md.
 - **decisionJournalReplayMode:** How to select which decision journal entries to replay: `"count"` (default) = last N entries; `"sinceLastSession"` = entries since process start; `"sinceHours"` = entries within the last N hours (use **decisionJournalReplaySinceHours**).
 - **decisionJournalReplaySinceHours:** When decisionJournalReplayMode is `"sinceHours"`, replay entries from the last N hours (default 24). Capped at 168 (1 week).
@@ -553,7 +566,7 @@ Defaults:
 The runtime limits prompt size in several places. There is **no per-model or per-provider context token cap** yet; providers may truncate or fail when the prompt exceeds the model’s context window.
 
 - **session.maxMessagesPerTurn** (default 10_000): Max messages accepted per request; the runtime compacts long threads to a smaller window. Users are not blocked from sending more; compaction retains a recent window and injects a summary.
-- **session.maxMessageChars** (default 8_000): Per-message character limit. Used by the runtime to cap individual system messages and to derive the total system prompt budget.
+- **session.maxMessageChars** (default 8_000): Per-message character limit. Used by the runtime to cap individual system messages and to derive the total system prompt budget. If you see a log like `message truncated (N → 8000 chars)`, either increase this value in your config (e.g. `"session": { "maxMessageChars": 16000 }`) or reduce context size by summarizing MEMORY.md, enabling a memory rolling window, or clearing long thread entries.
 - **continuity.sessionMemoryCap** (default 32_000): Cap on session-start memory injection (MEMORY.md + memory/today+yesterday) in characters. See § 4.17 and docs/memory.md.
 - **Runtime system prompt budget:** The runtime applies `applySystemPromptBudget`: each system message is capped at `session.maxMessageChars`, and the combined system messages are capped at about 1.5× that value (total system budget). Excess is truncated (conversation history and optional context are trimmed first; core system blocks are preserved in the current implementation).
 

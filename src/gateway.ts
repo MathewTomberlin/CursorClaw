@@ -1398,20 +1398,22 @@ function parseMessages(
       `message count exceeds server limit (${maxMessagesPerTurn}); reduce or clear thread`
     );
   }
-  return value.map((entry) => {
+  return value.map((entry, index) => {
     const item = entry as { role?: unknown; content?: unknown };
+    const role = String(item.role ?? "user");
     let content = String(item.content ?? "");
     if (content.length > maxMessageChars) {
       if (process.env.NODE_ENV !== "test") {
         // eslint-disable-next-line no-console
         console.warn(
-          `[CursorClaw] message truncated (${content.length} → ${maxMessageChars} chars); consider summarizing MEMORY.md or clearing long thread entries`
+          `[CursorClaw] message truncated (${content.length} → ${maxMessageChars} chars) at message index ${index} (role=${role}); ` +
+            "increase session.maxMessageChars in config, or summarize MEMORY.md / clear long thread entries"
         );
       }
       content = content.slice(0, maxMessageChars) + "\n\n[... truncated for length]";
     }
     return {
-      role: String(item.role ?? "user"),
+      role,
       content
     };
   });

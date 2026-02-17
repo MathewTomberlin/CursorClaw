@@ -49,4 +49,29 @@ describe("session-memory", () => {
     expect(out!.length).toBeLessThanOrEqual(100 + suffix.length + 5);
     expect(out).toContain("truncated for length");
   });
+
+  it("includes LONGMEMORY.md first when includeLongMemory true and file exists", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "session-memory-long-"));
+    tempDirs.push(dir);
+    await writeFile(join(dir, "LONGMEMORY.md"), "# Long-term summary\n\nSummary block.\n", "utf8");
+    await writeFile(join(dir, "MEMORY.md"), "Recent memory.\n", "utf8");
+    const out = await loadSessionMemoryContext(dir, { today: "2026-02-15", includeLongMemory: true });
+    expect(out).toBeDefined();
+    expect(out).toContain("Long-term summary (LONGMEMORY)");
+    expect(out).toContain("Summary block.");
+    expect(out).toContain("Long-term memory (MEMORY.md)");
+    expect(out).toContain("Recent memory.");
+    expect(out!.indexOf("LONGMEMORY")).toBeLessThan(out!.indexOf("MEMORY.md"));
+  });
+
+  it("omits LONGMEMORY when includeLongMemory false", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "session-memory-nolong-"));
+    tempDirs.push(dir);
+    await writeFile(join(dir, "LONGMEMORY.md"), "Summary.\n", "utf8");
+    await writeFile(join(dir, "MEMORY.md"), "Memory.\n", "utf8");
+    const out = await loadSessionMemoryContext(dir, { today: "2026-02-15", includeLongMemory: false });
+    expect(out).toBeDefined();
+    expect(out).not.toContain("LONGMEMORY");
+    expect(out).toContain("Memory.");
+  });
 });

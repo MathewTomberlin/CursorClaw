@@ -34,7 +34,7 @@ function todayFileName(now = new Date()): string {
   return now.toISOString().slice(0, 10);
 }
 
-function toLine(record: MemoryRecord): string {
+export function toLine(record: MemoryRecord): string {
   const payload = {
     id: record.id,
     sessionId: record.sessionId,
@@ -45,7 +45,7 @@ function toLine(record: MemoryRecord): string {
   return `- ${JSON.stringify(payload)}`;
 }
 
-function parseLine(line: string): MemoryRecord | null {
+export function parseLine(line: string): MemoryRecord | null {
   const trimmed = line.trim();
   if (!trimmed.startsWith("- ")) {
     return null;

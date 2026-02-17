@@ -2362,6 +2362,41 @@ export function createRecallMemoryTool(args: {
   };
 }
 
+/** Tool: query experiences from the vector experience store (when experienceStoreEnabled). */
+export function createQueryExperiencesTool(args: {
+  getExperienceResults: (profileRoot: string, query: string, topK: number) => Promise<Array<{ text: string; category: string; sessionId: string; score: number }>>;
+}): ToolDefinition {
+  return {
+    name: "query_experiences",
+    description:
+      "Query past experiences by semantic similarity. Use when you want to recall relevant past context, decisions, or patterns from the experience store. Only available when experience store is enabled, in main or heartbeat session.",
+    schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", minLength: 1, description: "Natural language query (e.g. 'user preferences about testing')" },
+        top_k: { type: "integer", minimum: 1, maximum: 20, default: 5, description: "Max number of experiences to return (default 5)" }
+      },
+      required: ["query"],
+      additionalProperties: false
+    },
+    riskLevel: "low",
+    execute: async (rawArgs: unknown, ctx?: ToolExecuteContext) => {
+      const parsed = rawArgs as { query: string; top_k?: number };
+      const profileRoot = ctx?.profileRoot;
+      const allowedChannel =
+        ctx?.channelKind === "web" ||
+        ctx?.channelKind === "dm" ||
+        ctx?.channelKind === "mobile" ||
+        ctx?.sessionId?.startsWith?.("heartbeat:") === true;
+      if (!profileRoot || !allowedChannel) {
+        return { error: "query_experiences is only available in the main or heartbeat session." };
+      }
+      const results = await args.getExperienceResults(profileRoot, parsed.query, parsed.top_k ?? 5);
+      return { results };
+    }
+  };
+}
+
 const SENSITIVITY_LABELS: SensitivityLabel[] = ["public", "private-user", "secret", "operational"];
 
 /** Main-session-only tool: append a "remember this" entry to long-term memory. Requires profileId (or profileRoot), channelKind, and sessionId in context. Use getMemoryStore when each agent profile has its own memory; otherwise use appendRecord. */

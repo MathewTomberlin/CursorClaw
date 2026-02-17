@@ -606,6 +606,8 @@ export interface AgentRuntimeOptions {
   getSessionMemoryContext?: (profileRoot: string) => Promise<string | undefined>;
   /** When set, used for main session only to load recent topics (conversation starters) for prompt injection. */
   getRecentTopicsContext?: (profileRoot: string) => Promise<string | undefined>;
+  /** When set, used for main session only to load relevant past experiences (from experience store) for prompt injection. Receives optional hint (e.g. last user message) for query. */
+  getExperienceContext?: (profileRoot: string, hint?: string) => Promise<string | undefined>;
   /** When set, called for main session when the first user message in a session is processed; records topic for recent-topics. */
   recordRecentTopic?: (profileRoot: string, sessionId: string, topic: string) => Promise<void>;
   /** When set, called for main session; if it returns a string, injected once as a system notice (e.g. "Previous run was interrupted by process restart"). */
@@ -1626,6 +1628,21 @@ export class AgentRuntime {
           systemMessages.push({
             role: "system",
             content: this.scrubText(`Recent topics (with this user):\n\n${recentTopics.trim()}`, scopeId)
+          });
+        }
+      }
+    }
+    if (isMainSession && this.options.getExperienceContext && this.options.getProfileRoot) {
+      const profileId = request.session.profileId ?? getDefaultProfileId(this.options.config);
+      const profileRoot = this.options.getProfileRoot(profileId);
+      if (profileRoot) {
+        const lastUser = [...request.messages].reverse().find((m) => m.role === "user");
+        const hint = typeof lastUser?.content === "string" ? lastUser.content.slice(0, 200) : undefined;
+        const experienceContext = await this.options.getExperienceContext(profileRoot, hint);
+        if (experienceContext?.trim()) {
+          systemMessages.push({
+            role: "system",
+            content: this.scrubText(`Relevant past experiences:\n\n${experienceContext.trim()}`, scopeId)
           });
         }
       }

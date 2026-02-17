@@ -81,6 +81,7 @@ import {
   createProposeSoulIdentityUpdateTool,
   createInterAgentSendMessageTool,
   createComposerInboxTool,
+  createQueryExperiencesTool,
   createRecallMemoryTool,
   createRememberThisTool,
   createWebFetchTool,
@@ -95,6 +96,8 @@ import type { SubstrateContent } from "./substrate/index.js";
 import { DEFAULT_SUBSTRATE_PATHS } from "./substrate/index.js";
 import { WorkspaceCatalog } from "./workspaces/catalog.js";
 import { MultiRootIndexer } from "./workspaces/multi-root-indexer.js";
+import { startCompactionScheduler } from "./continuity/compaction-scheduler.js";
+import { ExperienceStore } from "./continuity/experience-store.js";
 import { MemoryEmbeddingIndex } from "./continuity/memory-embedding-index.js";
 import { loadSessionMemoryContext } from "./continuity/session-memory.js";
 
@@ -438,6 +441,68 @@ async function main(): Promise<void> {
     });
     await memoryEmbeddingIndex.load();
   }
+  let compactionSchedulerStop: (() => void) | undefined;
+  /** Experience stores by profile root (when experienceStoreEnabled). Used for query_experiences and experience extraction. */
+  const experienceStoresByProfileRoot = new Map<string, ExperienceStore>();
+  if (config.continuity?.experienceStoreEnabled) {
+    for (const [id, ctx] of profileContextMap) {
+      const stateFile = join(ctx.profileRoot, (config.continuity.experienceStorePath ?? "tmp/chroma").replace(/^tmp\/chroma$/, "tmp/experience-store.json"));
+      const statePath = stateFile.endsWith(".json") ? stateFile : join(ctx.profileRoot, "tmp", "experience-store.json");
+      const store = new ExperienceStore({
+        stateFile: statePath,
+        maxExperiences: config.continuity.experienceMaxCount ?? 5_000,
+        uniquenessThreshold: config.continuity.experienceUniquenessThreshold ?? 0.85
+      });
+      await store.load();
+      experienceStoresByProfileRoot.set(ctx.profileRoot, store);
+    }
+  }
+  const getExperienceStoreForRoot = (profileRoot: string): ExperienceStore | undefined =>
+    experienceStoresByProfileRoot.get(profileRoot);
+  if (config.continuity?.memoryCompactionEnabled || config.continuity?.experienceStoreEnabled) {
+    const scheduler = startCompactionScheduler({
+      getConfig: () => configRef.current.continuity,
+      getProfileRoots: () =>
+        [...profileContextMap.entries()].map(([profileId, ctx]) => ({
+          profileId,
+          workspaceDir: ctx.profileRoot
+        })),
+      onAfterCompaction: async (profileId) => {
+        if (profileId === defaultProfileId && memoryEmbeddingIndex) {
+          const store = memoryStoresByProfileId.get(profileId);
+          if (store) {
+            const records = await store.readAll();
+            await memoryEmbeddingIndex.upsertFromRecords(records, config.memory.includeSecretsInPrompt);
+          }
+        }
+      },
+      onTick: async (profileId, workspaceDir) => {
+        const expStore = experienceStoresByProfileRoot.get(workspaceDir);
+        if (!expStore) return;
+        const memStore = memoryStoresByProfileId.get(profileId);
+        if (!memStore) return;
+        const records = await memStore.readAll();
+        const recent = records.slice(-50);
+        for (const rec of recent) {
+          if (rec.text.trim().length < 20) continue;
+          if (!["note", "learned", "turn-summary", "user-preference"].includes(rec.category)) continue;
+          try {
+            if (await expStore.isUnique(rec.text)) {
+              await expStore.add({
+                text: rec.text,
+                category: rec.category,
+                sessionId: rec.sessionId,
+                recordId: rec.id
+              });
+            }
+          } catch {
+            // skip duplicate or add error
+          }
+        }
+      }
+    });
+    compactionSchedulerStop = scheduler.stop;
+  }
   const configuredDetectors = config.privacy.detectors.filter(
     (detector): detector is SecretDetectorName => VALID_SECRET_DETECTORS.has(detector as SecretDetectorName)
   );
@@ -557,6 +622,18 @@ async function main(): Promise<void> {
           const records = await memory.readAll();
           await memoryEmbeddingIndex!.upsertFromRecords(records, config.memory.includeSecretsInPrompt);
           return memoryEmbeddingIndex!.query({ query, topK });
+        }
+      })
+    );
+  }
+  if (config.continuity?.experienceStoreEnabled && experienceStoresByProfileRoot.size > 0) {
+    toolRouter.register(
+      createQueryExperiencesTool({
+        getExperienceResults: async (profileRoot, query, topK) => {
+          const store = getExperienceStoreForRoot(profileRoot);
+          if (!store) return [];
+          const results = await store.query({ query, topK });
+          return results.map((r) => ({ text: r.text, category: r.category, sessionId: r.sessionId, score: r.score }));
         }
       })
     );
@@ -691,8 +768,27 @@ async function main(): Promise<void> {
       const c = configRef.current.continuity;
       if (c?.sessionMemoryEnabled === false) return Promise.resolve(undefined);
       const cap = c?.sessionMemoryCap;
-      return loadSessionMemoryContext(root, cap != null ? { capChars: cap } : undefined);
+      return loadSessionMemoryContext(root, {
+        ...(cap != null ? { capChars: cap } : {}),
+        includeLongMemory: c?.includeLongMemoryInSession !== false,
+        longMemoryPath: c?.longMemoryPath ?? "LONGMEMORY.md",
+        longMemoryMaxChars: Math.min(8000, (c?.longMemoryMaxChars ?? 16000) >> 1)
+      });
     },
+    ...(config.continuity?.experienceStoreEnabled && config.continuity?.injectExperienceContext !== false && getExperienceStoreForRoot
+      ? {
+          getExperienceContext: async (profileRoot: string, hint?: string): Promise<string | undefined> => {
+            const store = getExperienceStoreForRoot(profileRoot);
+            if (!store || store.size() === 0) return undefined;
+            const query = (hint ?? "recent context and preferences").trim().slice(0, 150);
+            const results = await store.query({ query, topK: 8 });
+            if (results.length === 0) return undefined;
+            return results
+              .map((r) => `- [${r.category}] ${r.text.slice(0, 500)}${r.text.length > 500 ? "…" : ""}`)
+              .join("\n");
+          }
+        }
+      : {}),
     getInterruptedRunNotice
   });
 

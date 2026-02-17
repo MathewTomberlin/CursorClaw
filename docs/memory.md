@@ -67,7 +67,27 @@ When **continuity.memoryMaxRecords** or **continuity.memoryMaxChars** is set, ME
 - **When/where to add an in-memory cache (implementation note):** Best candidate: **recall_memory** path (memory embedding index reads). Codebase: `src/tools.ts` (recall_memory tool), `src/continuity/memory-embedding-index.ts` (index read/write), config `continuity.memoryEmbeddingsEnabled`. Today each recall hits the file-based index; a small LRU cache keyed by query (or query embedding hash) with TTL would cut latency for repeated or similar queries in the same session. Optional: cache the result of **loadSessionMemoryContext** (session-start injection) for the same profile in a given process life, invalidated when MEMORY.md or daily files are appended (or use a short TTL). Guardrails: cap cache size (e.g. max entries or bytes); invalidate or bypass cache when memory is trimmed/compacted or embeddings re-synced. Success criteria: reduced latency for repeated recall_memory calls; no stale results after memory writes; memory usage bounded.
 - **Eviction for in-memory cache (when implemented):** LRU gives predictable capacity and recency; TTL gives time-based expiry. For a recall_memory cache, LRU keyed by query or query-embedding hash with an optional TTL avoids unbounded growth and stale results after memory appends; invalidate cache entries (or the whole cache) when MEMORY.md is trimmed or embeddings re-synced.
 
-## 9. Long-term memory patterns
+## 9. LONGMEMORY.md and scheduled compaction
+
+When **memory compaction** is enabled (`continuity.memoryCompactionEnabled`), a background job runs on a schedule (cron or interval). It does **not** block user turns or heartbeat. The job:
+
+- Merges old compactable records (e.g. turn-summary, note older than `memoryCompactionMinAgeDays`) into one or more compaction records.
+- Writes a **LONGMEMORY.md** file (or path from `continuity.longMemoryPath`) that holds long-term summaries. When `continuity.includeLongMemoryInSession` is true, session memory injection loads LONGMEMORY.md first (then MEMORY.md and daily files), so the agent sees long-term summary plus recent memory within the same cap.
+- Optionally archives trimmed lines to `memoryArchivePath`. Re-syncs the memory embedding index after compaction when embeddings are enabled.
+
+See **docs/LONG-TERM-MEMORY-AND-VECTOR-EXPERIENCES-IMPLEMENTATION.md** for the full design and **docs/configuration-reference.md** for config keys.
+
+## 10. Experience store (vector store for experiences)
+
+When **continuity.experienceStoreEnabled** is true:
+
+- An **experience store** (hash-based vectors, persisted under the profile) stores key experiences extracted from memory. On the same schedule as compaction (or when only experience store is enabled), recent memory records that are **relatively unique** (similarity to existing experiences below `experienceUniquenessThreshold`) are added to the store.
+- The **query_experiences** tool is available in the main and heartbeat session: the agent can query by natural language and receive top-k relevant experiences.
+- When **injectExperienceContext** is true, the runtime injects a "Relevant past experiences" block into the main-session system prompt, built from a query using the last user message as hint. This enhances context without loading full MEMORY.md.
+
+The store is persisted to `tmp/experience-store.json` under the profile. Chroma can be integrated later for a dedicated vector DB backend; the current implementation uses the same hash-based vector approach as the memory embedding index for portability.
+
+## 11. Long-term memory patterns
 
 *Context: STUDY_GOALS — Long-term Memory. Patterns for durable, multi-session agent memory in this codebase.*
 
@@ -78,6 +98,6 @@ When **continuity.memoryMaxRecords** or **continuity.memoryMaxChars** is set, ME
 - **Implementation checklist (compaction, when prioritized):** (1) Add config keys (memoryCompactionEnabled, threshold records/chars, minAgeDays, optional schedule). (2) Implement trigger logic (after-append check or scheduled step). (3) On trigger: ensure single-writer (no concurrent appends to MEMORY.md during rewrite—e.g. run compaction in the same process that owns writes, or use a lock file such as `tmp/memory-compaction.lock`: create before rewrite, remove after); *lock release guardrail:* always remove the lock when the run finishes (success, failure, or exception—e.g. try/finally) so a crash does not leave the lock held. Call flushPreCompaction if needed; read MEMORY.md; select records in scope (by age/category); produce compaction record(s); write new MEMORY.md (backup first); append trimmed lines to archive if configured. *Scope guardrail:* compaction rewrites MEMORY.md only; daily files (`memory/YYYY-MM-DD.md`) are not modified by compaction (same as trim in §2). *Rollback guardrail:* if compaction write fails mid-way (e.g. ENOSPC, crash), restore MEMORY.md from backup and leave file unchanged; log failure for operator; do not leave MEMORY.md partially written. (4) If memoryEmbeddingsEnabled: re-sync memory embedding index. (5) Run integrityScan and fix or document any findings.
 - **Validation after compaction:** After a compaction run, verify: record count in MEMORY.md decreased (or unchanged if no records were in scope); no recent or sensitive records removed; memory embedding index re-synced if enabled; integrityScan reports no new findings. Log compaction stats (e.g. records before/after) for operator visibility.
 
-## 10. Possible future improvements
+## 12. Possible future improvements
 
 - **Summarization**: Optional agent-triggered summarization of middle-aged content (e.g. compact many turn-summary lines into one compaction record) in addition to or instead of a simple rolling window.
