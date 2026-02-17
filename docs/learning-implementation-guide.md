@@ -69,3 +69,22 @@
 
 - **When no doc or code change:** A tick can advance learning by updating only substrate: ROADMAP Current state, ROADMAP Completed, and one or more STUDY_GOALS sub-notes (e.g. Continuity or Learning). That counts as one step for continuity and satisfies “advance one STUDY_GOALS topic” without adding a new implementation-guide section or code.
 - **Use case:** Open is "idle until operator", resilience is clear, and the agent runs the full HEARTBEAT checklist (resilience, build/tests, ROADMAP, STUDY_GOALS). The step is documenting the tick and keeping sub-notes current; no new § in docs is required.
+
+## 14. Resumed tick and study goals
+
+- **Same one-topic-one-step rule:** When the user sends a continuation prompt after an interrupted heartbeat (e.g. "Continue with ROADMAP.md, HEARTBEAT.md, and STUDY_GOALS"), the agent runs the same flow as a normal heartbeat: resilience → ROADMAP Current state → advance one Open item or one STUDY_GOALS topic. Study advancement follows §12 (one topic, one step); substrate-only advancement (§13) is allowed.
+
+## 15. Idle repo and study advancement
+
+- **When the repo is explicitly idle:** ROADMAP may state that Open items are "idle until operator" (e.g. waiting on operator to choose a provider). On such ticks the agent still runs resilience (build/tests, tmp/last-build-failure.log), updates ROADMAP Current state and Completed, and advances one STUDY_GOALS topic. No need to invent Open work or promote Optional to Open; advancing one study topic (including substrate-only per §13) satisfies the heartbeat and keeps learning continuity.
+
+## 16. Build and test re-run in heartbeat
+
+- **When to re-run:** HEARTBEAT step 1 says "Optionally run build/tests (exec) and update ROADMAP.md **Current state** with branch and build status." Each tick may re-run build and tests to keep Current state accurate.
+- **On success:** Update ROADMAP Current state with branch, date, and "npm run build OK, N tests passed (re-run this tick)".
+- **On failure:** Fix the failure (and optionally write tmp/last-build-failure.log) or document the blocker in ROADMAP Open and Current state; do not leave build status stale.
+
+## 17. Reporting study-goal changes to the user
+
+- **HEARTBEAT step 4:** HEARTBEAT.md says "Tell the user about any changes or updates made in relation to study goals." When the agent advances a STUDY_GOALS topic (research, notes, implementation guide, implementation, or substrate-only update), it should briefly report what was done in the heartbeat reply (e.g. "STUDY_GOALS: Learning — added §17 (report study-goal changes to user)").
+- **When no study advancement:** If the tick was consumed by resilience or operator pause (§11), the agent may reply HEARTBEAT_OK or still report "No STUDY_GOALS advancement this tick (resilience/operator pause)."

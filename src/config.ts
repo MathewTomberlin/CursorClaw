@@ -98,6 +98,8 @@ export interface ToolsGhConfig {
 export interface ToolsConfig {
   /** When true, web_search and web_fetch (and MCP equivalents) are allowed without capability approval. Use in trusted/local setups. */
   allowNetFetchWithoutApproval?: boolean;
+  /** When true, high-risk tools (e.g. gh_pr_write, mcp_call_tool; exec has its own allowMutatingWithoutApproval) are allowed without capability approval. Use only in trusted/local setups (e.g. LM Studio). */
+  allowHighRiskWithoutApproval?: boolean;
   exec: {
     host: "sandbox" | "host";
     security: "deny" | "allowlist";

@@ -38,7 +38,7 @@ You wake up fresh each session. These files are your continuity:
 
 Capture what matters: decisions, context, things to remember. Skip secrets unless asked to keep them. When you learn something or someone says "remember this", write it to the relevant file. When you infer a lesson from feedback or a repeated pattern (e.g. how the operator likes things done), you may store it with remember_this and category 'learned'. Text > brain; files survive session restarts.
 
-**When to update substrate (IDENTITY, SOUL, ROADMAP, TOOLS):** Use memory files for daily context and one-off facts. Use *substrate* files for durable, structural information: update \`ROADMAP.md\` when goals or milestones change; on heartbeats, only replace the single "Current state" line in place or move items between Open/Completed—do not append heartbeat status updates or tick logs to ROADMAP (use MEMORY.md or remember_this with category 'heartbeat' for per-tick summaries). Update \`IDENTITY.md\` or \`SOUL.md\` when how you present or who you are evolves; update \`TOOLS.md\` for environment notes (hosts, devices, preferences). When you learn something lasting, read the file with exec then use sed to change only the relevant part. Do this on heartbeats when appropriate—don't only write to memory.
+**When to update substrate (IDENTITY, SOUL, ROADMAP, TOOLS):** Use memory files for daily context and one-off facts. Use *substrate* files for durable, structural information: update \`ROADMAP.md\` when goals or milestones change; on heartbeats, only replace the single "Current state" line in place or move items between Open/Completed—do not append heartbeat status updates or tick logs to ROADMAP (use MEMORY.md or remember_this with category 'heartbeat' for per-tick summaries). Update \`IDENTITY.md\` or \`SOUL.md\` when how you present or who you are evolves; update \`TOOLS.md\` for environment notes (hosts, devices, preferences). **Update substrate proactively:** when you learn something lasting (e.g. a goal, a preference, a new tool or device), update the right substrate file in the same response via exec—read the file first, then use sed to change only the relevant part. Do not wait for the user to ask you to update or save; do it as soon as you have the information. On heartbeats, consider ROADMAP/IDENTITY/TOOLS and update when appropriate.
 
 ## Safety
 
@@ -192,7 +192,7 @@ Add whatever helps you do your job. This is your cheat sheet.`,
 
   birth: `# BIRTH.md - First Run
 
-This file means the BIRTH process is not yet complete. Run it proactively: (1) Introduce yourself and engage the user to identify the specific use of the agent and identity. (2) Gather or co-create USER.md and IDENTITY.md. (3) When complete, remove this file. Until then, periodically try to complete BIRTH (e.g. once per session) without nagging.`,
+This file means the BIRTH process is not yet complete. Run it proactively: (1) Introduce yourself and engage the user to identify the specific use of the agent and identity. (2) Use the exec tool to create or update USER.md and IDENTITY.md from what the user tells you (e.g. echo or sed; paths relative to profile root). (3) When complete, use exec to remove this file (rm BIRTH.md or del BIRTH.md on Windows). Until then, periodically try to complete BIRTH (e.g. once per session) without nagging.`,
 
   capabilities: `# CAPABILITIES.md - Capabilities Summary
 

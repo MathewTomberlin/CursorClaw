@@ -37,7 +37,7 @@ import { InMemoryQueueBackend } from "./queue/in-memory-backend.js";
 import type { LifecycleStream } from "./lifecycle-stream/types.js";
 import type { SubstrateContent } from "./substrate/index.js";
 import type { ChatMessage, PolicyDecisionLog, SendTurnOptions, SessionContext, ToolCall, ToolExecuteContext } from "./types.js";
-import { ToolRouter, classifyCommandIntent } from "./tools.js";
+import { ToolRouter, ToolPolicyBlockedError, classifyCommandIntent } from "./tools.js";
 
 const NO_THINK_SUFFIX = " /no_think";
 
@@ -175,32 +175,232 @@ export function removeDuplicatedTrailingParagraph(text: string): string {
   return out;
 }
 
-/** Remove model thinking/reasoning tags from text so they are not shown in the UI or stored in history. Handles <think>...</think> and <thinking>...</thinking>. */
+/** Remove model thinking/reasoning tags from text so they are not shown in the UI or stored in history. Handles <think>...</think> and <thinking>...</thinking>. Uses "content after last closing tag" so the final message is never omitted. */
 export function stripThinkingTags(text: string): string {
   if (!text || text.length < 2) return text;
-  let out = text;
-  // <think>...</think> (case-insensitive for tag names)
-  out = out.replace(/<think>[\s\S]*?<\/think>/gi, "");
-  // <thinking>...</thinking>
-  out = out.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "");
-  return out;
+  // Find the last closing tag so we keep everything after it (ensures final message is never dropped).
+  const thinkClose = /<\s*\/\s*think\s*>/gi;
+  const thinkingClose = /<\s*\/\s*thinking\s*>/gi;
+  let lastClose = -1;
+  for (const re of [thinkClose, thinkingClose]) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      const end = m.index + (m[0]?.length ?? 0);
+      if (end > lastClose) lastClose = end;
+    }
+  }
+  const afterThinking = lastClose >= 0 ? text.slice(lastClose) : text;
+  // Remove any remaining thinking blocks in the tail (e.g. nested or malformed) so we never show thinking.
+  const thinkBlock = /<think>(?:[^<]|<(?!\/?think\s*>))*<\s*\/\s*think\s*>/gi;
+  const thinkingBlock = /<thinking>(?:[^<]|<(?!\/?thinking\s*>))*<\s*\/\s*thinking\s*>/gi;
+  return afterThinking.replace(thinkBlock, "").replace(thinkingBlock, "");
 }
 
-/** Remove tool_call and code-block content that should not be shown to the user. Strips <tool_call>...</tool_call> and fenced blocks that contain "tool_call". */
+/** Remove tool_call and code-block content that should not be shown to the user. Strips <tool_call>...</tool_call> and fenced blocks that contain "tool_call". Uses negated middle so we never match past the first closing tag. Does not trim so token-stream deltas keep leading/trailing spaces (caller trims final message if needed). */
 export function stripToolCallAndCodeBlocks(text: string): string {
   if (!text || text.length < 2) return text;
   let out = text;
-  out = out.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "");
+  out = out.replace(/<tool_call>(?:[^<]|<(?!\/?tool_call\s*>))*<\s*\/\s*tool_call\s*>/gi, "\n");
   // Fenced code blocks (```...```) that contain tool_call
   out = out.replace(/```[\s\S]*?```/g, (block) =>
-    /tool_call/i.test(block) ? "" : block
+    /tool_call/i.test(block) ? "\n" : block
   );
-  return out.replace(/\n\n+/g, "\n\n").trim();
+  return out.replace(/\n\n+/g, "\n\n");
+}
+
+/**
+ * Strip "exec: { ... }" blocks and incomplete "exec:" prefixes from reply text so the user never
+ * sees a raw tool call or a truncated "exec:" as the final message (e.g. when the model stops
+ * before outputting the JSON).
+ */
+function stripExecBlocksAndIncomplete(text: string): string {
+  if (!text || text.length < 2) return text;
+  let out = text;
+  const execPrefix = /\bexec\s*:\s*/gi;
+  let execMatch: RegExpExecArray | null;
+  const replacements: { start: number; end: number }[] = [];
+  while ((execMatch = execPrefix.exec(out)) !== null) {
+    const after = out.slice(execMatch.index + (execMatch[0]?.length ?? 0));
+    const trimmed = after.trimStart();
+    const braceStart = trimmed.indexOf("{");
+    if (braceStart === -1) {
+      // Incomplete: "exec:" or "exec: " with no JSON — mark this whole prefix for removal (from exec to end of line or end of string)
+      const from = execMatch.index;
+      const rest = out.slice(from);
+      const lineEnd = rest.indexOf("\n");
+      const end = lineEnd === -1 ? out.length : from + lineEnd;
+      replacements.push({ start: from, end });
+      continue;
+    }
+    const extent = findJsonObjectExtent(trimmed, braceStart);
+    if (!extent) {
+      // Incomplete: "exec: {" without closing — remove from exec to end of line or end
+      const from = execMatch.index;
+      const rest = out.slice(from);
+      const lineEnd = rest.indexOf("\n");
+      replacements.push({ start: from, end: lineEnd === -1 ? out.length : from + lineEnd });
+      continue;
+    }
+    // Complete "exec: { ... }" — remove it (replace with newline to preserve spacing)
+    const jsonEndInOut = execMatch.index + (execMatch[0]?.length ?? 0) + braceStart + extent.endIndex;
+    replacements.push({ start: execMatch.index, end: jsonEndInOut });
+  }
+  // Apply from highest start index so indices stay valid
+  replacements.sort((a, b) => b.start - a.start);
+  for (const { start, end } of replacements) {
+    out = out.slice(0, start) + "\n" + out.slice(end);
+  }
+  out = out.replace(/\n\n+/g, "\n\n");
+  const trimmed = out.trim();
+  // If the only remaining content is "exec:" or "exec: " (no JSON), or reply became empty after stripping, show nothing
+  if (/^\s*exec\s*:\s*$/i.test(trimmed) || trimmed.length === 0) return "";
+  return out;
 }
 
 /** Strip all non-user-visible content: thinking tags and tool/code blocks. Use for reply text shown in stream and final message. */
 function stripReplyForUser(text: string): string {
-  return stripToolCallAndCodeBlocks(stripThinkingTags(text));
+  return stripExecBlocksAndIncomplete(
+    stripToolCallAndCodeBlocks(stripThinkingTags(text))
+  );
+}
+
+/** Valid tool names (from tool router) for filtering content-parsed tool calls. */
+const EMPTY_TOOL_NAMES = new Set<string>();
+
+/**
+ * Find the extent of a JSON object starting at startIndex (balanced braces). Returns null if no '{' at startIndex.
+ */
+function findJsonObjectExtent(str: string, startIndex: number): { endIndex: number } | null {
+  if (str[startIndex] !== "{") return null;
+  let depth = 0;
+  let i = startIndex;
+  const len = str.length;
+  while (i < len) {
+    const c = str[i];
+    if (c === "{") depth += 1;
+    else if (c === "}") {
+      depth -= 1;
+      if (depth === 0) return { endIndex: i + 1 };
+    } else if (c === '"') {
+      i += 1;
+      while (i < len && str[i] !== '"') {
+        if (str[i] === "\\") i += 1;
+        i += 1;
+      }
+    }
+    i += 1;
+  }
+  return null;
+}
+
+/**
+ * Parse <tool_call>...</tool_call> blocks from raw assistant content. Used when Ollama or LM Studio
+ * (openai-compatible) return tool calls only in content and not in structured message.tool_calls.
+ * Also accepts fallback patterns: "exec: { ... }" or "exec:\n{ ... }" so models that output the
+ * tool name in content (e.g. "exec:") still get executed when validToolNames includes "exec".
+ * Only returns calls whose name is in validToolNames (pass EMPTY_TOOL_NAMES to allow all).
+ */
+export function parseToolCallsFromContent(
+  content: string,
+  validToolNames: Set<string>
+): Array<{ name: string; args: unknown }> {
+  if (!content || content.length < 2) return [];
+  const results: Array<{ name: string; args: unknown }> = [];
+  const tagRegex = /<tool_call>((?:[^<]|<(?!\/?tool_call\s*>))*)<\s*\/\s*tool_call\s*>/gi;
+  let m;
+  while ((m = tagRegex.exec(content)) !== null) {
+    const inner = (m[1] ?? "").trim();
+    if (!inner) continue;
+    try {
+      const obj = JSON.parse(inner) as Record<string, unknown>;
+      const name = (typeof obj.name === "string"
+        ? obj.name
+        : typeof obj.tool === "string"
+          ? obj.tool
+          : typeof obj.tool_name === "string"
+            ? obj.tool_name
+            : typeof (obj.function as Record<string, unknown> | undefined)?.name === "string"
+              ? (obj.function as Record<string, unknown>).name
+              : "") as string;
+      const args = obj.arguments ?? obj.args ?? obj.parameters ?? {};
+      if (!name) continue;
+      if (validToolNames.size > 0 && !validToolNames.has(name)) continue;
+      if (typeof args === "object" && args !== null) results.push({ name, args });
+    } catch {
+      /* skip malformed JSON */
+    }
+  }
+
+  // Fallback: some models (e.g. LM Studio) output "exec: { \"command\": \"...\" }" in content instead of <tool_call>.
+  if (results.length === 0 && (validToolNames.size === 0 || validToolNames.has("exec"))) {
+    const execPrefix = /\bexec\s*:\s*/gi;
+    let execMatch: RegExpExecArray | null;
+    while ((execMatch = execPrefix.exec(content)) !== null) {
+      const after = content.slice(execMatch.index + (execMatch[0]?.length ?? 0));
+      const trimmed = after.trimStart();
+      const braceStart = trimmed.indexOf("{");
+      if (braceStart === -1) continue;
+      const extent = findJsonObjectExtent(trimmed, braceStart);
+      if (!extent) continue;
+      const jsonStr = trimmed.slice(braceStart, extent.endIndex);
+      try {
+        const args = JSON.parse(jsonStr) as Record<string, unknown>;
+        if (typeof args === "object" && args !== null) {
+          const command = args.command ?? args.cmd;
+          if (typeof command === "string" && command.trim().length > 0) {
+            results.push({ name: "exec", args: { command: command.trim(), ...(typeof args.cwd === "string" ? { cwd: args.cwd } : {}) } });
+          }
+        }
+      } catch {
+        /* skip */
+      }
+    }
+  }
+
+  // Fallback: some models output tool-call JSON inside ```json ... ``` or ``` ... ``` blocks.
+  if (results.length === 0) {
+    const codeBlockRegex = /```(?:json)?\s*\n?([\s\S]*?)```/gi;
+    let blockMatch: RegExpExecArray | null;
+    while ((blockMatch = codeBlockRegex.exec(content)) !== null) {
+      const inner = (blockMatch[1] ?? "").trim();
+      if (!inner || !(inner.startsWith("{") && inner.includes("name"))) continue;
+      try {
+        const obj = JSON.parse(inner) as Record<string, unknown>;
+        const name = (typeof obj.name === "string"
+          ? obj.name
+          : typeof obj.tool === "string"
+            ? obj.tool
+            : typeof obj.tool_name === "string"
+              ? obj.tool_name
+              : "") as string;
+        const args = obj.arguments ?? obj.args ?? obj.parameters ?? {};
+        if (!name) continue;
+        if (validToolNames.size > 0 && !validToolNames.has(name)) continue;
+        if (typeof args === "object" && args !== null) results.push({ name, args });
+      } catch {
+        /* skip */
+      }
+    }
+  }
+
+  return results;
+}
+
+/** Normalize for prefix comparison: single line endings, trim. */
+function normalizeForPrefix(s: string): string {
+  return (s ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+}
+
+/** Remove from the start of text any prior-round content (and optional surrounding whitespace). Normalizes line endings so LM Studio / OpenAI-compatible full-conversation streams strip to last round only. */
+function stripPriorRoundsFromReply(text: string, priorRounds: string[]): string {
+  let out = normalizeForPrefix(text);
+  for (const prior of priorRounds) {
+    const p = normalizeForPrefix(prior);
+    if (p.length === 0) continue;
+    if (!out.startsWith(p) || out.length <= p.length) continue;
+    out = out.slice(p.length).trim();
+  }
+  return out;
 }
 
 /** Prefixes that indicate a paragraph is a summary/wrap-up (for deduping duplicated summaries on heartbeat continuation). */
@@ -678,6 +878,8 @@ export class AgentRuntime {
           const providerSupportsToolFollowUp = isOllama || isOpenAICompatible;
           /** Accumulated thinking across all rounds so we strip it from the final assistant message (CLI may send one full message after tool use). */
           let previousThinkingContent = "";
+          /** Content of each prior round's assistant message (for stripping accumulated content from APIs that return full conversation). */
+          const previousRoundsAssistantContent: string[] = [];
 
           while (true) {
             // Only the last round's reply is kept for the turn result; prior rounds (e.g. before tool follow-up) are discarded.
@@ -742,8 +944,13 @@ export class AgentRuntime {
                   content.startsWith(previousThinkingContent)
                     ? content.slice(previousThinkingContent.length)
                     : content;
-                replyContent = stripReplyForUser(replyContent);
                 const isFullMessage = Boolean(data?.isFullMessage);
+                // Keep raw content for agent use (parseToolCallsFromContent + assistant message to API). Strip only for display/emit.
+                const rawReplyForAgent = replyContent;
+                // For full messages (e.g. Cursor-Agent CLI), strip tags/tool/code per message. For token-stream deltas (Ollama, LM Studio), do not strip per chunk—it can remove or alter spaces; we strip only the accumulated string when emitting and in the final result.
+                if (isFullMessage) {
+                  replyContent = stripReplyForUser(replyContent);
+                }
                 if (replyContent.length === 0) {
                   emittedCount += 1;
                   continue;
@@ -757,18 +964,20 @@ export class AgentRuntime {
                   continue;
                 }
                 if (isFullMessage) {
-                  // Only replace when content is the full message so far (extends or equals assistantText). If adapter sends multiple "full" segments, append so we don't overwrite.
+                  // Full message from adapter: use it as the single source of truth so we show only the latest turn. Replace when it extends current text (deltas then full); otherwise replace anyway so multiple "full" messages (e.g. CLI sending turn 1 then turn 2) don't accumulate—only the last is kept.
+                  // Store raw content in thisRoundContent so tool parsing and next-round assistant message keep <tool_call> blocks (OpenAI-compatible content-only tool use).
                   if (
                     assistantText.length === 0 ||
                     (replyContent.length >= assistantText.length && replyContent.startsWith(assistantText))
                   ) {
                     assistantText = replyContent;
-                    thisRoundContent = replyContent;
+                    thisRoundContent = rawReplyForAgent;
                     emit("assistant", { content: replyContent, replace: true });
                   } else {
-                    assistantText += replyContent;
-                    thisRoundContent += replyContent;
-                    emit("assistant", { content: assistantText });
+                    // Adapter sent a different full message (e.g. next turn); replace so only the final turn is shown in the message log.
+                    assistantText = replyContent;
+                    thisRoundContent = rawReplyForAgent;
+                    emit("assistant", { content: replyContent, replace: true });
                   }
                 } else if (replyContent === assistantText) {
                   // Exact duplicate (e.g. CLI sent deltas then full message); skip emit and accumulation
@@ -776,7 +985,7 @@ export class AgentRuntime {
                   // Full-message replacement (e.g. CLI sent deltas then full message); replyContent is reply-only.
                   assistantText = replyContent;
                   thisRoundContent = replyContent;
-                  emit("assistant", { content: replyContent, replace: true });
+                  emit("assistant", { content: stripReplyForUser(replyContent), replace: true });
                 } else if (
                   replyContent.length >= assistantText.length &&
                   assistantText.length >= 10 &&
@@ -790,7 +999,7 @@ export class AgentRuntime {
                   // Fuzzy replacement: placeholder was replaced (e.g. stream had HIGH_ENTROPY_TOKEN, final has real text); replyContent is reply-only.
                   assistantText = replyContent;
                   thisRoundContent = replyContent;
-                  emit("assistant", { content: replyContent, replace: true });
+                  emit("assistant", { content: stripReplyForUser(replyContent), replace: true });
                 } else if (
                   assistantText.startsWith(replyContent) ||
                   (replyContent.length >= 15 && assistantText.includes(replyContent)) ||
@@ -798,9 +1007,10 @@ export class AgentRuntime {
                 ) {
                   // Skip: content is a prefix (e.g. CLI sent full message first then streamed same text); or duplicate segment; or duplicate trailing suffix (avoids duplicated final message). Do not add to thisRoundContent.
                 } else {
+                  // Token-stream deltas (Ollama, LM Studio, OpenAI): accumulate raw (no per-chunk strip so spaces are preserved); strip only when emitting so the UI never sees tags.
                   assistantText += replyContent;
                   thisRoundContent += replyContent;
-                  emit("assistant", { content: assistantText });
+                  emit("assistant", { content: stripReplyForUser(assistantText) });
                 }
                 emittedCount += 1;
               } else if (event.type === "tool_call") {
@@ -821,7 +1031,16 @@ export class AgentRuntime {
                   ...(request.session.channelKind !== undefined ? { channelKind: request.session.channelKind } : {}),
                   ...(request.session.sessionId !== undefined ? { sessionId: request.session.sessionId } : {})
                 };
-                const output = await this.options.toolRouter.execute(call, toolContext);
+                let output: unknown;
+                try {
+                  output = await this.options.toolRouter.execute(call, toolContext);
+                } catch (toolError) {
+                  if (toolError instanceof ToolPolicyBlockedError) {
+                    throw toolError;
+                  }
+                  const message = toolError instanceof Error ? toolError.message : String(toolError);
+                  output = { error: true, message: `Tool denied or failed: ${message}` };
+                }
                 thisRoundToolCalls.push({ name: call.name, args: call.args, output, ...(call.id !== undefined ? { id: call.id } : {}) });
                 const safeCall = this.scrubUnknown(call, scrubScopeId) as ToolCall;
                 const safeOutput = this.scrubUnknown(output, scrubScopeId);
@@ -845,14 +1064,62 @@ export class AgentRuntime {
               }
             }
 
+            // Ollama / LM Studio sometimes return tool calls only in content (no structured tool_calls).
+            // Always try parsing raw content when we got no tool_call events, so we don't miss <tool_call>, exec: {}, or ```json {...}```.
+            if (providerSupportsToolFollowUp && thisRoundToolCalls.length === 0) {
+              const validToolNames = new Set(this.options.toolRouter.list().map((t) => t.name));
+              const parsedCalls = parseToolCallsFromContent(thisRoundContent, validToolNames);
+              for (const call of parsedCalls) {
+                const toolCall: ToolCall = { name: call.name, args: call.args };
+                this.recordTouchedFileHints(sessionId, this.extractTouchedFileHints(toolCall));
+                if (!checkpointHandle && this.shouldCreateCheckpoint(toolCall)) {
+                  checkpointHandle = await this.options.gitCheckpointManager?.createCheckpoint(runId) ?? null;
+                }
+                const profileIdForTool = request.session.profileId ?? getDefaultProfileId(this.options.config);
+                const profileRootForTool = this.options.getProfileRoot?.(profileIdForTool);
+                const toolContext: ToolExecuteContext = {
+                  auditId: runId,
+                  decisionLogs: this.decisionLogs,
+                  provenance: turnProvenance,
+                  ...(profileIdForTool !== undefined ? { profileId: profileIdForTool } : {}),
+                  ...(profileRootForTool !== undefined && profileRootForTool !== "" ? { profileRoot: profileRootForTool } : {}),
+                  ...(request.session.channelKind !== undefined ? { channelKind: request.session.channelKind } : {}),
+                  ...(request.session.sessionId !== undefined ? { sessionId: request.session.sessionId } : {})
+                };
+                let output: unknown;
+                try {
+                  output = await this.options.toolRouter.execute(toolCall, toolContext);
+                } catch (toolError) {
+                  if (toolError instanceof ToolPolicyBlockedError) {
+                    throw toolError;
+                  }
+                  const message = toolError instanceof Error ? toolError.message : String(toolError);
+                  output = { error: true, message: `Tool denied or failed: ${message}` };
+                }
+                thisRoundToolCalls.push({ name: toolCall.name, args: toolCall.args, output });
+                const safeCall = this.scrubUnknown(toolCall, scrubScopeId) as ToolCall;
+                const safeOutput = this.scrubUnknown(output, scrubScopeId);
+                this.metrics.toolCalls += 1;
+                toolCallCountThisTurn += 1;
+                if (this.decisionLogs.length > this.maxDecisionLogs) {
+                  this.decisionLogs.splice(0, this.decisionLogs.length - this.maxDecisionLogs);
+                }
+                emit("tool", { call: safeCall, output: safeOutput });
+              }
+            }
+
             if (thisRoundToolCalls.length === 0 || !providerSupportsToolFollowUp) {
               break;
             }
+            previousRoundsAssistantContent.push(thisRoundContent);
             // Agent loop: send assistant message with tool_calls + tool result messages, then get final response (Ollama / openai-compatible).
             const toolCallIds = thisRoundToolCalls.map((tc) => tc.id ?? (isOpenAICompatible ? `call_${Math.random().toString(36).slice(2, 12)}` : undefined));
+            // OpenAI-compatible/LM Studio: send only structured tool_calls (content empty) so servers that don't handle mixed content + tool_calls don't get confused.
+            const assistantContentForApi =
+              isOpenAICompatible && thisRoundToolCalls.length > 0 ? "" : thisRoundContent;
             const assistantMsg: ChatMessage = {
               role: "assistant",
-              content: thisRoundContent,
+              content: assistantContentForApi,
               tool_calls: thisRoundToolCalls.map((tc, i) => ({
                 type: "function" as const,
                 ...(isOpenAICompatible && toolCallIds[i] ? { id: toolCallIds[i] } : {}),
@@ -906,6 +1173,8 @@ export class AgentRuntime {
             emit("compaction", { reason: "assistant text exceeded 3000 chars" });
           }
 
+          // APIs that stream full-conversation content may return prior rounds; keep only the last round's reply (e.g. LM Studio / OpenAI-compatible send full conversation in final round).
+          assistantText = stripPriorRoundsFromReply(assistantText, previousRoundsAssistantContent);
           assistantText = stripReplyForUser(assistantText);
           assistantText = removeDuplicatedTrailingSuffix(assistantText);
           assistantText = removeDuplicatedTrailingParagraph(assistantText);
@@ -914,6 +1183,7 @@ export class AgentRuntime {
           if (request.session.sessionId.startsWith("heartbeat")) {
             assistantText = removeDuplicateSummaryParagraph(assistantText);
           }
+          assistantText = assistantText.trim();
 
           if (memoryStore) {
             await memoryStore.append({
@@ -1263,7 +1533,7 @@ export class AgentRuntime {
           systemMessages.push({
             role: "system",
             content: this.scrubText(
-              "You have access to tools. You must use them: to read or edit substrate files (AGENTS.md, IDENTITY.md, ROADMAP.md, MEMORY.md, memory/YYYY-MM-DD.md) or any file, call the exec tool (e.g. cat, type, head, or sed for edits). When editing an existing file: read it first, then use sed to change only the part that needs updating; do not overwrite the whole file with echo ... > FILE unless the user asked to replace the entire file. When advancing work or on heartbeats, read and update ROADMAP.md or memory files via exec as appropriate—do not skip tool use. To run scripts or tests, use exec. Do not guess file contents—call a tool to read or verify.",
+              "You have access to tools. You must use them: to read or edit substrate files (AGENTS.md, IDENTITY.md, ROADMAP.md, MEMORY.md, memory/YYYY-MM-DD.md) or any file, call the exec tool (e.g. cat, type, head, or sed for edits). When editing an existing file: read it first, then use sed to change only the part that needs updating; do not overwrite the whole file with echo ... > FILE unless the user asked to replace the entire file. When advancing work or on heartbeats, read and update ROADMAP.md or memory files via exec as appropriate—do not skip tool use. When you learn something that should persist (a new goal, a preference, how you or the user want things done, a tool or device), update the relevant substrate file in the same turn via exec—do not wait for the user to ask you to update substrate. To run scripts or tests, use exec. Do not guess file contents—call a tool to read or verify.",
               scopeId
             )
           });
@@ -1281,7 +1551,7 @@ export class AgentRuntime {
         systemMessages.push({
           role: "system",
           content: this.scrubText(
-            "Substrate vs memory — when to update what: Use MEMORY.md and memory/YYYY-MM-DD.md for daily context, \"remember this\", decisions, and raw logs (or remember_this/recall_memory). Use substrate files for durable, structural information: ROADMAP.md for goals and milestones (create or update when the user or context implies goals; on heartbeats replace the single Current state line in place or move Open/Completed items only—do not append heartbeat status or tick logs to ROADMAP; use MEMORY or remember_this for per-tick notes); IDENTITY.md and SOUL.md for who you are and how you present; TOOLS.md for environment notes (hosts, preferences). When you learn something lasting—e.g. a new goal, a preference for how you behave, a new tool or device—update the right substrate file via exec (read the file first, then sed to change only the relevant part). On heartbeats, consider whether ROADMAP, IDENTITY, or TOOLS should be updated and do so when appropriate.",
+            "Substrate vs memory — when to update what: Use MEMORY.md and memory/YYYY-MM-DD.md for daily context, \"remember this\", decisions, and raw logs (or remember_this/recall_memory). Use substrate files for durable, structural information: ROADMAP.md for goals and milestones (create or update when the user or context implies goals; on heartbeats replace the single Current state line in place or move Open/Completed items only—do not append heartbeat status or tick logs to ROADMAP; use MEMORY or remember_this for per-tick notes); IDENTITY.md and SOUL.md for who you are and how you present; TOOLS.md for environment notes (hosts, preferences). Update substrate proactively: when you learn something lasting—e.g. a new goal, a preference for how you behave, a new tool or device—update the right substrate file in the same response via exec (read the file first, then sed to change only the relevant part). Do not wait for the user to say \"update your substrate\" or \"save that\"; do it as soon as you have the information. On heartbeats, consider whether ROADMAP, IDENTITY, or TOOLS should be updated and do so when appropriate.",
             scopeId
           )
         });
@@ -1383,7 +1653,10 @@ export class AgentRuntime {
     if (substrate.birth?.trim() && isFirstTurnThisSession) {
       systemMessages.push({
         role: "system",
-        content: this.scrubText(`Bootstrap (BIRTH):\n\n${substrate.birth.trim()}`, scopeId)
+        content: this.scrubText(
+          `Bootstrap (BIRTH):\n\n${substrate.birth.trim()}\n\nTo persist BIRTH: use the exec tool to create or update USER.md and IDENTITY.md and to remove BIRTH.md when complete.`,
+          scopeId
+        )
       });
     } else if (
       isFirstTurnThisSession &&

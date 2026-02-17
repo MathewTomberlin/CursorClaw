@@ -704,7 +704,8 @@ describe("CursorAgentModelAdapter", () => {
                   parameters: { type: "object", required: ["value"], properties: { value: { type: "string" } } }
                 }
               }
-            ]
+            ],
+            tool_choice: "auto"
           })
         })
       );

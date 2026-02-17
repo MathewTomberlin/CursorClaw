@@ -42,14 +42,24 @@ function normalizeForDedupe(s: string): string {
   return (s ?? "").trim().replace(/\s+/g, " ");
 }
 
-/** Remove thinking/tool/code from assistant text so they are never shown (user-facing design). */
+/** Remove thinking/tool/code from assistant text so they are never shown. Uses "content after last thinking close" so the final message is never omitted. */
 function stripForDisplay(text: string): string {
   if (!text || text.length < 2) return text;
-  let out = text;
-  out = out.replace(/<think>[\s\S]*?<\/think>/gi, "");
-  out = out.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "");
-  out = out.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "");
-  out = out.replace(/```[\s\S]*?```/g, (block) => (/tool_call/i.test(block) ? "" : block));
+  const thinkClose = /<\s*\/\s*think\s*>/gi;
+  const thinkingClose = /<\s*\/\s*thinking\s*>/gi;
+  let lastClose = -1;
+  for (const re of [thinkClose, thinkingClose]) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      const end = m.index + (m[0]?.length ?? 0);
+      if (end > lastClose) lastClose = end;
+    }
+  }
+  let out = lastClose >= 0 ? text.slice(lastClose) : text;
+  out = out.replace(/<think>(?:[^<]|<(?!\/?think\s*>))*<\s*\/\s*think\s*>/gi, "\n");
+  out = out.replace(/<thinking>(?:[^<]|<(?!\/?thinking\s*>))*<\s*\/\s*thinking\s*>/gi, "\n");
+  out = out.replace(/<tool_call>(?:[^<]|<(?!\/?tool_call\s*>))*<\s*\/\s*tool_call\s*>/gi, "\n");
+  out = out.replace(/```[\s\S]*?```/g, (block) => (/tool_call/i.test(block) ? "\n" : block));
   return out.replace(/\n\n+/g, "\n\n").trim();
 }
 
@@ -398,16 +408,14 @@ export function ChatProvider({ children }: ChatProviderProps) {
         }
         if (payloads.length === 0) return;
         for (const data of payloads) {
-          // Streaming status updates overwrite each other: only one status event is kept (the latest). Assistant chunks replace the last assistant.
+          // Streaming status updates overwrite each other: only one status event is kept (the latest). Assistant events always replace the last assistant so we keep a single updating reply (no accumulation of turn messages).
           setStreamEvents((prev) => {
-            const isFinalAssistant =
-              data.type === "assistant" && (data.payload as { replace?: boolean } | undefined)?.replace === true;
             const last = prev[prev.length - 1];
             const statusTypes = ["connecting", "queued", "started", "streaming", "tool", "thinking", "compaction", "final_message_start", "completed", "failed"];
             let next: StreamEvent[];
-            // Assistant: replace last assistant with this one unless it's the final (replace: true) message.
+            // Assistant: always replace the last assistant event with this one so the stream shows one growing message, not appended turn messages.
             if (data.type === "assistant") {
-              if (!isFinalAssistant && last?.type === "assistant") next = [...prev.slice(0, -1), data];
+              if (last?.type === "assistant") next = [...prev.slice(0, -1), data];
               else next = [...prev, data];
             } else if (statusTypes.includes(data.type)) {
               // Status types: remove ALL status events from the array (not just trailing), then append this one so only the latest status is shown.

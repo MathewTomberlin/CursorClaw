@@ -27,6 +27,7 @@
 - Do not break existing non-streaming and single-round behavior; make streaming and latency features opt-in or backward-compatible.
 - Do not reduce context in a way that causes wrong answers or missed tool use; use heuristics (e.g. context-aware behavior) to decide when to trim context.
 - Preserve interrupt-to-respond: streaming must support cancellation when the user sends a new message.
+- **Provider dependency:** Streaming is only available when the configured provider supports a streaming API (e.g. OpenAI-compatible `stream: true`); otherwise the implementation must fall back to non-streaming without error.
 
 ---
 
@@ -46,6 +47,19 @@
 
 ---
 
-## 5. Next steps
+## 5. When to prioritize
+
+- **Streaming:** When the operator or users report slow perceived responsiveness (long wait for full reply) or request progressive output (see text as it’s generated). Also when integrating with UIs or clients that expect SSE/WebSocket streams.
+- **Latency:** When time-to-first-byte or round-trip count are identified as bottlenecks (e.g. simple queries taking full context, or many sequential tool calls that could be batched).
+
+---
+
+## 6. Next steps
 
 When implementing: (1) Add streaming support in gateway/runtime and UI; (2) Add config and tests; (3) Add latency optimizations (context + batching) per guardrails; (4) Validate with existing tests and manual E2E.
+
+## 7. Observability and validation
+
+- **Streaming:** When streaming is enabled, log or expose first-chunk latency and stream completion so operators can verify behavior; ensure cancellation (user sends new message) is logged or visible for debugging.
+- **Latency:** Optional metrics for time-to-first-byte and round-trip count help confirm latency improvements; keep metrics opt-in to avoid overhead.
+- **Testing:** Run existing tests with streaming on and off; add tests for cancellation and for fallback when the provider does not support streaming.

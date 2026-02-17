@@ -47,6 +47,10 @@ So from the user’s perspective: they see a single line of status or a single s
 
 ## Backend (Runtime)
 
+### Token-stream deltas (Ollama, LM Studio, OpenAI-compatible)
+
+OpenAI-style streaming sends **token deltas**: each `choice.delta.content` (or equivalent) is a small chunk as produced by the model. Per [OpenAI](https://platform.openai.com/docs/api-reference/chat-streaming) and [Ollama](https://docs.ollama.com/api/streaming), **spaces are part of the token** (e.g. `" a"`, `" world"`). The runtime must **concatenate deltas with no inserted spaces**. Inserting a space between tokens causes spaces inside words and around punctuation (e.g. "Hel lo" or "Hello !"). Adapters that send **full messages** (e.g. Cursor-Agent CLI with `isFullMessage: true`) bypass this and send the final string as-is.
+
 1. **Thinking: delta-only**
    - Track `previousThinkingContent` (string) for the current turn.
    - On each `thinking_delta`: compute delta = if adapter sends accumulated, use `content.startsWith(previousThinkingContent) ? content.slice(previousThinkingContent.length) : content`; otherwise treat `content` as the new chunk (adapter may send per-chunk).

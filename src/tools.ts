@@ -235,6 +235,8 @@ export interface CapabilityApprovalGateOptions {
   allowMutatingWithoutGrant?: boolean;
   /** When true, web_search and web_fetch (net.fetch) are approved without requiring a capability grant. Set from config for trusted/local setups. */
   allowNetFetchWithoutGrant?: boolean;
+  /** When true, high-risk tools (gh_pr_write, mcp_call_tool, etc.) are approved without requiring a capability grant. Set from config for trusted/local setups (e.g. LM Studio). */
+  allowHighRiskWithoutGrant?: boolean;
 }
 
 export class CapabilityApprovalGate implements ApprovalGate {
@@ -262,6 +264,10 @@ export class CapabilityApprovalGate implements ApprovalGate {
       return true;
     }
     if (this.options.allowMutatingWithoutGrant === true && args.intent === "mutating" && args.tool === "exec") {
+      this.lastDenial = null;
+      return true;
+    }
+    if (this.options.allowHighRiskWithoutGrant === true && args.intent === "high-risk-tool") {
       this.lastDenial = null;
       return true;
     }
@@ -317,6 +323,15 @@ export class CapabilityApprovalGate implements ApprovalGate {
 
 export type Provenance = "system" | "operator" | "untrusted";
 
+/** Thrown when a tool is blocked by policy (e.g. incident tool isolation). Runtime should fail the run (re-throw) so RPC returns 500. */
+export class ToolPolicyBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ToolPolicyBlockedError";
+    Object.setPrototypeOf(this, ToolPolicyBlockedError.prototype);
+  }
+}
+
 export interface ToolRouterOptions {
   approvalGate: ApprovalGate;
   allowedExecBins: string[];
@@ -340,7 +355,21 @@ function normalizeExecArgs(args: unknown): { command: string; cwd?: string } {
   } else {
     obj = {};
   }
-  const command = typeof obj.command === "string" ? obj.command.trim() : String(obj.command ?? "").trim();
+  let command = typeof obj.command === "string" ? obj.command.trim() : String(obj.command ?? "").trim();
+  // OpenAI-compatible streaming may pass { raw: "..." } when JSON parse failed (e.g. incomplete stream); recover command from raw.
+  if (command === "" && typeof obj.raw === "string" && obj.raw.trim().length > 0) {
+    const raw = obj.raw.trim();
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      if (typeof parsed?.command === "string" && parsed.command.trim().length > 0) {
+        command = parsed.command.trim();
+      } else {
+        command = raw;
+      }
+    } catch {
+      command = raw;
+    }
+  }
   const cwd = typeof obj.cwd === "string" ? obj.cwd : undefined;
   const out: { command: string; cwd?: string } = { command };
   if (cwd !== undefined && cwd !== "") out.cwd = cwd;
@@ -373,7 +402,7 @@ export class ToolRouter {
     }
     if (this.options.isToolIsolationEnabled?.() && tool.riskLevel === "high") {
       this.logDecision(context, "deny", "TOOL_POLICY_BLOCKED", "incident tool isolation mode is active");
-      throw new Error("tool execution blocked by incident tool isolation mode");
+      throw new ToolPolicyBlockedError("tool execution blocked by incident tool isolation mode");
     }
     const validate = this.getValidator(tool);
     const argsToValidate = call.name === "exec" ? normalizeExecArgs(call.args) : call.args;
@@ -482,7 +511,7 @@ export function createExecTool(args: {
   return {
     name: "exec",
     description:
-      "Run a shell command. Use this to read files (e.g. cat, type, head), edit files (sed, echo, tee), run scripts, run tests, and execute any allowed binary. This is the primary way to read or modify substrate files (AGENTS.md, IDENTITY.md, ROADMAP.md, TOOLS.md) and the codebase. When editing an existing file (e.g. IDENTITY.md, SOUL.md): always read the file first with cat/type, then use sed to change only the specific line or section (e.g. sed -i 's/old exact text/new text/' FILE or sed -i '/pattern/c\\replacement' FILE). Do not overwrite the entire file with echo ... > FILE unless the user explicitly asked to replace the whole file. Policy controls apply (e.g. read-only vs mutating).",
+      "Run a shell command. Use this to read files (e.g. cat, type, head), edit files (sed, echo, tee), run scripts, run tests, and execute any allowed binary. This is the primary way to read or modify substrate files (AGENTS.md, IDENTITY.md, ROADMAP.md, TOOLS.md) and the codebase. When you learn something lasting (goals, preferences, identity, tools), update the relevant substrate file proactively in the same turn—do not wait for the user to ask. When editing an existing file (e.g. IDENTITY.md, SOUL.md): always read the file first with cat/type, then use sed to change only the specific line or section (e.g. sed -i 's/old exact text/new text/' FILE or sed -i '/pattern/c\\replacement' FILE). Do not overwrite the entire file with echo ... > FILE unless the user explicitly asked to replace the whole file. Policy controls apply (e.g. read-only vs mutating).",
     schema: {
       type: "object",
       properties: {

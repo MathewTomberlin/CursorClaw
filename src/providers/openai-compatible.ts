@@ -123,6 +123,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       messages: typeof openAIMessages;
       stream: boolean;
       tools?: ReturnType<typeof mapToolsToOpenAI>;
+      tool_choice?: "none" | "auto" | "required" | { type: "function"; function: { name: string } };
     } = {
       model,
       messages: openAIMessages,
@@ -130,6 +131,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
     };
     if (tools.length > 0) {
       body.tools = mapToolsToOpenAI(tools);
+      // LM Studio and some servers need explicit tool_choice to return tool calls; "auto" allows model to choose.
+      body.tool_choice = "auto";
     }
 
     const controller = new AbortController();
@@ -242,13 +245,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
               const parsedArgs = JSON.parse(trimmed) as object;
               if (typeof parsedArgs === "object" && parsedArgs !== null && Object.keys(parsedArgs).length > 0) {
                 emittedToolCallIndices.add(idx);
-                let args: unknown = acc.argsRaw;
-                try {
-                  args = JSON.parse(acc.argsRaw);
-                } catch {
-                  args = {};
-                }
-                yield { type: "tool_call", data: { name: acc.name, args, id: acc.id || undefined } };
+                // Use already-parsed object; re-parsing acc.argsRaw can fail when stream has leading/trailing whitespace.
+                yield { type: "tool_call", data: { name: acc.name, args: parsedArgs, id: acc.id || undefined } };
               }
             } catch {
               // incomplete JSON; keep accumulating

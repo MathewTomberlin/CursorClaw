@@ -504,7 +504,8 @@ async function main(): Promise<void> {
     capabilityStore: defaultCtx.capabilityStore!,
     allowReadOnlyWithoutGrant: config.tools.exec.ask !== "always",
     allowMutatingWithoutGrant: config.tools.exec.allowMutatingWithoutApproval === true,
-    allowNetFetchWithoutGrant: config.tools.allowNetFetchWithoutApproval === true
+    allowNetFetchWithoutGrant: config.tools.allowNetFetchWithoutApproval === true,
+    allowHighRiskWithoutGrant: config.tools.allowHighRiskWithoutApproval === true
   });
   const allowedExecBins = resolveAllowedExecBins({
     bins: config.tools.exec.allowBins,
@@ -999,10 +1000,21 @@ async function main(): Promise<void> {
   if (config.gateway.bindAddress?.trim()) {
     await validateBindAddress(config.gateway.bindAddress.trim());
   }
-  await gateway.listen({
-    host: bindHost,
-    port
-  });
+  try {
+    await gateway.listen({
+      host: bindHost,
+      port
+    });
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "EADDRINUSE") {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[CursorClaw] Port ${port} is already in use. Set PORT to another port (e.g. PORT=8788) or stop the process using the port. See docs/resilience.md §10 "When the server fails to bind".`
+      );
+    }
+    throw err;
+  }
 
   const serverDownPath = join(workspaceDir, "tmp", "server-down");
   try {
@@ -1161,7 +1173,9 @@ async function main(): Promise<void> {
       }
       if (birthPending) {
         content =
-          `BIRTH.md is present. You must complete BIRTH proactively: reply with your message to the user (e.g. introduce yourself and ask for their use case and identity). Do not reply HEARTBEAT_OK — your reply will be delivered as a proactive message in the CursorClaw web UI Chat tab (the user is there, not in Cursor IDE).\n\n${content}`;
+          `BIRTH.md is present. You must complete BIRTH proactively: reply with your message to the user (e.g. introduce yourself and ask for their use case and identity). Do not reply HEARTBEAT_OK — your reply will be delivered as a proactive message in the CursorClaw web UI Chat tab (the user is there, not in Cursor IDE).
+
+**To complete BIRTH you must use the exec tool to update substrate files.** When the user tells you their name, use case, or how they want to call you: (1) Create or update USER.md with who they are (e.g. echo '...' > USER.md or sed to edit). (2) Create or update IDENTITY.md with how you present in this workspace. (3) When BIRTH is complete, remove BIRTH.md (exec: rm BIRTH.md on Unix, or del BIRTH.md on Windows). Paths are relative to your profile root (exec cwd). Do not only reply in chat—persist changes to disk so BIRTH completes.\n\n${content}`;
       }
       if (configRef.current.heartbeat?.interAgentMailbox === true) {
         const pending = await receiveMessages(profileRoot);

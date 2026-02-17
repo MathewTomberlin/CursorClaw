@@ -304,6 +304,7 @@ Notes:
 
 - **Strict profile (default in non-dev):** Only binaries from a fixed internal set are allowed: `echo`, `pwd`, `ls`, `cat`, `node`. Config `allowBins` is ignored except for bins in this set. Use for production or locked-down environments.
 - **Developer profile:** All bins listed in `tools.exec.allowBins` are allowed as-is. Commands run with the same privileges as the CursorClaw process. **Warning:** developer profile and cwd-relative or arbitrary bins run with process privileges; use only in trusted environments (e.g. loopback and dev mode).
+- **`allowMutatingWithoutApproval` (optional):** When `true`, mutating exec (e.g. `sed -i`, `echo ... > file`, `rm`) is allowed without a capability grant or approval prompt. Use in trusted/local setups (e.g. local Ollama, LM Studio) so the agent can update substrate files (ROADMAP, IDENTITY, USER.md, BIRTH completion) during heartbeats when no one is present to approve. Default `false`. See runbook in `docs/resilience.md` (§10) if the agent does not persist substrate updates.
 - **Optional `runAsUser`:** Reserved for future use (e.g. run exec as a specific OS user). Not enforced by the runtime today; documented for extension.
 - **`maxBufferBytes` (optional):** Max stdout/stderr buffer per exec in bytes. Default `65536`. There is no OS-level CPU or memory cap; only timeout and buffer are enforced by CursorClaw.
 - **`maxChildProcessesPerTurn` (optional):** Max concurrent exec invocations system-wide. Default `100`. Used to limit runaway or DoS from many concurrent child processes.

@@ -39,6 +39,21 @@ function isCursorAgentConfig(
   return c.provider === "cursor-agent-cli" && Boolean(c.command);
 }
 
+/** Concatenate content parts into one string. Inserts a space between two adjacent parts only when neither has a space at the boundary, so tokenized output (e.g. ["Hello","world"]) gets "Hello world" instead of "Helloworld". */
+function joinContentParts(parts: string[]): string {
+  if (parts.length === 0) return "";
+  let out = parts[0] ?? "";
+  for (let i = 1; i < parts.length; i++) {
+    const part = parts[i] ?? "";
+    if (part.length === 0) continue;
+    const prevEndsWithSpace = out.length > 0 && /\s$/.test(out);
+    const partStartsWithSpace = /^\s/.test(part);
+    if (!prevEndsWithSpace && !partStartsWithSpace) out += " ";
+    out += part;
+  }
+  return out;
+}
+
 export class CursorAgentCliProvider implements ModelProvider {
   private readonly processes = new Map<string, ChildProcessWithoutNullStreams>();
   private readonly eventLogs: string[] = [];
@@ -333,7 +348,7 @@ export class CursorAgentCliProvider implements ModelProvider {
     if (candidate.type === "thinking") {
       const content = candidate.message?.content;
       const text = Array.isArray(content)
-        ? content.map((c) => (c && typeof c.text === "string" ? c.text : "")).join("")
+        ? joinContentParts(content.map((c) => (c && typeof c.text === "string" ? c.text : "")))
         : String((candidate.data as { content?: string })?.content ?? "");
       if (!text) return null;
       this.pushEventLog(redactSecrets(JSON.stringify(candidate)));
@@ -342,8 +357,10 @@ export class CursorAgentCliProvider implements ModelProvider {
     if (candidate.type === "assistant") {
       const content = candidate.message?.content;
       const text = Array.isArray(content)
-        ? content.map((c) => (c && typeof c.text === "string" ? c.text : "")).join("")
-        : "";
+        ? joinContentParts(content.map((c) => (c && typeof c.text === "string" ? c.text : "")))
+        : typeof content === "string"
+          ? content
+          : "";
       if (!text) return null;
       // Forward full assistant content with isFullMessage so runtime replaces streamed text instead of appending (avoids duplication).
       this.pushEventLog(redactSecrets(JSON.stringify(candidate)));
