@@ -1525,7 +1525,7 @@ export class AgentRuntime {
           systemMessages.push({
             role: "system",
             content: this.scrubText(
-              "You have access to tools. Use them when the user asks to read or edit files, run commands, or when you need to verify workspace state; otherwise reply in natural language. To read: exec (e.g. cat AGENTS.md, type USER.md, head -n 50 ROADMAP.md). To edit: read the file first, then use sed to change only the relevant part; do not overwrite whole files with echo unless the user asked. On heartbeats, use exec to read ROADMAP.md and HEARTBEAT.md and update substrate or memory as needed.",
+              "You have access to tools. Use them when the user asks to read or edit files, run commands, or when you need to verify workspace state; otherwise reply in natural language. To read: exec (e.g. cat AGENTS.md, type USER.md). To edit: use apply_edits with path, old_string (exact text—read the file first with exec), and new_string; multiple edits in one call are allowed. Do not overwrite whole files unless the user asked. On heartbeats, use exec to read ROADMAP.md and HEARTBEAT.md and apply_edits to update substrate or memory as needed.",
               scopeId
             )
           });
@@ -1533,7 +1533,7 @@ export class AgentRuntime {
           systemMessages.push({
             role: "system",
             content: this.scrubText(
-              "You have access to tools. You must use them: to read or edit substrate files (AGENTS.md, IDENTITY.md, ROADMAP.md, MEMORY.md, memory/YYYY-MM-DD.md) or any file, call the exec tool (e.g. cat, type, head, or sed for edits). When editing an existing file: read it first, then use sed to change only the part that needs updating; do not overwrite the whole file with echo ... > FILE unless the user asked to replace the entire file. When advancing work or on heartbeats, read and update ROADMAP.md or memory files via exec as appropriate—do not skip tool use. When you learn something that should persist (a new goal, a preference, how you or the user want things done, a tool or device), update the relevant substrate file in the same turn via exec—do not wait for the user to ask you to update substrate. To run scripts or tests, use exec. Do not guess file contents—call a tool to read or verify.",
+              "You have access to tools. You must use them: to read files use exec (e.g. cat AGENTS.md, type IDENTITY.md, head -n 50 ROADMAP.md). To edit files use the apply_edits tool: pass an array of edits, each with path (e.g. IDENTITY.md), old_string (exact text from the file—read the file first with exec to get it), and new_string (replacement). You can do multiple edits to multiple files in one apply_edits call. Do not overwrite whole files—use apply_edits for targeted changes. When advancing work or on heartbeats, read and update ROADMAP.md or memory files via exec or apply_edits as appropriate. When you learn something that should persist (a goal, a preference, a tool or device), update the relevant substrate file in the same turn via apply_edits—do not wait for the user to ask. To run scripts or tests, use exec. Do not guess file contents—call a tool to read or verify.",
               scopeId
             )
           });
@@ -1541,7 +1541,18 @@ export class AgentRuntime {
             systemMessages.push({
               role: "system",
               content: this.scrubText(
-                "You are using the Ollama provider. You must use the provided tools—do not answer from memory or guess. To read substrate or any file: call the exec tool (e.g. cat AGENTS.md, type USER.md, head -n 50 ROADMAP.md). To update a file: always read it first, then use sed to change only the specific line or section (e.g. sed -i 's/old text/new text/' FILE); do not write the entire file with echo ... > FILE unless the user explicitly asked to replace the whole file. When the user asks about the workspace, rules, roadmap, or files, your first response must include one or more tool calls to read the relevant files; then answer from the tool results. On heartbeats, use exec to read ROADMAP.md and HEARTBEAT.md and to update substrate or memory as needed.",
+                "You are using the Ollama provider. You must use the provided tools—do not answer from memory or guess. To read a file: call exec (e.g. cat AGENTS.md, type IDENTITY.md). To edit a file: use the apply_edits tool. Workflow: (1) exec to read the file (cat path or type path). (2) apply_edits with edits: [{ path, old_string: exact text from the file output, new_string: replacement }]. You can include multiple edits in one apply_edits call. old_string must match the file exactly—copy from the read result, including newlines. Do not overwrite whole files; only replace the specific lines or sections that change. When the user asks about the workspace or files, your first response must include tool calls to read the relevant files; then answer from the results. On heartbeats, use exec to read ROADMAP.md and HEARTBEAT.md and apply_edits to update substrate or memory as needed.",
+                scopeId
+              )
+            });
+          }
+          const isOpenAICompatibleOrLMStudio =
+            activeModelConfig?.provider === "openai-compatible" || activeModelConfig?.provider === "lm-studio";
+          if (isOpenAICompatibleOrLMStudio) {
+            systemMessages.push({
+              role: "system",
+              content: this.scrubText(
+                "To edit files use the apply_edits tool. Workflow: (1) Read the file with exec (cat path or type path). (2) Call apply_edits with edits: an array of { path, old_string, new_string }. Use the exact text from the file for old_string—copy it from the exec result, including newlines; do not guess or summarize. You can apply multiple edits to multiple files in one call. Do not overwrite entire files—only change the specific lines or sections that need updating. Example: after reading ROADMAP.md, to add a goal use old_string equal to the exact line(s) where you want to insert (e.g. '## Open\\n\\n') and new_string with the new content inserted.",
                 scopeId
               )
             });
@@ -1551,7 +1562,7 @@ export class AgentRuntime {
         systemMessages.push({
           role: "system",
           content: this.scrubText(
-            "Substrate vs memory — when to update what: Use MEMORY.md and memory/YYYY-MM-DD.md for daily context, \"remember this\", decisions, and raw logs (or remember_this/recall_memory). Use substrate files for durable, structural information: ROADMAP.md for goals and milestones (create or update when the user or context implies goals; on heartbeats replace the single Current state line in place or move Open/Completed items only—do not append heartbeat status or tick logs to ROADMAP; use MEMORY or remember_this for per-tick notes); IDENTITY.md and SOUL.md for who you are and how you present; TOOLS.md for environment notes (hosts, preferences). Update substrate proactively: when you learn something lasting—e.g. a new goal, a preference for how you behave, a new tool or device—update the right substrate file in the same response via exec (read the file first, then sed to change only the relevant part). Do not wait for the user to say \"update your substrate\" or \"save that\"; do it as soon as you have the information. On heartbeats, consider whether ROADMAP, IDENTITY, or TOOLS should be updated and do so when appropriate.",
+            "Substrate vs memory — when to update what: Use MEMORY.md and memory/YYYY-MM-DD.md for daily context, \"remember this\", decisions, and raw logs (or remember_this/recall_memory). Use substrate files for durable, structural information: ROADMAP.md for goals and milestones (create or update when the user or context implies goals; on heartbeats replace the single Current state line in place or move Open/Completed items only—do not append heartbeat status or tick logs to ROADMAP; use MEMORY or remember_this for per-tick notes); IDENTITY.md and SOUL.md for who you are and how you present; TOOLS.md for environment notes (hosts, preferences). Update substrate proactively: when you learn something lasting—e.g. a new goal, a preference, a new tool or device—update the right substrate file in the same response via apply_edits (read the file first with exec, then pass path, exact old_string, and new_string). Do not wait for the user to say \"update your substrate\" or \"save that\"; do it as soon as you have the information. On heartbeats, consider whether ROADMAP, IDENTITY, or TOOLS should be updated and do so when appropriate.",
             scopeId
           )
         });

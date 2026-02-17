@@ -70,7 +70,7 @@ Example (Qwen3 8B):
 
 - **Context:** Native 32K tokens; Ollama `qwen3:8b` often ships with 40K context. For larger substrate and codebase, set `ollamaOptions: { "num_ctx": 16384 }` or `32768` (reduce if you hit OOM).
 - **Temperature:** `0` or `0.2`–`0.3` helps consistent tool calls; your config can use `"temperature": 0` for deterministic edits.
-- **File edits:** The runtime and exec tool description instruct the model to **read first, then use sed** to change only the part that needs updating (e.g. IDENTITY.md, SOUL.md). This reduces the risk of the model overwriting an entire file when only a line or section should change. If the model still replaces a whole file, ensure `toolTurnContext: "minimal"` and `ollamaMinimalSystem: true` so it sees the targeted-edits instruction clearly.
+- **File edits:** Use the **apply_edits** tool for targeted changes: pass an array of edits (path, old_string, new_string). Read the file first with exec (cat/type) to get exact text for old_string. This avoids overwriting whole files and works reliably across Ollama and LM Studio. If the model still replaces a whole file, ensure `toolTurnContext: "minimal"` and `ollamaMinimalSystem: true` so it sees the apply_edits instruction clearly.
 
 ### Tuning for tool use (Qwen3 8B, 16GB VRAM)
 
@@ -79,7 +79,7 @@ When tools are sent, the Ollama provider and runtime work together so the model 
 - **Defaults (when `ollamaOptions` is not set):** `temperature: 0.3`, `num_ctx: 8192`. Lower temperature helps tool-call consistency; `num_ctx` gives enough context for substrate and codebase. For **Qwen3 8B** you can increase `num_ctx` (e.g. 16384 or 32768) if you have headroom.
 - **Override in config:** Add `ollamaOptions: { "temperature": 0.2, "num_ctx": 16384 }` (or other values) to your model entry in `openclaw.json` to tune for your hardware. For 16GB VRAM, 8192–16384 context is typical for Qwen3 8B; reduce if you hit OOM.
 - **`toolTurnContext: "minimal"`:** For Qwen3 8B (and similar Ollama models), set this on the model so only the latest user message is sent; see “Why Ollama models may not call tools” above.
-- **Runtime prompt:** The runtime injects a generic tool-use nudge for all providers, and when the active model is Ollama it adds a **second, stronger system message** that explicitly requires the model to use the provided tools: read substrate or any file via exec (cat/type/head), and **when editing** to use sed for targeted changes only—read the file first, then sed to change the specific line or section; do not overwrite the whole file with echo unless the user asked to replace the entire file. The exec tool description states it is the primary way to read or modify substrate and codebase files and reinforces targeted-edits behavior.
+- **Runtime prompt:** The runtime injects a generic tool-use nudge for all providers, and when the active model is Ollama it adds a **second, stronger system message** with an explicit workflow: (1) exec to read the file (cat/type), (2) apply_edits with edits: [{ path, old_string: exact text from the file output, new_string }]; multiple edits in one call are allowed; do not overwrite whole files. The same apply_edits-first workflow is reinforced for LM Studio / openai-compatible. AGENTS.md (substrate) also instructs the agent to use apply_edits for substrate updates (not sed), so local models get consistent guidance to make targeted multi-line edits reliably.
 
 ### Context-aware system behavior (implemented)
 

@@ -148,6 +148,12 @@ export class RunStore {
     return false;
   }
 
+  /** Returns all runs marked interrupted (e.g. after process restart). Used to resume heartbeat or user turns on startup. */
+  async listInterruptedRuns(): Promise<PersistedRunRecord[]> {
+    await this.ensureLoaded();
+    return [...this.records.values()].filter((r) => r.status === "interrupted").map((r) => ({ ...r }));
+  }
+
   async get(runId: string): Promise<PersistedRunRecord | undefined> {
     await this.ensureLoaded();
     const record = this.records.get(runId);

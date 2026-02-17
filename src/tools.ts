@@ -397,7 +397,7 @@ export class ToolRouter {
     if (!tool) {
       this.logDecision(context, "deny", "TOOL_UNKNOWN", `unknown tool: ${call.name}`);
       return {
-        error: `Unknown tool: ${call.name}. Use the exec or run_terminal_cmd tool to run shell commands (e.g. sed, cat, grep).`
+        error: `Unknown tool: ${call.name}. Use exec to run commands (e.g. cat, type) or apply_edits to edit files.`
       };
     }
     if (this.options.isToolIsolationEnabled?.() && tool.riskLevel === "high") {
@@ -511,7 +511,7 @@ export function createExecTool(args: {
   return {
     name: "exec",
     description:
-      "Run a shell command. Use this to read files (e.g. cat, type, head), edit files (sed, echo, tee), run scripts, run tests, and execute any allowed binary. This is the primary way to read or modify substrate files (AGENTS.md, IDENTITY.md, ROADMAP.md, TOOLS.md) and the codebase. When you learn something lasting (goals, preferences, identity, tools), update the relevant substrate file proactively in the same turn—do not wait for the user to ask. When editing an existing file (e.g. IDENTITY.md, SOUL.md): always read the file first with cat/type, then use sed to change only the specific line or section (e.g. sed -i 's/old exact text/new text/' FILE or sed -i '/pattern/c\\replacement' FILE). Do not overwrite the entire file with echo ... > FILE unless the user explicitly asked to replace the whole file. Policy controls apply (e.g. read-only vs mutating).",
+      "Run a shell command. Use this to read files (e.g. cat, type, head), run scripts, run tests, and execute any allowed binary. To read substrate or any file: use exec with cat or type. For editing existing files (IDENTITY.md, SOUL.md, ROADMAP.md, etc.): prefer the apply_edits tool—give path, exact old_string, and new_string for each change; you can do multiple edits in one call. Use exec for sed/echo only when apply_edits is not suitable (e.g. full-file replace explicitly requested). When you learn something lasting (goals, preferences, identity, tools), update the relevant substrate file in the same turn via apply_edits or exec. Policy controls apply (e.g. read-only vs mutating).",
     schema: {
       type: "object",
       properties: {
@@ -1507,6 +1507,136 @@ export function createExecTool(args: {
       } finally {
         concurrentExecs -= 1;
       }
+    }
+  };
+}
+
+/** Single edit: path (profile-relative), exact old_string to find, new_string replacement. */
+export interface ApplyEditSpec {
+  path: string;
+  old_string: string;
+  new_string: string;
+}
+
+/**
+ * Edit files by replacing exact text. Enables targeted multi-line edits across multiple files in one tool call
+ * without requiring sed/echo. Prefer this over exec for substrate and workspace file edits.
+ * When onEditsApplied is provided and any file was written, it is called with profileRoot so the caller can
+ * reload substrate (and other caches) for the next turn.
+ */
+export function createApplyEditsTool(args?: {
+  onEditsApplied?: (profileRoot: string) => Promise<void>;
+}): ToolDefinition {
+  const onEditsApplied = args?.onEditsApplied;
+  return {
+    name: "apply_edits",
+    description:
+      "Edit files by replacing exact text. Use for substrate (IDENTITY.md, SOUL.md, ROADMAP.md, TOOLS.md, AGENTS.md, MEMORY.md) and any workspace file. Pass edits: an array of { path, old_string, new_string }. old_string must match the file exactly (copy from file output; include newlines for multi-line). new_string is the replacement (empty string to delete). You can do multiple edits to multiple files in one call. Always read the file first with exec (cat or type) to get exact content for old_string—never guess. Do not replace entire files; only change the specific lines or sections that need updating. Example: to add a goal to ROADMAP.md, read it with exec, then apply_edits with edits: [{ path: 'ROADMAP.md', old_string: '## Open\\n\\n', new_string: '## Open\\n\\n- New goal: ...\\n\\n' }]. Paths are relative to profile root.",
+    schema: {
+      type: "object",
+      properties: {
+        edits: {
+          type: "array",
+          minItems: 1,
+          description: "List of edits to apply in order. Each edit: path, old_string (exact), new_string.",
+          items: {
+            type: "object",
+            properties: {
+              path: {
+                type: "string",
+                description: "File path relative to profile root (e.g. IDENTITY.md, SOUL.md, ROADMAP.md)"
+              },
+              old_string: {
+                type: "string",
+                description: "Exact text to find in the file (include newlines for multi-line sections)"
+              },
+              new_string: {
+                type: "string",
+                description: "Replacement text (use empty string to delete the matched text)"
+              }
+            },
+            required: ["path", "old_string", "new_string"],
+            additionalProperties: false
+          }
+        }
+      },
+      required: ["edits"],
+      additionalProperties: false
+    },
+    riskLevel: "high",
+    execute: async (rawArgs: unknown, ctx?: ToolExecuteContext) => {
+      const parsed = rawArgs as { edits: ApplyEditSpec[] };
+      const edits = Array.isArray(parsed.edits) ? parsed.edits : [];
+      if (edits.length === 0) {
+        return { error: "edits array is required and must contain at least one edit." };
+      }
+      const profileRoot = ctx?.profileRoot;
+      const baseDir = profileRoot ? resolve(profileRoot) : process.cwd();
+      const ensureUnderProfile = (resolvedPath: string): void => {
+        if (profileRoot && !pathUnderProfileRoot(resolvedPath, profileRoot)) {
+          throw new Error("path must be under the current agent profile root");
+        }
+      };
+      /** path -> list of (old_string, new_string) in order */
+      const byPath = new Map<string, Array<{ old_string: string; new_string: string }>>();
+      for (const e of edits) {
+        const path = typeof e.path === "string" ? e.path.trim() : "";
+        const oldStr = typeof e.old_string === "string" ? e.old_string : String(e.old_string ?? "");
+        const newStr = typeof e.new_string === "string" ? e.new_string : String(e.new_string ?? "");
+        if (!path) {
+          return { error: "Each edit must have a non-empty path." };
+        }
+        const pathResolved = resolve(baseDir, path);
+        ensureUnderProfile(pathResolved);
+        let list = byPath.get(pathResolved);
+        if (!list) {
+          list = [];
+          byPath.set(pathResolved, list);
+        }
+        list.push({ old_string: oldStr, new_string: newStr });
+      }
+      const results: Array<{ path: string; ok: boolean; error?: string }> = [];
+      for (const [absPath, list] of byPath.entries()) {
+        let content: string;
+        try {
+          content = await readFile(absPath, "utf8");
+        } catch (e) {
+          if (isENOENT(e)) {
+            results.push({ path: absPath, ok: false, error: "File not found." });
+            continue;
+          }
+          throw e;
+        }
+        let applied = true;
+        for (const { old_string: oldStr, new_string: newStr } of list) {
+          if (!content.includes(oldStr)) {
+            results.push({
+              path: absPath,
+              ok: false,
+              error:
+                "old_string not found in file. You must read the file first with exec (cat path or type path), then copy the exact lines from the output into old_string—including newlines and spaces. Do not guess or abbreviate; use the exact text from the file."
+            });
+            applied = false;
+            break;
+          }
+          content = content.replace(oldStr, newStr);
+        }
+        if (!applied) continue;
+        try {
+          await writeFile(absPath, content, "utf8");
+          results.push({ path: absPath, ok: true });
+        } catch (e) {
+          results.push({ path: absPath, ok: false, error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+      const failed = results.filter((r) => !r.ok);
+      if (failed.length > 0) {
+        return { ok: false, results, error: failed.map((f) => `${f.path}: ${f.error}`).join("; ") };
+      }
+      if (onEditsApplied && profileRoot && results.some((r) => r.ok)) {
+        await onEditsApplied(profileRoot);
+      }
+      return { ok: true, results };
     }
   };
 }

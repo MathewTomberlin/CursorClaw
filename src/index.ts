@@ -70,6 +70,7 @@ import { AuthService, IncidentCommander, MethodRateLimiter, PolicyDecisionLogger
 import {
   CapabilityApprovalGate,
   ToolRouter,
+  createApplyEditsTool,
   createExecTool,
   createGhPrReadTool,
   createGhPrWriteRateLimiter,
@@ -526,6 +527,16 @@ async function main(): Promise<void> {
       ...(config.tools.exec.maxChildProcessesPerTurn != null && {
         maxChildProcessesPerTurn: config.tools.exec.maxChildProcessesPerTurn
       })
+    })
+  );
+  toolRouter.register(
+    createApplyEditsTool({
+      onEditsApplied: async (root: string) => {
+        const ctx =
+          [...profileContextMap.values()].find((c) => c.profileRoot === root) ??
+          (defaultCtx.profileRoot === root ? defaultCtx : null);
+        if (ctx?.substrateStore) await ctx.substrateStore.reload(root, config.substrate);
+      }
     })
   );
   toolRouter.register(createWebFetchTool({ approvalGate }));
@@ -1124,6 +1135,7 @@ async function main(): Promise<void> {
       const skipWhenEmpty = heartbeatConfig.skipWhenEmpty === true;
       if (skipWhenEmpty && !birthPending) {
         if (!existsSync(heartbeatPath)) {
+          clearInterrupted();
           return "HEARTBEAT_OK";
         }
         const fileContent = await safeReadUtf8(heartbeatPath);
@@ -1135,6 +1147,7 @@ async function main(): Promise<void> {
             return s.length > 0 && !s.startsWith("#");
           });
         if (!hasSubstantiveLine) {
+          clearInterrupted();
           return "HEARTBEAT_OK";
         }
       }
@@ -1175,7 +1188,7 @@ async function main(): Promise<void> {
         content =
           `BIRTH.md is present. You must complete BIRTH proactively: reply with your message to the user (e.g. introduce yourself and ask for their use case and identity). Do not reply HEARTBEAT_OK — your reply will be delivered as a proactive message in the CursorClaw web UI Chat tab (the user is there, not in Cursor IDE).
 
-**To complete BIRTH you must use the exec tool to update substrate files.** When the user tells you their name, use case, or how they want to call you: (1) Create or update USER.md with who they are (e.g. echo '...' > USER.md or sed to edit). (2) Create or update IDENTITY.md with how you present in this workspace. (3) When BIRTH is complete, remove BIRTH.md (exec: rm BIRTH.md on Unix, or del BIRTH.md on Windows). Paths are relative to your profile root (exec cwd). Do not only reply in chat—persist changes to disk so BIRTH completes.\n\n${content}`;
+**To complete BIRTH you must update substrate files with tools.** When the user tells you their name, use case, or how they want to call you: (1) For USER.md and IDENTITY.md: read the file first with exec (cat or type), then use the apply_edits tool with path, exact old_string (from the file), and new_string to make targeted changes; if the file does not exist yet, create it with exec (e.g. echo '...' > USER.md). (2) Do not overwrite whole files—use apply_edits to change only the relevant lines. (3) When BIRTH is complete, remove BIRTH.md (exec: rm BIRTH.md on Unix, or del BIRTH.md on Windows). Paths are relative to your profile root. Do not only reply in chat—persist changes to disk so BIRTH completes.\n\n${content}`;
       }
       if (configRef.current.heartbeat?.interAgentMailbox === true) {
         const pending = await receiveMessages(profileRoot);
@@ -1251,7 +1264,10 @@ async function main(): Promise<void> {
         }
       } else if (truncatedIncomplete) {
         // Incomplete run (no HEARTBEAT_OK): e.g. continuation interrupted again, user message paused/cancelled heartbeat, or timeout. We never deliver partial content; send a short notice so the UI replaces any previous proactive message.
-        const truncatedNotice = "Heartbeat was interrupted; no update this time.";
+        const truncatedNotice =
+          wasContinuation
+            ? "Heartbeat was interrupted; no update this time."
+            : "Heartbeat did not complete; no update this time.";
         await channelHub.send({
           channelId,
           text: truncatedNotice,
@@ -1353,6 +1369,85 @@ async function main(): Promise<void> {
   });
   orchestratorRef = orchestrator;
   orchestrator.start();
+
+  /** On startup, resume any runs that were interrupted by process restart: set heartbeat continuation flag for interrupted heartbeats, and re-run interrupted user turns in the background (thread is persisted; result is appended when the run completes). */
+  async function resumeInterruptedRuns(): Promise<void> {
+    try {
+      const interrupted = await runStore.listInterruptedRuns();
+      if (interrupted.length === 0) return;
+      const defaultId = getDefaultProfileId(configRef.current);
+      for (const record of interrupted) {
+        try {
+          if (record.sessionId.startsWith("heartbeat:")) {
+            const profileId =
+              record.profileId ??
+              (record.sessionId === "heartbeat:main"
+                ? defaultId
+                : record.sessionId.replace(/^heartbeat:/, ""));
+            heartbeatInterruptedByProfile.set(profileId, true);
+            await runStore.consume(record.runId);
+            if (process.env.NODE_ENV !== "test") {
+              console.warn("[CursorClaw] resume: marked heartbeat continuation for profile", profileId);
+            }
+            continue;
+          }
+          const profileId = record.profileId ?? defaultId;
+          const profileRoot = getProfileRootForId(profileId);
+          const thread = await getThread(profileRoot, record.sessionId);
+          const messages = thread
+            .filter((m) => m.role === "user" || m.role === "assistant")
+            .map((m) => ({ role: m.role, content: m.content }));
+          if (messages.length === 0) {
+            await runStore.consume(record.runId);
+            continue;
+          }
+          const sessionConfig = configRef.current.session;
+          const capped = messages.slice(-sessionConfig.maxMessagesPerTurn).map((m) => ({
+            role: m.role,
+            content:
+              m.content.length <= sessionConfig.maxMessageChars
+                ? m.content
+                : m.content.slice(0, sessionConfig.maxMessageChars) + "\n\n[... truncated for length]"
+          }));
+          const started = runtime.startTurn({
+            session: {
+              sessionId: record.sessionId,
+              channelId: record.sessionId,
+              channelKind: "web",
+              profileId
+            },
+            messages: capped
+          });
+          await runStore.createPending(started.runId, record.sessionId, profileId);
+          await runStore.consume(record.runId);
+          if (process.env.NODE_ENV !== "test") {
+            console.warn("[CursorClaw] resume: re-running interrupted user turn for session", record.sessionId);
+          }
+          started.promise
+            .then(async (result) => {
+              await runStore.markCompleted(started.runId, result);
+              if (result.assistantText?.trim()) {
+                await appendMessage(profileRoot, record.sessionId, {
+                  role: "assistant",
+                  content: result.assistantText
+                });
+              }
+              await runStore.consume(started.runId);
+            })
+            .catch(async (err) => {
+              console.error("[CursorClaw] resume turn failed:", err);
+              await runStore.markFailed(started.runId, String(err));
+              await runStore.consume(started.runId);
+            });
+        } catch (err) {
+          console.error("[CursorClaw] resume failed for run", record.runId, err);
+        }
+      }
+    } catch (err) {
+      console.error("[CursorClaw] resumeInterruptedRuns failed:", err);
+    }
+  }
+  void resumeInterruptedRuns();
 
   const metricsIntervalSeconds = config.metrics.intervalSeconds ?? 60;
   const metricsExportHandle =
